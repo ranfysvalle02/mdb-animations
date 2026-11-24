@@ -1,0 +1,3166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Animation Studio — Levels 1, 2 & 3 (SVG, Canvas & AI Mocap)</title>
+
+  <!-- Tailwind CSS for responsive layout & clean studio styling -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- MediaPipe Pose for Real-Time Browser AI Motion Capture (Level 3) -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404/pose.js" crossorigin="anonymous"></script>
+
+  <!-- Google Fonts: Inter for UI & JetBrains Mono for live code inspection -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+  <style>
+    body {
+      font-family: 'Inter', sans-serif;
+    }
+    code, pre, .font-mono {
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    /* Custom smooth range slider styling */
+    input[type="range"] {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 100%;
+      height: 8px;
+      border-radius: 999px;
+      background: #e2e8f0;
+      outline: none;
+    }
+    input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: #4f46e5;
+      cursor: pointer;
+      border: 3px solid #ffffff;
+      box-shadow: 0 2px 6px rgba(79, 70, 229, 0.45);
+      transition: transform 0.15s ease;
+    }
+    input[type="range"]::-webkit-slider-thumb:hover {
+      transform: scale(1.15);
+    }
+
+    /* Subtle pop animation for toast feedback */
+    @keyframes popIn {
+      0% { transform: translateY(12px) scale(0.95); opacity: 0; }
+      100% { transform: translateY(0) scale(1); opacity: 1; }
+    }
+    .toast-animate {
+      animation: popIn 0.22s ease-out forwards;
+    }
+  </style>
+
+  <!-- Dynamic CSS Style Tag: Updated in real-time by Level 1 controls! -->
+  <style id="dynamic-animation-style"></style>
+</head>
+<body class="bg-slate-100 text-slate-800 min-h-screen flex flex-col">
+
+  <!-- Top Studio Header + 3-Level Ecosystem Switcher -->
+  <header class="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-sm">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-3">
+      <!-- Brand Identity -->
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-600 via-violet-600 to-fuchsia-600 flex items-center justify-center text-white shadow-md">
+          <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+            <path stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+        </div>
+        <div>
+          <div class="flex items-center gap-2">
+            <h1 class="text-base sm:text-lg font-extrabold tracking-tight text-slate-900">Animation Studio</h1>
+            <span id="header-level-badge" class="text-[11px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700">
+              Level 1: SVG + CSS
+            </span>
+          </div>
+          <p id="header-subtitle" class="text-xs text-slate-500 hidden sm:block">
+            Learn how math coordinates &amp; keyframe timelines bring drawings to life
+          </p>
+        </div>
+      </div>
+
+      <!-- Level Switcher Tabs (Levels 1, 2 & 3) -->
+      <div class="flex items-center bg-slate-100 p-1 rounded-xl border border-slate-200">
+        <button id="tab-level-1" onclick="switchLevel(1)" class="px-2.5 sm:px-3.5 py-1.5 rounded-lg text-xs font-bold bg-white text-indigo-700 shadow-sm transition flex items-center gap-1.5">
+          <span class="w-2 h-2 rounded-full bg-indigo-600"></span>
+          <span>1. SVG &amp; CSS</span>
+        </button>
+        <button id="tab-level-2" onclick="switchLevel(2)" class="px-2.5 sm:px-3.5 py-1.5 rounded-lg text-xs font-bold text-slate-600 hover:text-slate-900 transition flex items-center gap-1.5">
+          <span class="w-2 h-2 rounded-full bg-emerald-500"></span>
+          <span>2. Webcam &amp; JS</span>
+        </button>
+        <button id="tab-level-3" onclick="switchLevel(3)" class="px-2.5 sm:px-3.5 py-1.5 rounded-lg text-xs font-bold text-slate-600 hover:text-slate-900 transition flex items-center gap-1.5">
+          <span class="w-2 h-2 rounded-full bg-fuchsia-500 animate-pulse"></span>
+          <span>3. AI Mocap</span>
+        </button>
+      </div>
+
+      <!-- Quick Presets & Export -->
+      <div class="flex items-center gap-2">
+        <!-- Level 1 Presets -->
+        <div id="l1-header-actions" class="hidden md:flex items-center gap-1.5 bg-slate-100 p-1 rounded-xl border border-slate-200">
+          <button onclick="applyPreset('classic')" class="px-2.5 py-1 text-xs font-semibold rounded-lg hover:bg-white hover:shadow-sm transition">
+            🏀 Classic
+          </button>
+          <button onclick="applyPreset('rubber')" class="px-2.5 py-1 text-xs font-semibold rounded-lg hover:bg-white hover:shadow-sm transition">
+            🫠 Squash
+          </button>
+          <button onclick="applyPreset('rocket')" class="px-2.5 py-1 text-xs font-semibold rounded-lg hover:bg-white hover:shadow-sm transition">
+            🚀 Blastoff
+          </button>
+        </div>
+
+        <!-- Level 2 Presets -->
+        <div id="l2-header-actions" class="hidden items-center gap-1.5 bg-slate-100 p-1 rounded-xl border border-slate-200">
+          <button onclick="applyL2Preset('dvd')" class="px-2.5 py-1 text-xs font-semibold rounded-lg hover:bg-white hover:shadow-sm transition">
+            📀 DVD Bounce
+          </button>
+          <button onclick="applyL2Preset('gravity')" class="px-2.5 py-1 text-xs font-semibold rounded-lg hover:bg-white hover:shadow-sm transition">
+            🌍 Gravity Drop
+          </button>
+          <button onclick="applyL2Preset('orbit')" class="px-2.5 py-1 text-xs font-semibold rounded-lg hover:bg-white hover:shadow-sm transition">
+            🛸 Space Orbit
+          </button>
+        </div>
+
+        <!-- Level 3 Presets -->
+        <div id="l3-header-actions" class="hidden items-center gap-1.5 bg-slate-100 p-1 rounded-xl border border-slate-200">
+          <button onclick="applyL3Preset('robot')" class="px-2.5 py-1 text-xs font-semibold rounded-lg hover:bg-white hover:shadow-sm transition">
+            🤖 Cyber Bot
+          </button>
+          <button onclick="applyL3Preset('hero')" class="px-2.5 py-1 text-xs font-semibold rounded-lg hover:bg-white hover:shadow-sm transition">
+            🦸 Super Hero
+          </button>
+          <button onclick="applyL3Preset('xray')" class="px-2.5 py-1 text-xs font-semibold rounded-lg hover:bg-white hover:shadow-sm transition">
+            💀 Hollywood Rig
+          </button>
+        </div>
+
+        <button onclick="copyActiveCode()" class="flex items-center gap-1.5 bg-slate-900 hover:bg-slate-800 active:scale-95 text-white text-xs font-semibold px-3.5 py-2.5 rounded-xl shadow-sm transition cursor-pointer">
+          <svg class="w-4 h-4 text-emerald-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+          </svg>
+          <span id="copy-btn-label">Copy HTML</span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Workspace Container -->
+  <main class="max-w-7xl w-full mx-auto px-4 sm:px-6 py-6 flex-1">
+
+    <!-- ===================================================================== -->
+    <!-- LEVEL 1 WORKSPACE: SVG & CSS KEYFRAMES                                -->
+    <!-- ===================================================================== -->
+    <div id="level1-workspace" class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+
+      <!-- LEFT COLUMN (5 cols): The Live SVG Stage & Interactive Timeline Scrubber -->
+      <section class="lg:col-span-5 flex flex-col gap-4">
+        <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+          <!-- Stage Toolbar -->
+          <div class="px-4 py-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between flex-wrap gap-2">
+            <div class="flex items-center gap-2">
+              <span class="text-xs font-bold uppercase tracking-wider text-slate-500">SVG Stage</span>
+              <span class="text-xs font-mono bg-white px-2 py-0.5 rounded-md border border-slate-200 text-slate-600">
+                320 × 360 px
+              </span>
+            </div>
+
+            <div class="flex items-center gap-1.5 flex-wrap">
+              <button id="btn-grid" onclick="toggleGrid()" class="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-indigo-100 text-indigo-700 hover:bg-indigo-200 transition">
+                # Grid: ON
+              </button>
+              <button id="btn-slowmo" onclick="toggleSlowMo()" class="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-200 text-slate-700 hover:bg-slate-300 transition" title="Slow down time to 0.25x speed">
+                🐢 0.25x
+              </button>
+              <button id="btn-sound" onclick="toggleSound()" class="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-200 text-slate-700 hover:bg-slate-300 transition">
+                🔇 Boing FX
+              </button>
+              <button id="btn-play" onclick="togglePlay()" class="px-3 py-1.5 rounded-lg text-xs font-bold bg-indigo-600 text-white hover:bg-indigo-700 shadow-sm transition">
+                ⏸ Pause
+              </button>
+            </div>
+          </div>
+
+          <!-- Interactive SVG Canvas Wrapper -->
+          <div class="p-4 bg-gradient-to-b from-slate-100 to-slate-200/70 flex flex-col items-center justify-center">
+            <div class="w-full max-w-[340px] aspect-[320/360] rounded-2xl border-2 border-slate-300 bg-white shadow-inner overflow-hidden relative touch-none select-none cursor-crosshair">
+              <svg id="stage-svg" viewBox="0 0 320 360" class="w-full h-full block">
+                <defs>
+                  <pattern id="smallGrid" width="20" height="20" patternUnits="userSpaceOnUse">
+                    <path d="M 20 0 L 0 0 0 20" fill="none" stroke="#f1f5f9" stroke-width="1"/>
+                  </pattern>
+                  <pattern id="majorGrid" width="80" height="80" patternUnits="userSpaceOnUse">
+                    <rect width="80" height="80" fill="url(#smallGrid)"/>
+                    <path d="M 80 0 L 0 0 0 80" fill="none" stroke="#e2e8f0" stroke-width="1.5"/>
+                  </pattern>
+                </defs>
+
+                <!-- Coordinate Grid Layer -->
+                <g id="grid-layer">
+                  <rect width="320" height="360" fill="url(#majorGrid)" />
+                  <text x="6" y="14" font-size="10" font-family="JetBrains Mono, monospace" fill="#94a3b8">(0,0)</text>
+                  <text x="275" y="14" font-size="10" font-family="JetBrains Mono, monospace" fill="#94a3b8">X: 320</text>
+                  <text x="6" y="352" font-size="10" font-family="JetBrains Mono, monospace" fill="#94a3b8">Y: 360</text>
+                  <line x1="160" y1="0" x2="160" y2="360" stroke="#cbd5e1" stroke-width="1" stroke-dasharray="4 4" />
+
+                  <!-- Live Drop Distance Ruler (translateY visualizer) -->
+                  <g id="drop-guide-group">
+                    <line id="drop-guide-line" x1="160" y1="55" x2="160" y2="265" stroke="#6366f1" stroke-width="2" stroke-dasharray="3 3" />
+                    <circle id="drop-guide-top" cx="160" cy="55" r="3.5" fill="#6366f1" />
+                    <circle id="drop-guide-bottom" cx="160" cy="265" r="3.5" fill="#f59e0b" />
+                    <rect id="drop-guide-pill" x="168" y="148" width="76" height="18" rx="6" fill="#eef2ff" stroke="#c7d2fe" stroke-width="1" />
+                    <text id="drop-guide-label" x="174" y="160" font-size="10" font-weight="700" font-family="JetBrains Mono, monospace" fill="#4338ca">+210px Y</text>
+                  </g>
+                </g>
+
+                <!-- Dynamic Floor Shadow -->
+                <ellipse id="floor-shadow" cx="160" cy="336" rx="42" ry="6" fill="rgba(15, 23, 42, 0.14)" />
+
+                <!-- THE ACTOR CONTAINER -->
+                <g id="actor-mount"></g>
+              </svg>
+
+              <div class="absolute bottom-2 right-2.5 px-2 py-0.5 rounded-full bg-slate-900/75 text-[10px] font-semibold text-white pointer-events-none">
+                👆 Drag stage to aim X &amp; Drop!
+              </div>
+            </div>
+          </div>
+
+          <!-- Real-Time Keyframe Timeline Scrubber Bar -->
+          <div class="px-4 py-3.5 bg-white border-t border-slate-200">
+            <div class="flex items-center justify-between text-xs mb-2">
+              <span class="font-bold text-slate-700">Interactive Keyframe Timeline</span>
+              <span id="phase-label" class="font-mono font-semibold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded">
+                0% — Start
+              </span>
+            </div>
+
+            <div class="relative h-7 bg-slate-100 rounded-full border border-slate-200 px-2.5 flex items-center justify-between text-[11px] font-mono text-slate-500 select-none">
+              <span class="z-10 font-bold text-slate-700 pointer-events-none">0%</span>
+              <span class="z-10 font-bold text-amber-600 pointer-events-none">50% (Peak)</span>
+              <span class="z-10 font-bold text-slate-700 pointer-events-none">100%</span>
+              
+              <div id="timeline-playhead" class="absolute top-0.5 bottom-0.5 w-4 -ml-2 rounded-full bg-indigo-600 shadow-md border-2 border-white pointer-events-none" style="left: 0%;"></div>
+              <input id="timeline-scrubber" type="range" min="0" max="100" value="0" oninput="scrubTimeline(this.value)" title="Drag to scrub through keyframes!" class="absolute inset-0 w-full h-full opacity-0 cursor-ew-resize z-20" />
+            </div>
+            <p class="text-[11px] text-slate-500 mt-2">
+              💡 <strong>Animator Trick:</strong> Drag the timeline bar above to freeze-frame any moment, or toggle <strong>🐢 0.25x</strong> to inspect Squash &amp; Stretch!
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- RIGHT COLUMN (7 cols): Level 1 Controls & Live Code X-Ray -->
+      <section class="lg:col-span-7 flex flex-col gap-5">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <!-- CARD 1: THE ACTOR (SVG Geometry) -->
+          <div class="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
+            <div class="flex items-center justify-between mb-3">
+              <h2 class="text-sm font-extrabold text-slate-900 flex items-center gap-2">
+                <span class="w-6 h-6 rounded-lg bg-rose-100 text-rose-600 flex items-center justify-center text-xs font-bold">1</span>
+                The Actor (SVG)
+              </h2>
+              <span class="text-[11px] font-medium text-slate-400">Shape &amp; coordinates</span>
+            </div>
+
+            <!-- Shape Selector -->
+            <label class="block text-xs font-semibold text-slate-600 mb-1.5">Character Shape</label>
+            <div class="grid grid-cols-4 gap-1.5 mb-3.5">
+              <button data-shape="ball" onclick="setShape('ball')" class="shape-btn py-2 rounded-xl text-xs font-bold border-2 border-indigo-600 bg-indigo-50 text-indigo-700 transition">
+                ● Ball
+              </button>
+              <button data-shape="smiley" onclick="setShape('smiley')" class="shape-btn py-2 rounded-xl text-xs font-bold border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 transition">
+                ☺ Face
+              </button>
+              <button data-shape="star" onclick="setShape('star')" class="shape-btn py-2 rounded-xl text-xs font-bold border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 transition">
+                ★ Star
+              </button>
+              <button data-shape="rocket" onclick="setShape('rocket')" class="shape-btn py-2 rounded-xl text-xs font-bold border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 transition">
+                🚀 Ship
+              </button>
+            </div>
+
+            <!-- Color Swatches -->
+            <label class="block text-xs font-semibold text-slate-600 mb-1.5">Paint Color (<code class="text-indigo-600">fill</code>)</label>
+            <div class="flex items-center gap-2 mb-3.5">
+              <button onclick="setColor('#ff6347', 'tomato')" class="w-7 h-7 rounded-full bg-[#ff6347] ring-2 ring-offset-2 ring-slate-900 transition hover:scale-110" title="tomato"></button>
+              <button onclick="setColor('#1e90ff', 'dodgerblue')" class="w-7 h-7 rounded-full bg-[#1e90ff] transition hover:scale-110" title="dodgerblue"></button>
+              <button onclick="setColor('#10b981', 'mediumseagreen')" class="w-7 h-7 rounded-full bg-[#10b981] transition hover:scale-110" title="mediumseagreen"></button>
+              <button onclick="setColor('#f59e0b', 'orange')" class="w-7 h-7 rounded-full bg-[#f59e0b] transition hover:scale-110" title="orange"></button>
+              <button onclick="setColor('#8b5cf6', 'blueviolet')" class="w-7 h-7 rounded-full bg-[#8b5cf6] transition hover:scale-110" title="blueviolet"></button>
+              <button onclick="setColor('#ec4899', 'deeppink')" class="w-7 h-7 rounded-full bg-[#ec4899] transition hover:scale-110" title="deeppink"></button>
+            </div>
+
+            <!-- Size (r) Slider -->
+            <div class="mb-3">
+              <div class="flex justify-between text-xs font-semibold text-slate-600 mb-1">
+                <span>Radius / Size (<code class="text-indigo-600">r</code>)</span>
+                <span id="val-radius" class="font-mono text-indigo-600">36px</span>
+              </div>
+              <input id="input-radius" type="range" min="18" max="60" value="36" oninput="updateFromControls()" />
+            </div>
+
+            <!-- Horizontal X (cx) Slider -->
+            <div>
+              <div class="flex justify-between text-xs font-semibold text-slate-600 mb-1">
+                <span>Horizontal Position (<code class="text-indigo-600">cx</code>)</span>
+                <span id="val-cx" class="font-mono text-indigo-600">160px</span>
+              </div>
+              <input id="input-cx" type="range" min="60" max="260" value="160" oninput="updateFromControls()" />
+            </div>
+          </div>
+
+          <!-- CARD 2: TIMELINE & DIRECTOR (CSS @keyframes) -->
+          <div class="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
+            <div class="flex items-center justify-between mb-3">
+              <h2 class="text-sm font-extrabold text-slate-900 flex items-center gap-2">
+                <span class="w-6 h-6 rounded-lg bg-indigo-100 text-indigo-600 flex items-center justify-center text-xs font-bold">2</span>
+                Timeline &amp; Director (CSS)
+              </h2>
+              <span class="text-[11px] font-medium text-slate-400">Motion &amp; timing</span>
+            </div>
+
+            <!-- Bounce Distance (translateY) -->
+            <div class="mb-3">
+              <div class="flex justify-between text-xs font-semibold text-slate-600 mb-1">
+                <span>Drop Distance (<code class="text-indigo-600">translateY</code>)</span>
+                <span id="val-drop" class="font-mono text-indigo-600">210px</span>
+              </div>
+              <input id="input-drop" type="range" min="40" max="245" value="210" oninput="updateFromControls()" />
+            </div>
+
+            <!-- Speed / Duration -->
+            <div class="mb-3">
+              <div class="flex justify-between text-xs font-semibold text-slate-600 mb-1">
+                <span>Loop Speed (<code class="text-indigo-600">duration</code>)</span>
+                <span id="val-duration" class="font-mono text-indigo-600">1.4s</span>
+              </div>
+              <input id="input-duration" type="range" min="0.4" max="3.5" step="0.1" value="1.4" oninput="updateFromControls()" />
+            </div>
+
+            <!-- Easing / Gravity Feel -->
+            <div class="mb-3.5">
+              <label class="block text-xs font-semibold text-slate-600 mb-1">
+                Gravity Feel (<code class="text-indigo-600">timing-function</code>)
+              </label>
+              <select id="input-easing" onchange="updateFromControls()" class="w-full text-xs font-semibold bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-slate-700 focus:outline-none focus:border-indigo-500">
+                <option value="ease-in-out" selected>ease-in-out (Smooth &amp; Floaty)</option>
+                <option value="cubic-bezier(0.55, 0.055, 0.675, 0.19)">ease-in (Heavy Gravity Drop!)</option>
+                <option value="linear">linear (Robotic Constant Speed)</option>
+                <option value="cubic-bezier(0.68, -0.55, 0.265, 1.55)">elastic (Springy Cartoon Boing)</option>
+              </select>
+            </div>
+
+            <!-- Pro Animator Secret Toggles -->
+            <div class="grid grid-cols-2 gap-2 pt-1">
+              <label class="flex items-center gap-2 p-2 rounded-xl border border-slate-200 bg-slate-50 cursor-pointer hover:bg-indigo-50/50 transition select-none">
+                <input id="input-squash" type="checkbox" onchange="updateFromControls()" class="w-4 h-4 text-indigo-600 rounded focus:ring-indigo-500" />
+                <span class="text-xs font-bold text-slate-700">Squash &amp; Stretch</span>
+              </label>
+
+              <label class="flex items-center gap-2 p-2 rounded-xl border border-slate-200 bg-slate-50 cursor-pointer hover:bg-indigo-50/50 transition select-none">
+                <input id="input-spin" type="checkbox" onchange="updateFromControls()" class="w-4 h-4 text-indigo-600 rounded focus:ring-indigo-500" />
+                <span class="text-xs font-bold text-slate-700">360° Spin</span>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <!-- LIVE CODE X-RAY CARD (Level 1) -->
+        <div class="bg-slate-900 rounded-2xl border border-slate-800 shadow-lg overflow-hidden text-slate-100">
+          <div class="px-4 py-2.5 bg-slate-950/70 border-b border-slate-800 flex items-center justify-between">
+            <div class="flex items-center gap-2">
+              <div class="flex gap-1.5">
+                <span class="w-2.5 h-2.5 rounded-full bg-rose-500"></span>
+                <span class="w-2.5 h-2.5 rounded-full bg-amber-400"></span>
+                <span class="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
+              </div>
+              <span class="text-xs font-bold tracking-wide text-slate-300 ml-1">Live Code X-Ray (Updates as you slide!)</span>
+            </div>
+            <span class="text-[11px] font-mono text-indigo-400">animation.html</span>
+          </div>
+
+          <div class="p-4 overflow-x-auto text-xs leading-relaxed">
+            <pre id="code-preview" class="font-mono text-slate-200"></pre>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- ===================================================================== -->
+    <!-- LEVEL 2 WORKSPACE: DIGITAL FLIPBOOK (WEBCAM + JAVASCRIPT CANVAS)      -->
+    <!-- ===================================================================== -->
+    <div id="level2-workspace" class="hidden grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+
+      <!-- LEFT COLUMN (5 cols): The 60 FPS HTML5 Canvas Flipbook Stage -->
+      <section class="lg:col-span-5 flex flex-col gap-4">
+        <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+          <!-- Canvas Stage Toolbar -->
+          <div class="px-4 py-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between flex-wrap gap-2">
+            <div class="flex items-center gap-2">
+              <span class="text-xs font-bold uppercase tracking-wider text-slate-500">HTML5 Canvas</span>
+              <span id="l2-stage-size" class="text-xs font-mono bg-white px-2 py-0.5 rounded-md border border-slate-200 text-slate-600">
+                340 × 380 px
+              </span>
+            </div>
+
+            <div class="flex items-center gap-1.5 flex-wrap">
+              <button id="btn-l2-vectors" onclick="toggleL2Vectors()" class="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-indigo-100 text-indigo-700 hover:bg-indigo-200 transition" title="Show X/Y coordinates & velocity arrow">
+                📐 Math: ON
+              </button>
+              <button id="btn-l2-sound" onclick="toggleL2Sound()" class="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-200 text-slate-700 hover:bg-slate-300 transition">
+                🔇 Wall FX
+              </button>
+              <button id="btn-l2-step" onclick="stepL2SingleFrame()" class="px-2.5 py-1.5 rounded-lg text-xs font-bold bg-amber-100 text-amber-800 hover:bg-amber-200 transition" title="Advance exactly 1 flipbook page">
+                ⏭ +1 Page
+              </button>
+              <button id="btn-l2-play" onclick="toggleL2Play()" class="px-3 py-1.5 rounded-lg text-xs font-bold bg-indigo-600 text-white hover:bg-indigo-700 shadow-sm transition">
+                ⏸ Pause
+              </button>
+            </div>
+          </div>
+
+          <!-- Interactive Canvas Container -->
+          <div class="p-4 bg-gradient-to-b from-slate-900 to-indigo-950 flex flex-col items-center justify-center">
+            <div id="l2-canvas-wrapper" class="w-full max-w-[360px] aspect-[340/380] rounded-2xl border-2 border-indigo-400/40 bg-slate-950 shadow-inner overflow-hidden relative touch-none select-none cursor-grab active:cursor-grabbing">
+              <canvas id="flipbook-canvas" class="w-full h-full block"></canvas>
+              <div class="absolute bottom-2.5 right-2.5 px-2.5 py-1 rounded-full bg-slate-900/80 border border-slate-700 text-[10px] font-semibold text-slate-300 pointer-events-none">
+                👆 Drag &amp; flick face!
+              </div>
+            </div>
+          </div>
+
+          <!-- Live Flipbook Heartbeat Telemetry -->
+          <div class="px-4 py-3.5 bg-white border-t border-slate-200">
+            <div class="flex items-center justify-between text-xs mb-2">
+              <span class="font-bold text-slate-700">Flipbook Engine (<code class="text-indigo-600">requestAnimationFrame</code>)</span>
+              <span id="l2-frame-counter" class="font-mono font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded">
+                Page #0 (60 FPS)
+              </span>
+            </div>
+
+            <div class="grid grid-cols-3 gap-2 text-center font-mono text-xs bg-slate-50 p-2 rounded-xl border border-slate-200">
+              <div>
+                <span class="text-[10px] uppercase text-slate-400 block">Position X</span>
+                <span id="l2-readout-x" class="font-bold text-slate-800">170</span>
+              </div>
+              <div class="border-x border-slate-200">
+                <span class="text-[10px] uppercase text-slate-400 block">Position Y</span>
+                <span id="l2-readout-y" class="font-bold text-slate-800">190</span>
+              </div>
+              <div>
+                <span class="text-[10px] uppercase text-slate-400 block">Corner Hits</span>
+                <span id="l2-corner-hits" class="font-bold text-amber-600">0</span>
+              </div>
+            </div>
+
+            <p class="text-[11px] text-slate-500 mt-2">
+              💡 <strong>Flipbook Secret:</strong> Click <strong>⏭ +1 Page</strong> to step frame-by-frame and watch <code class="text-slate-700">X</code> and <code class="text-slate-700">Y</code> jump by <code class="text-slate-700">vx</code> and <code class="text-slate-700">vy</code>!
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- RIGHT COLUMN (7 cols): Webcam Snapshot Studio + JS Physics + Live Code -->
+      <section class="lg:col-span-7 flex flex-col gap-5">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+
+          <!-- CARD 1: WEBCAM PHOTO BOOTH -->
+          <div class="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm flex flex-col justify-between">
+            <div>
+              <div class="flex items-center justify-between mb-3">
+                <h2 class="text-sm font-extrabold text-slate-900 flex items-center gap-2">
+                  <span class="w-6 h-6 rounded-lg bg-rose-100 text-rose-600 flex items-center justify-center text-xs font-bold">1</span>
+                  Webcam Photo Booth
+                </h2>
+                <span id="frame-b-badge" class="hidden text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-full bg-purple-100 text-purple-700">
+                  2-Frame Loop ON
+                </span>
+              </div>
+
+              <!-- Live Webcam Video / Preview Box -->
+              <div class="relative w-full h-36 rounded-xl bg-slate-900 overflow-hidden border border-slate-300 mb-3 flex items-center justify-center">
+                <video id="webcam-video" autoplay playsinline muted class="hidden w-full h-full object-cover scale-x-[-1]"></video>
+                
+                <div id="webcam-guide" class="hidden absolute inset-0 pointer-events-none flex items-center justify-center">
+                  <div class="w-24 h-24 rounded-full border-2 border-dashed border-amber-400 shadow-[0_0_0_999px_rgba(15,23,42,0.45)]"></div>
+                </div>
+
+                <div id="webcam-placeholder" class="text-center px-4">
+                  <div class="text-2xl mb-1">📷</div>
+                  <p id="webcam-status-text" class="text-xs text-slate-300 font-medium">
+                    Turn on webcam to snap his face, or upload a photo!
+                  </p>
+                </div>
+
+                <div id="shutter-flash" class="hidden absolute inset-0 bg-white pointer-events-none"></div>
+              </div>
+
+              <!-- Camera Action Buttons -->
+              <div class="grid grid-cols-2 gap-2 mb-2">
+                <button id="btn-start-cam" onclick="startWebcam()" class="py-2 px-2.5 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm transition flex items-center justify-center gap-1">
+                  🎥 Start Camera
+                </button>
+                <button id="btn-snap-photo" onclick="snapWebcamPhoto('A')" disabled class="py-2 px-2.5 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-200 disabled:text-slate-400 text-white shadow-sm transition flex items-center justify-center gap-1">
+                  📸 Snap Face A
+                </button>
+              </div>
+
+              <!-- 2-Frame Flipbook Expression Button -->
+              <div class="flex items-center gap-1.5 mb-2.5">
+                <button id="btn-snap-frame-b" onclick="snapWebcamPhoto('B')" disabled class="flex-1 py-1.5 px-2.5 rounded-xl text-[11px] font-bold bg-purple-600 hover:bg-purple-700 disabled:bg-slate-100 disabled:text-slate-400 text-white transition flex items-center justify-center gap-1">
+                  😜 Snap Silly Frame B (2-Frame Talk!)
+                </button>
+                <button id="btn-clear-frame-b" onclick="clearFrameB()" class="hidden py-1.5 px-2 rounded-xl text-[11px] font-bold bg-slate-200 hover:bg-slate-300 text-slate-700 transition" title="Return to single photo">
+                  ✕
+                </button>
+              </div>
+
+              <!-- Fallback Options (Upload Photo or Hero Avatar) -->
+              <div class="flex items-center justify-between gap-2 pt-2 border-t border-slate-100">
+                <label class="flex-1 text-center py-1.5 px-2 rounded-lg text-[11px] font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 cursor-pointer transition">
+                  📁 Upload Photo
+                  <input type="file" accept="image/*" onchange="handlePhotoUpload(event)" class="hidden" />
+                </label>
+                <button onclick="generateHeroAvatar()" class="flex-1 py-1.5 px-2 rounded-lg text-[11px] font-semibold bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 transition">
+                  🦸 Hero Avatar
+                </button>
+              </div>
+            </div>
+
+            <!-- Costume Frame Selector -->
+            <div class="mt-3 pt-3 border-t border-slate-100">
+              <label class="block text-xs font-semibold text-slate-600 mb-1.5">Costume Frame</label>
+              <div class="grid grid-cols-4 gap-1.5">
+                <button data-frame="none" onclick="setL2Frame('none')" class="l2-frame-btn py-1.5 rounded-lg text-[11px] font-bold border-2 border-indigo-600 bg-indigo-50 text-indigo-700 transition">
+                  Circle
+                </button>
+                <button data-frame="astronaut" onclick="setL2Frame('astronaut')" class="l2-frame-btn py-1.5 rounded-lg text-[11px] font-bold border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 transition">
+                  👩‍🚀 Space
+                </button>
+                <button data-frame="hero" onclick="setL2Frame('hero')" class="l2-frame-btn py-1.5 rounded-lg text-[11px] font-bold border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 transition">
+                  ⚡ Hero
+                </button>
+                <button data-frame="crown" onclick="setL2Frame('crown')" class="l2-frame-btn py-1.5 rounded-lg text-[11px] font-bold border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 transition">
+                  👑 King
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- CARD 2: JAVASCRIPT MOTION ENGINE -->
+          <div class="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm flex flex-col justify-between">
+            <div>
+              <div class="flex items-center justify-between mb-3">
+                <h2 class="text-sm font-extrabold text-slate-900 flex items-center gap-2">
+                  <span class="w-6 h-6 rounded-lg bg-indigo-100 text-indigo-600 flex items-center justify-center text-xs font-bold">2</span>
+                  JS Motion Math
+                </h2>
+                <span class="text-[11px] font-medium text-slate-400">Frame-by-frame rules</span>
+              </div>
+
+              <!-- Horizontal Speed (vx) -->
+              <div class="mb-3">
+                <div class="flex justify-between text-xs font-semibold text-slate-600 mb-1">
+                  <span>Horizontal Speed (<code class="text-indigo-600">vx</code>)</span>
+                  <span id="l2-val-vx" class="font-mono text-indigo-600">3.5 px/frame</span>
+                </div>
+                <input id="l2-input-vx" type="range" min="0" max="10" step="0.5" value="3.5" oninput="updateL2Controls()" />
+              </div>
+
+              <!-- Vertical Speed (vy) -->
+              <div class="mb-3">
+                <div class="flex justify-between text-xs font-semibold text-slate-600 mb-1">
+                  <span>Vertical Speed (<code class="text-indigo-600">vy</code>)</span>
+                  <span id="l2-val-vy" class="font-mono text-indigo-600">2.8 px/frame</span>
+                </div>
+                <input id="l2-input-vy" type="range" min="0" max="10" step="0.5" value="2.8" oninput="updateL2Controls()" />
+              </div>
+
+              <!-- Gravity Pull -->
+              <div class="mb-3">
+                <div class="flex justify-between text-xs font-semibold text-slate-600 mb-1">
+                  <span>Gravity Pull (<code class="text-indigo-600">gravity</code>)</span>
+                  <span id="l2-val-gravity" class="font-mono text-indigo-600">0.00 (Zero-G)</span>
+                </div>
+                <input id="l2-input-gravity" type="range" min="0" max="0.6" step="0.05" value="0" oninput="updateL2Controls()" />
+              </div>
+
+              <!-- Photo Size -->
+              <div class="mb-3">
+                <div class="flex justify-between text-xs font-semibold text-slate-600 mb-1">
+                  <span>Head Size (<code class="text-indigo-600">radius</code>)</span>
+                  <span id="l2-val-size" class="font-mono text-indigo-600">44px</span>
+                </div>
+                <input id="l2-input-size" type="range" min="24" max="72" step="2" value="44" oninput="updateL2Controls()" />
+              </div>
+
+              <!-- Animation Secret Toggles -->
+              <div class="grid grid-cols-3 gap-1.5 pt-1">
+                <label class="flex items-center justify-center gap-1.5 p-2 rounded-xl border border-slate-200 bg-slate-50 cursor-pointer hover:bg-purple-50/60 transition select-none">
+                  <input id="l2-input-onion" type="checkbox" onchange="updateL2Controls()" class="w-3.5 h-3.5 text-indigo-600 rounded focus:ring-indigo-500" />
+                  <span class="text-[11px] font-bold text-slate-700">👻 Trail</span>
+                </label>
+
+                <label class="flex items-center justify-center gap-1.5 p-2 rounded-xl border border-slate-200 bg-slate-50 cursor-pointer hover:bg-indigo-50/50 transition select-none">
+                  <input id="l2-input-spin" type="checkbox" onchange="updateL2Controls()" class="w-3.5 h-3.5 text-indigo-600 rounded focus:ring-indigo-500" />
+                  <span class="text-[11px] font-bold text-slate-700">🌀 Spin</span>
+                </label>
+
+                <label class="flex items-center justify-center gap-1.5 p-2 rounded-xl border border-slate-200 bg-slate-50 cursor-pointer hover:bg-amber-50/60 transition select-none">
+                  <input id="l2-input-particles" type="checkbox" checked onchange="updateL2Controls()" class="w-3.5 h-3.5 text-indigo-600 rounded focus:ring-indigo-500" />
+                  <span class="text-[11px] font-bold text-slate-700">✨ Sparks</span>
+                </label>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- LIVE JAVASCRIPT CODE X-RAY CARD (Level 2) -->
+        <div class="bg-slate-900 rounded-2xl border border-slate-800 shadow-lg overflow-hidden text-slate-100">
+          <div class="px-4 py-2.5 bg-slate-950/70 border-b border-slate-800 flex items-center justify-between">
+            <div class="flex items-center gap-2">
+              <div class="flex gap-1.5">
+                <span class="w-2.5 h-2.5 rounded-full bg-rose-500"></span>
+                <span class="w-2.5 h-2.5 rounded-full bg-amber-400"></span>
+                <span class="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
+              </div>
+              <span class="text-xs font-bold tracking-wide text-slate-300 ml-1">Live JavaScript Flipbook Code</span>
+            </div>
+            <span class="text-[11px] font-mono text-emerald-400">flipbook.js</span>
+          </div>
+
+          <div class="p-4 overflow-x-auto text-xs leading-relaxed">
+            <pre id="l2-code-preview" class="font-mono text-slate-200"></pre>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- ===================================================================== -->
+    <!-- LEVEL 3 WORKSPACE: REAL-TIME AI MOTION CAPTURE (SKELETON & PUPPET)    -->
+    <!-- ===================================================================== -->
+    <div id="level3-workspace" class="hidden grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+
+      <!-- LEFT COLUMN (6 cols): Real-Time AI Mocap Volume & Puppet Stage -->
+      <section class="lg:col-span-6 flex flex-col gap-4">
+        <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+          <!-- Mocap Stage Toolbar -->
+          <div class="px-4 py-3 bg-slate-900 text-white border-b border-slate-800 flex items-center justify-between flex-wrap gap-2">
+            <div class="flex items-center gap-2">
+              <span class="w-2.5 h-2.5 rounded-full bg-fuchsia-500 animate-ping"></span>
+              <span class="text-xs font-extrabold uppercase tracking-wider text-fuchsia-300">AI Mocap Volume</span>
+              <span id="l3-tracker-badge" class="text-[11px] font-mono bg-slate-800 border border-slate-700 px-2 py-0.5 rounded-md text-amber-300">
+                🕺 Demo Dance Rig
+              </span>
+            </div>
+
+            <div class="flex items-center gap-1.5 flex-wrap">
+              <button id="btn-l3-cam-view" onclick="cycleL3Backdrop()" class="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 text-slate-200 hover:bg-slate-700 border border-slate-700 transition" title="Toggle webcam video background visibility">
+                👁️ Studio Dim
+              </button>
+              <button id="btn-l3-sound" onclick="toggleL3Sound()" class="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 text-slate-200 hover:bg-slate-700 border border-slate-700 transition">
+                🔇 Power FX
+              </button>
+            </div>
+          </div>
+
+          <!-- Hidden raw video element fed into MediaPipe Pose AI -->
+          <video id="l3-webcam-video" autoplay playsinline muted class="hidden"></video>
+
+          <!-- Main Mocap Rendering Canvas -->
+          <div class="p-3 sm:p-4 bg-gradient-to-b from-slate-950 via-indigo-950 to-slate-950 flex flex-col items-center justify-center">
+            <div id="l3-canvas-wrapper" class="w-full max-w-[460px] aspect-[4/3] rounded-2xl border-2 border-fuchsia-500/40 bg-slate-950 shadow-[0_0_30px_rgba(192,38,211,0.18)] overflow-hidden relative touch-none select-none cursor-crosshair">
+              <canvas id="mocap-canvas" class="w-full h-full block"></canvas>
+
+              <!-- AI Loading / Calibration Overlay -->
+              <div id="l3-loading-banner" class="hidden absolute top-3 left-3 right-3 px-3 py-2 rounded-xl bg-slate-900/90 border border-fuchsia-500/50 text-xs text-fuchsia-200 flex items-center justify-between shadow-lg">
+                <span id="l3-loading-text" class="font-semibold">⚡ Warming up AI Skeleton Tracker...</span>
+                <span class="w-3.5 h-3.5 rounded-full border-2 border-fuchsia-400 border-t-transparent animate-spin"></span>
+              </div>
+
+              <!-- Bottom Interactive Hint -->
+              <div class="absolute bottom-2.5 left-2.5 right-2.5 flex items-center justify-between pointer-events-none">
+                <span id="l3-hint-pill" class="px-2.5 py-1 rounded-full bg-slate-900/85 border border-slate-700 text-[10px] font-semibold text-slate-300">
+                  🙌 Raise hands above shoulders for Power FX!
+                </span>
+                <span id="l3-fps-pill" class="px-2 py-1 rounded-full bg-fuchsia-950/90 border border-fuchsia-700/60 text-[10px] font-mono font-bold text-fuchsia-300">
+                  AI READY
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Live Skeletal Joint Coordinate Telemetry -->
+          <div class="px-4 py-3.5 bg-white border-t border-slate-200">
+            <div class="flex items-center justify-between text-xs mb-2">
+              <span class="font-bold text-slate-700">Live Joint Coordinates (<code class="text-fuchsia-600">pose.landmarks</code>)</span>
+              <span id="l3-power-status" class="font-mono text-[11px] font-bold text-slate-500 bg-slate-100 px-2 py-0.5 rounded">
+                Hands: Resting
+              </span>
+            </div>
+
+            <div class="grid grid-cols-4 gap-1.5 text-center font-mono text-[11px] bg-slate-50 p-2 rounded-xl border border-slate-200">
+              <div>
+                <span class="text-[9px] uppercase text-slate-400 block">Nose (X,Y)</span>
+                <span id="l3-joint-nose" class="font-bold text-slate-800">50%, 28%</span>
+              </div>
+              <div class="border-l border-slate-200">
+                <span class="text-[9px] uppercase text-slate-400 block">Left Hand</span>
+                <span id="l3-joint-lhand" class="font-bold text-cyan-600">32%, 52%</span>
+              </div>
+              <div class="border-l border-slate-200">
+                <span class="text-[9px] uppercase text-slate-400 block">Right Hand</span>
+                <span id="l3-joint-rhand" class="font-bold text-rose-600">68%, 52%</span>
+              </div>
+              <div class="border-l border-slate-200">
+                <span class="text-[9px] uppercase text-slate-400 block">Head Tilt</span>
+                <span id="l3-joint-tilt" class="font-bold text-indigo-600">0°</span>
+              </div>
+            </div>
+
+            <p class="text-[11px] text-slate-500 mt-2">
+              💡 <strong>How Hollywood Mocap Works:</strong> The AI doesn't send video to your character—it only sends <strong>(X, Y) numbers</strong> for your joints, and your digital puppet glues itself onto those dots!
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- RIGHT COLUMN (6 cols): Mocap Controls, Puppet Costumes & Live Code -->
+      <section class="lg:col-span-6 flex flex-col gap-5">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+
+          <!-- CARD 1: MOCAP INPUT SOURCE -->
+          <div class="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm flex flex-col justify-between">
+            <div>
+              <div class="flex items-center justify-between mb-3">
+                <h2 class="text-sm font-extrabold text-slate-900 flex items-center gap-2">
+                  <span class="w-6 h-6 rounded-lg bg-fuchsia-100 text-fuchsia-700 flex items-center justify-center text-xs font-bold">1</span>
+                  Tracking Input
+                </h2>
+                <span class="text-[11px] font-medium text-slate-400">Body or Mouse</span>
+              </div>
+
+              <!-- Primary Live Webcam AI Mocap Button -->
+              <button id="btn-start-l3-cam" onclick="startL3WebcamMocap()" class="w-full py-2.5 px-3 rounded-xl text-xs font-extrabold bg-gradient-to-r from-fuchsia-600 to-indigo-600 hover:from-fuchsia-700 hover:to-indigo-700 text-white shadow-md transition flex items-center justify-center gap-2 mb-2.5">
+                🎥 Start Live Webcam AI Mocap
+              </button>
+
+              <!-- Fallback / Practice Modes (Zero Camera Needed!) -->
+              <div class="grid grid-cols-2 gap-1.5 mb-3">
+                <button id="btn-l3-mode-dance" onclick="setL3InputMode('dance')" class="py-2 px-2 rounded-xl text-[11px] font-bold border-2 border-fuchsia-600 bg-fuchsia-50 text-fuchsia-800 transition">
+                  🕺 Auto-Dance
+                </button>
+                <button id="btn-l3-mode-mouse" onclick="setL3InputMode('mouse')" class="py-2 px-2 rounded-xl text-[11px] font-bold border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 transition">
+                  👆 Puppeteer
+                </button>
+              </div>
+
+              <div class="p-2.5 rounded-xl bg-slate-50 border border-slate-200 text-[11px] text-slate-600 leading-relaxed">
+                <strong>Step back 4–6 feet</strong> when using the camera so the AI can see your head, shoulders, and hands! No camera? Use <strong>Auto-Dance</strong> or move your finger/mouse over the stage in <strong>Puppeteer</strong> mode!
+              </div>
+            </div>
+
+            <!-- Cross-Level Combo: Use Level 2 Face Snapshot as Puppet Head! -->
+            <div class="mt-3 pt-3 border-t border-slate-100">
+              <label class="flex items-center justify-between p-2 rounded-xl border border-amber-200 bg-amber-50/70 cursor-pointer hover:bg-amber-100/70 transition select-none">
+                <div class="flex items-center gap-2">
+                  <span class="text-base">😎</span>
+                  <div>
+                    <span class="block text-xs font-extrabold text-amber-950">Use Level 2 Face Head</span>
+                    <span class="block text-[10px] text-amber-800">Put his photo on the AI skeleton!</span>
+                  </div>
+                </div>
+                <input id="l3-use-l2-face" type="checkbox" onchange="updateL3Controls()" class="w-4 h-4 text-fuchsia-600 rounded focus:ring-fuchsia-500" />
+              </label>
+            </div>
+          </div>
+
+          <!-- CARD 2: DIGITAL PUPPET RIG & RIGGING LAYERS -->
+          <div class="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm flex flex-col justify-between">
+            <div>
+              <div class="flex items-center justify-between mb-3">
+                <h2 class="text-sm font-extrabold text-slate-900 flex items-center gap-2">
+                  <span class="w-6 h-6 rounded-lg bg-indigo-100 text-indigo-700 flex items-center justify-center text-xs font-bold">2</span>
+                  Digital Puppet Skin
+                </h2>
+                <span class="text-[11px] font-medium text-slate-400">Character &amp; FX</span>
+              </div>
+
+              <!-- 4 Character Costumes -->
+              <label class="block text-xs font-semibold text-slate-600 mb-1.5">Choose Character Rig</label>
+              <div class="grid grid-cols-2 gap-1.5 mb-3.5">
+                <button data-skin="robot" onclick="setL3Skin('robot')" class="l3-skin-btn py-2 px-2 rounded-xl text-xs font-bold border-2 border-fuchsia-600 bg-fuchsia-50 text-fuchsia-800 transition">
+                  🤖 Cyber Bot
+                </button>
+                <button data-skin="hero" onclick="setL3Skin('hero')" class="l3-skin-btn py-2 px-2 rounded-xl text-xs font-bold border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 transition">
+                  🦸 Super Hero
+                </button>
+                <button data-skin="wizard" onclick="setL3Skin('wizard')" class="l3-skin-btn py-2 px-2 rounded-xl text-xs font-bold border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 transition">
+                  🧙 Star Wizard
+                </button>
+                <button data-skin="xray" onclick="setL3Skin('xray')" class="l3-skin-btn py-2 px-2 rounded-xl text-xs font-bold border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 transition">
+                  💀 Neon X-Ray
+                </button>
+              </div>
+
+              <!-- Puppet Scale Slider -->
+              <div class="mb-3.5">
+                <div class="flex justify-between text-xs font-semibold text-slate-600 mb-1">
+                  <span>Armor / Suit Thickness</span>
+                  <span id="l3-val-scale" class="font-mono text-fuchsia-600">1.0x</span>
+                </div>
+                <input id="l3-input-scale" type="range" min="0.7" max="1.5" step="0.1" value="1.0" oninput="updateL3Controls()" />
+              </div>
+
+              <!-- Rigging X-Ray Toggles -->
+              <div class="grid grid-cols-2 gap-2">
+                <label class="flex items-center gap-2 p-2 rounded-xl border border-slate-200 bg-slate-50 cursor-pointer hover:bg-cyan-50/60 transition select-none">
+                  <input id="l3-show-skeleton" type="checkbox" checked onchange="updateL3Controls()" class="w-4 h-4 text-fuchsia-600 rounded focus:ring-fuchsia-500" />
+                  <span class="text-xs font-bold text-slate-700">🦴 AI Bones</span>
+                </label>
+
+                <label class="flex items-center gap-2 p-2 rounded-xl border border-slate-200 bg-slate-50 cursor-pointer hover:bg-amber-50/60 transition select-none">
+                  <input id="l3-power-fx" type="checkbox" checked onchange="updateL3Controls()" class="w-4 h-4 text-fuchsia-600 rounded focus:ring-fuchsia-500" />
+                  <span class="text-xs font-bold text-slate-700">⚡ Hand Blasts</span>
+                </label>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- LIVE AI MOCAP CODE X-RAY CARD (Level 3) -->
+        <div class="bg-slate-900 rounded-2xl border border-slate-800 shadow-lg overflow-hidden text-slate-100">
+          <div class="px-4 py-2.5 bg-slate-950/70 border-b border-slate-800 flex items-center justify-between">
+            <div class="flex items-center gap-2">
+              <div class="flex gap-1.5">
+                <span class="w-2.5 h-2.5 rounded-full bg-rose-500"></span>
+                <span class="w-2.5 h-2.5 rounded-full bg-amber-400"></span>
+                <span class="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
+              </div>
+              <span class="text-xs font-bold tracking-wide text-slate-300 ml-1">Live AI Motion Capture Code</span>
+            </div>
+            <span class="text-[11px] font-mono text-fuchsia-400">mocap_rig.js</span>
+          </div>
+
+          <div class="p-4 overflow-x-auto text-xs leading-relaxed">
+            <pre id="l3-code-preview" class="font-mono text-slate-200"></pre>
+          </div>
+        </div>
+      </section>
+    </div>
+
+  </main>
+
+  <!-- Toast Notification (Replaces alert() cleanly) -->
+  <div id="toast" class="hidden fixed bottom-5 right-5 z-50 bg-slate-900 text-white text-xs font-semibold px-4 py-3 rounded-xl shadow-xl border border-slate-700 flex items-center gap-2">
+    <span class="text-emerald-400 text-base">✓</span>
+    <span id="toast-message">Copied standalone HTML to clipboard!</span>
+  </div>
+
+  <script>
+    // =========================================================================
+    // 0. SHARED STUDIO STATE & LEVEL SWITCHER (LEVELS 1, 2 & 3)
+    // =========================================================================
+    let activeLevel = 1; // 1 = SVG & CSS, 2 = Digital Flipbook, 3 = AI Mocap
+    let sharedWebcamStream = null; // Reused smoothly between Level 2 & Level 3
+
+    function switchLevel(levelNum) {
+      activeLevel = levelNum;
+
+      const ws1 = document.getElementById('level1-workspace');
+      const ws2 = document.getElementById('level2-workspace');
+      const ws3 = document.getElementById('level3-workspace');
+
+      const tab1 = document.getElementById('tab-level-1');
+      const tab2 = document.getElementById('tab-level-2');
+      const tab3 = document.getElementById('tab-level-3');
+
+      const l1Actions = document.getElementById('l1-header-actions');
+      const l2Actions = document.getElementById('l2-header-actions');
+      const l3Actions = document.getElementById('l3-header-actions');
+
+      const badge = document.getElementById('header-level-badge');
+      const subtitle = document.getElementById('header-subtitle');
+      const copyLabel = document.getElementById('copy-btn-label');
+
+      // Hide all workspaces & presets first
+      ws1.classList.add('hidden');
+      ws2.classList.add('hidden');
+      ws3.classList.add('hidden');
+      l1Actions.classList.add('hidden');
+      l1Actions.classList.remove('md:flex');
+      l2Actions.classList.add('hidden');
+      l2Actions.classList.remove('md:flex');
+      l3Actions.classList.add('hidden');
+      l3Actions.classList.remove('md:flex');
+
+      const inactiveTabClass = 'px-2.5 sm:px-3.5 py-1.5 rounded-lg text-xs font-bold text-slate-600 hover:text-slate-900 transition flex items-center gap-1.5';
+      tab1.className = inactiveTabClass;
+      tab2.className = inactiveTabClass;
+      tab3.className = inactiveTabClass;
+
+      if (levelNum === 1) {
+        ws1.classList.remove('hidden');
+        l1Actions.classList.add('md:flex');
+        tab1.className = 'px-2.5 sm:px-3.5 py-1.5 rounded-lg text-xs font-bold bg-white text-indigo-700 shadow-sm transition flex items-center gap-1.5';
+
+        badge.textContent = 'Level 1: SVG + CSS';
+        badge.className = 'text-[11px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700';
+        subtitle.textContent = 'Learn how math coordinates & keyframe timelines bring drawings to life';
+        copyLabel.textContent = 'Copy HTML';
+      } else if (levelNum === 2) {
+        ws2.classList.remove('hidden');
+        l2Actions.classList.add('md:flex');
+        tab2.className = 'px-2.5 sm:px-3.5 py-1.5 rounded-lg text-xs font-bold bg-white text-emerald-700 shadow-sm transition flex items-center gap-1.5';
+
+        badge.textContent = 'Level 2: Webcam + JS';
+        badge.className = 'text-[11px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800';
+        subtitle.textContent = 'Snap his face & animate 60 flipbook pages per second with JavaScript!';
+        copyLabel.textContent = 'Copy JS App';
+
+        resizeL2Canvas();
+        renderL2CodePreview();
+      } else if (levelNum === 3) {
+        ws3.classList.remove('hidden');
+        l3Actions.classList.add('md:flex');
+        tab3.className = 'px-2.5 sm:px-3.5 py-1.5 rounded-lg text-xs font-bold bg-white text-fuchsia-700 shadow-sm transition flex items-center gap-1.5';
+
+        badge.textContent = 'Level 3: AI Mocap';
+        badge.className = 'text-[11px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-fuchsia-100 text-fuchsia-800';
+        subtitle.textContent = 'Real-time AI skeleton tracking maps his body movements onto a digital puppet!';
+        copyLabel.textContent = 'Copy Mocap';
+
+        resizeL3Canvas();
+        renderL3CodePreview();
+
+        // If camera is already running from Level 2, automatically attach it to Level 3!
+        if (sharedWebcamStream && l3State.inputMode !== 'webcam') {
+          attachStreamToL3Video(sharedWebcamStream);
+        }
+      }
+    }
+
+    // =========================================================================
+    // 1. LEVEL 1 STATE: SVG & CSS KEYFRAMES
+    // =========================================================================
+    const state = {
+      shape: 'ball',          // 'ball' | 'smiley' | 'star' | 'rocket'
+      colorHex: '#ff6347',
+      colorName: 'tomato',
+      radius: 36,
+      cx: 160,
+      cy: 55,
+      dropY: 210,
+      duration: 1.4,
+      slowMo: false,
+      easing: 'ease-in-out',
+      squash: false,
+      spin: false,
+      isPlaying: true,
+      showGrid: true,
+      soundEnabled: false
+    };
+
+    let audioCtx = null;
+    let lastHalfCycle = -1;
+
+    window.addEventListener('DOMContentLoaded', () => {
+      renderAll();
+      setupLevel1StageInteractions();
+      startTimelineLoop();
+      initLevel2Flipbook();
+      initLevel3Mocap();
+    });
+
+    function setupLevel1StageInteractions() {
+      const svg = document.getElementById('stage-svg');
+      if (!svg) return;
+
+      let draggingStage = false;
+
+      function applyPointerToStage(e) {
+        const rect = svg.getBoundingClientRect();
+        const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+        const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+        const svgX = ((clientX - rect.left) / rect.width) * 320;
+        const svgY = ((clientY - rect.top) / rect.height) * 360;
+
+        state.cx = Math.round(Math.max(60, Math.min(260, svgX)));
+        state.dropY = Math.round(Math.max(40, Math.min(245, svgY - state.cy)));
+
+        document.getElementById('input-cx').value = state.cx;
+        document.getElementById('input-drop').value = state.dropY;
+        renderAll();
+      }
+
+      svg.addEventListener('mousedown', (e) => {
+        draggingStage = true;
+        applyPointerToStage(e);
+      });
+      window.addEventListener('mousemove', (e) => {
+        if (draggingStage) applyPointerToStage(e);
+      });
+      window.addEventListener('mouseup', () => {
+        draggingStage = false;
+      });
+
+      svg.addEventListener('touchstart', (e) => {
+        draggingStage = true;
+        applyPointerToStage(e);
+      }, { passive: true });
+      svg.addEventListener('touchmove', (e) => {
+        if (draggingStage) {
+          e.preventDefault();
+          applyPointerToStage(e);
+        }
+      }, { passive: false });
+      window.addEventListener('touchend', () => {
+        draggingStage = false;
+      });
+    }
+
+    function updateFromControls() {
+      state.radius = parseInt(document.getElementById('input-radius').value, 10);
+      state.cx = parseInt(document.getElementById('input-cx').value, 10);
+      state.dropY = parseInt(document.getElementById('input-drop').value, 10);
+      state.duration = parseFloat(document.getElementById('input-duration').value);
+      state.easing = document.getElementById('input-easing').value;
+      state.squash = document.getElementById('input-squash').checked;
+      state.spin = document.getElementById('input-spin').checked;
+
+      renderAll();
+    }
+
+    function renderAll() {
+      document.getElementById('val-radius').textContent = `${state.radius}px`;
+      document.getElementById('val-cx').textContent = `${state.cx}px`;
+      document.getElementById('val-drop').textContent = `${state.dropY}px`;
+      document.getElementById('val-duration').textContent = `${state.duration.toFixed(1)}s`;
+
+      const endY = state.cy + state.dropY;
+      const midY = state.cy + state.dropY / 2;
+      const pillX = state.cx > 215 ? state.cx - 86 : state.cx + 10;
+
+      document.getElementById('drop-guide-line').setAttribute('x1', state.cx);
+      document.getElementById('drop-guide-line').setAttribute('y1', state.cy);
+      document.getElementById('drop-guide-line').setAttribute('x2', state.cx);
+      document.getElementById('drop-guide-line').setAttribute('y2', endY);
+
+      document.getElementById('drop-guide-top').setAttribute('cx', state.cx);
+      document.getElementById('drop-guide-top').setAttribute('cy', state.cy);
+      document.getElementById('drop-guide-bottom').setAttribute('cx', state.cx);
+      document.getElementById('drop-guide-bottom').setAttribute('cy', endY);
+
+      document.getElementById('drop-guide-pill').setAttribute('x', pillX);
+      document.getElementById('drop-guide-pill').setAttribute('y', midY - 9);
+      document.getElementById('drop-guide-label').setAttribute('x', pillX + 6);
+      document.getElementById('drop-guide-label').setAttribute('y', midY + 3);
+      document.getElementById('drop-guide-label').textContent = `+${state.dropY}px Y`;
+
+      const shadow = document.getElementById('floor-shadow');
+      if (shadow) {
+        shadow.setAttribute('cx', state.cx);
+        shadow.setAttribute('cy', Math.min(344, endY + state.radius + 10));
+        shadow.setAttribute('rx', Math.max(20, state.radius * 1.15));
+      }
+
+      renderActorSVG();
+      renderDynamicCSS();
+      renderCodePreview();
+    }
+
+    function renderActorSVG() {
+      const mount = document.getElementById('actor-mount');
+      const { shape, colorHex, cx, cy, radius } = state;
+
+      if (shape === 'ball') {
+        mount.innerHTML = `
+          <g id="bouncing-actor">
+            <circle cx="${cx}" cy="${cy}" r="${radius}" fill="${colorHex}" />
+            <circle cx="${cx - radius * 0.3}" cy="${cy - radius * 0.3}" r="${radius * 0.22}" fill="rgba(255,255,255,0.45)" />
+          </g>
+        `;
+      } else if (shape === 'smiley') {
+        const eyeOffsetX = radius * 0.35;
+        const eyeOffsetY = radius * 0.22;
+        const eyeR = Math.max(2.5, radius * 0.12);
+        const mouthR = radius * 0.48;
+        mount.innerHTML = `
+          <g id="bouncing-actor">
+            <circle cx="${cx}" cy="${cy}" r="${radius}" fill="${colorHex}" />
+            <circle cx="${cx - eyeOffsetX}" cy="${cy - eyeOffsetY}" r="${eyeR}" fill="#1e293b" />
+            <circle cx="${cx + eyeOffsetX}" cy="${cy - eyeOffsetY}" r="${eyeR}" fill="#1e293b" />
+            <path d="M ${cx - mouthR} ${cy + radius * 0.15} Q ${cx} ${cy + radius * 0.68} ${cx + mouthR} ${cy + radius * 0.15}"
+                  fill="none" stroke="#1e293b" stroke-width="${Math.max(2.5, radius * 0.1)}" stroke-linecap="round" />
+          </g>
+        `;
+      } else if (shape === 'star') {
+        const points = buildStarPoints(cx, cy, 5, radius * 1.15, radius * 0.52);
+        mount.innerHTML = `
+          <g id="bouncing-actor">
+            <polygon points="${points}" fill="${colorHex}" stroke="#1e293b" stroke-width="2" stroke-linejoin="round" />
+          </g>
+        `;
+      } else if (shape === 'rocket') {
+        const w = radius * 0.9;
+        const h = radius * 1.35;
+        mount.innerHTML = `
+          <g id="bouncing-actor">
+            <polygon points="${cx - w * 0.45},${cy + h * 0.65} ${cx},${cy + h * 1.18} ${cx + w * 0.45},${cy + h * 0.65}" fill="#f59e0b" />
+            <polygon points="${cx - w * 0.75},${cy + h * 0.15} ${cx - w * 1.25},${cy + h * 0.72} ${cx - w * 0.55},${cy + h * 0.65}" fill="#334155" />
+            <polygon points="${cx + w * 0.75},${cy + h * 0.15} ${cx + w * 1.25},${cy + h * 0.72} ${cx + w * 0.55},${cy + h * 0.65}" fill="#334155" />
+            <path d="M ${cx} ${cy - h} C ${cx + w} ${cy - h * 0.3} ${cx + w * 0.85} ${cy + h * 0.65} ${cx + w * 0.65} ${cy + h * 0.65} L ${cx - w * 0.65} ${cy + h * 0.65} C ${cx - w * 0.85} ${cy + h * 0.65} ${cx - w} ${cy - h * 0.3} ${cx} ${cy - h} Z" fill="${colorHex}" />
+            <circle cx="${cx}" cy="${cy - h * 0.08}" r="${radius * 0.32}" fill="#e0f2fe" stroke="#0f172a" stroke-width="2.5" />
+          </g>
+        `;
+      }
+    }
+
+    function buildStarPoints(cx, cy, spikes, outerR, innerR) {
+      let rot = (Math.PI / 2) * 3;
+      let step = Math.PI / spikes;
+      let pts = [];
+      for (let i = 0; i < spikes; i++) {
+        pts.push(`${(cx + Math.cos(rot) * outerR).toFixed(1)},${(cy + Math.sin(rot) * outerR).toFixed(1)}`);
+        rot += step;
+        pts.push(`${(cx + Math.cos(rot) * innerR).toFixed(1)},${(cy + Math.sin(rot) * innerR).toFixed(1)}`);
+        rot += step;
+      }
+      return pts.join(' ');
+    }
+
+    function buildKeyframesCSS() {
+      const { dropY, squash, spin } = state;
+
+      if (!squash && !spin) {
+        return `@keyframes bounce {
+  0%   { transform: translateY(0px); }
+  50%  { transform: translateY(${dropY}px); }
+  100% { transform: translateY(0px); }
+}`;
+      }
+
+      if (squash && !spin) {
+        const preImpact = Math.max(0, dropY - 6);
+        return `@keyframes bounce {
+  0%   { transform: translateY(0px) scale(1, 1); }
+  42%  { transform: translateY(${preImpact}px) scale(0.92, 1.12); }
+  50%  { transform: translateY(${dropY}px) scale(1.28, 0.72); }
+  58%  { transform: translateY(${preImpact}px) scale(0.94, 1.08); }
+  100% { transform: translateY(0px) scale(1, 1); }
+}`;
+      }
+
+      if (!squash && spin) {
+        return `@keyframes bounce {
+  0%   { transform: translateY(0px) rotate(0deg); }
+  50%  { transform: translateY(${dropY}px) rotate(180deg); }
+  100% { transform: translateY(0px) rotate(360deg); }
+}`;
+      }
+
+      return `@keyframes bounce {
+  0%   { transform: translateY(0px) rotate(0deg) scale(1, 1); }
+  50%  { transform: translateY(${dropY}px) rotate(180deg) scale(1.25, 0.75); }
+  100% { transform: translateY(0px) rotate(360deg) scale(1, 1); }
+}`;
+    }
+
+    function renderDynamicCSS() {
+      const styleTag = document.getElementById('dynamic-animation-style');
+      const keyframes = buildKeyframesCSS();
+      const playState = state.isPlaying ? 'running' : 'paused';
+      const effectiveDuration = state.slowMo ? (state.duration * 4).toFixed(2) : state.duration;
+
+      styleTag.textContent = `
+        ${keyframes}
+
+        #bouncing-actor {
+          transform-box: fill-box;
+          transform-origin: center;
+          animation: bounce ${effectiveDuration}s ${state.easing} infinite;
+          animation-play-state: ${playState};
+        }
+      `;
+    }
+
+    function renderCodePreview() {
+      const codeEl = document.getElementById('code-preview');
+      const keyframesText = buildKeyframesCSS()
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+
+      let actorSnippet = '';
+      if (state.shape === 'ball') {
+        actorSnippet = `&lt;<span class="text-rose-400">circle</span> <span class="text-amber-300">id</span>=<span class="text-emerald-300">"bouncing-actor"</span> <span class="text-amber-300">cx</span>=<span class="text-emerald-300">"${state.cx}"</span> <span class="text-amber-300">cy</span>=<span class="text-emerald-300">"${state.cy}"</span> <span class="text-amber-300">r</span>=<span class="text-emerald-300">"${state.radius}"</span> <span class="text-amber-300">fill</span>=<span class="text-emerald-300">"${state.colorName}"</span> /&gt;`;
+      } else {
+        actorSnippet = `&lt;<span class="text-rose-400">g</span> <span class="text-amber-300">id</span>=<span class="text-emerald-300">"bouncing-actor"</span> <span class="text-amber-300">fill</span>=<span class="text-emerald-300">"${state.colorName}"</span>&gt;\n    <span class="text-slate-400">&lt;!-- ${state.shape.toUpperCase()} vector paths at cx="${state.cx}", r="${state.radius}" --&gt;</span>\n  &lt;/<span class="text-rose-400">g</span>&gt;`;
+      }
+
+      codeEl.innerHTML = `<span class="text-slate-400">&lt;!-- 1. THE TIMELINE &amp; DIRECTOR (CSS) --&gt;</span>
+&lt;<span class="text-rose-400">style</span>&gt;
+<span class="text-sky-300">${keyframesText}</span>
+
+<span class="text-amber-300">#bouncing-actor</span> {
+  <span class="text-sky-200">animation</span>: bounce <span class="text-emerald-300 font-bold">${state.duration.toFixed(1)}s</span> <span class="text-purple-300">${state.easing}</span> <span class="text-emerald-300">infinite</span>;
+}
+&lt;/<span class="text-rose-400">style</span>&gt;
+
+<span class="text-slate-400">&lt;!-- 2. THE ACTOR (SVG SHAPE) --&gt;</span>
+&lt;<span class="text-rose-400">svg</span> <span class="text-amber-300">width</span>=<span class="text-emerald-300">"320"</span> <span class="text-amber-300">height</span>=<span class="text-emerald-300">"360"</span>&gt;
+  ${actorSnippet}
+&lt;/<span class="text-rose-400">svg</span>&gt;`;
+    }
+
+    function startTimelineLoop() {
+      function tick() {
+        const actor = document.getElementById('bouncing-actor');
+        const playhead = document.getElementById('timeline-playhead');
+        const scrubber = document.getElementById('timeline-scrubber');
+        const phaseLabel = document.getElementById('phase-label');
+        const shadow = document.getElementById('floor-shadow');
+
+        if (actor && actor.getAnimations) {
+          const anims = actor.getAnimations();
+          if (anims.length > 0 && anims[0].currentTime !== null) {
+            const effectiveDurationSec = state.slowMo ? state.duration * 4 : state.duration;
+            const durationMs = effectiveDurationSec * 1000;
+            const currentMs = anims[0].currentTime;
+            const progress = (currentMs % durationMs) / durationMs;
+            const pct = Math.round(progress * 100);
+
+            playhead.style.left = `${pct}%`;
+            if (scrubber && document.activeElement !== scrubber) {
+              scrubber.value = pct;
+            }
+
+            const proximity = 1 - Math.abs(progress - 0.5) * 2;
+            if (shadow) {
+              const baseRx = Math.max(18, state.radius * 1.15);
+              shadow.setAttribute('rx', (baseRx * (0.45 + 0.65 * proximity)).toFixed(1));
+              shadow.setAttribute('fill', `rgba(15, 23, 42, ${(0.05 + 0.22 * proximity).toFixed(2)})`);
+            }
+
+            if (pct < 12 || pct > 90) {
+              phaseLabel.textContent = `${pct}% — Top (Start/Loop)`;
+            } else if (pct >= 44 && pct <= 56) {
+              phaseLabel.textContent = `${pct}% — Bottom Bounce!`;
+            } else if (pct < 50) {
+              phaseLabel.textContent = `${pct}% — Falling Down...`;
+            } else {
+              phaseLabel.textContent = `${pct}% — Rising Up...`;
+            }
+
+            if (state.soundEnabled && state.isPlaying && activeLevel === 1) {
+              const currentCycle = Math.floor(currentMs / durationMs);
+              if (pct >= 48 && pct <= 55 && lastHalfCycle !== currentCycle) {
+                lastHalfCycle = currentCycle;
+                playBoingSound();
+              }
+            }
+          }
+        }
+        requestAnimationFrame(tick);
+      }
+      requestAnimationFrame(tick);
+    }
+
+    function scrubTimeline(pctValue) {
+      if (state.isPlaying) {
+        togglePlay();
+      }
+      const actor = document.getElementById('bouncing-actor');
+      if (actor && actor.getAnimations) {
+        const anims = actor.getAnimations();
+        if (anims.length > 0) {
+          const effectiveDurationSec = state.slowMo ? state.duration * 4 : state.duration;
+          anims[0].currentTime = (parseFloat(pctValue) / 100) * (effectiveDurationSec * 1000);
+        }
+      }
+    }
+
+    function toggleSlowMo() {
+      state.slowMo = !state.slowMo;
+      const btn = document.getElementById('btn-slowmo');
+      btn.className = state.slowMo
+        ? 'px-2.5 py-1.5 rounded-lg text-xs font-bold bg-amber-100 text-amber-800 border border-amber-300 transition'
+        : 'px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-200 text-slate-700 hover:bg-slate-300 transition';
+      renderDynamicCSS();
+    }
+
+    function setShape(newShape) {
+      state.shape = newShape;
+      document.querySelectorAll('.shape-btn').forEach(btn => {
+        const isSelected = btn.getAttribute('data-shape') === newShape;
+        btn.className = isSelected
+          ? 'shape-btn py-2 rounded-xl text-xs font-bold border-2 border-indigo-600 bg-indigo-50 text-indigo-700 transition'
+          : 'shape-btn py-2 rounded-xl text-xs font-bold border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 transition';
+      });
+      renderAll();
+    }
+
+    function setColor(hex, name) {
+      state.colorHex = hex;
+      state.colorName = name;
+      renderAll();
+    }
+
+    function togglePlay() {
+      state.isPlaying = !state.isPlaying;
+      const btn = document.getElementById('btn-play');
+      btn.textContent = state.isPlaying ? '⏸ Pause' : '▶ Play';
+      btn.className = state.isPlaying
+        ? 'px-3 py-1.5 rounded-lg text-xs font-bold bg-indigo-600 text-white hover:bg-indigo-700 shadow-sm transition'
+        : 'px-3 py-1.5 rounded-lg text-xs font-bold bg-emerald-600 text-white hover:bg-emerald-700 shadow-sm transition';
+      renderDynamicCSS();
+    }
+
+    function toggleGrid() {
+      state.showGrid = !state.showGrid;
+      const gridLayer = document.getElementById('grid-layer');
+      const btn = document.getElementById('btn-grid');
+      gridLayer.style.display = state.showGrid ? 'block' : 'none';
+      btn.textContent = state.showGrid ? '# Grid: ON' : '# Grid: OFF';
+      btn.className = state.showGrid
+        ? 'px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-indigo-100 text-indigo-700 hover:bg-indigo-200 transition'
+        : 'px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-200 text-slate-600 hover:bg-slate-300 transition';
+    }
+
+    function toggleSound() {
+      state.soundEnabled = !state.soundEnabled;
+      const btn = document.getElementById('btn-sound');
+      if (state.soundEnabled && !audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      }
+      if (state.soundEnabled && audioCtx.state === 'suspended') {
+        audioCtx.resume();
+      }
+      btn.textContent = state.soundEnabled ? '🔊 Boing FX' : '🔇 Boing FX';
+      btn.className = state.soundEnabled
+        ? 'px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-amber-100 text-amber-800 hover:bg-amber-200 transition'
+        : 'px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-200 text-slate-700 hover:bg-slate-300 transition';
+    }
+
+    function playBoingSound() {
+      if (!audioCtx) return;
+      try {
+        const now = audioCtx.currentTime;
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(140, now);
+        osc.frequency.exponentialRampToValueAtTime(340, now + 0.14);
+        gain.gain.setValueAtTime(0.16, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.18);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start(now);
+        osc.stop(now + 0.19);
+      } catch (e) {}
+    }
+
+    function playShutterSound() {
+      try {
+        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        if (audioCtx.state === 'suspended') audioCtx.resume();
+        const now = audioCtx.currentTime;
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(900, now);
+        osc.frequency.exponentialRampToValueAtTime(220, now + 0.06);
+        gain.gain.setValueAtTime(0.2, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.07);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start(now);
+        osc.stop(now + 0.08);
+      } catch (e) {}
+    }
+
+    function playPowerZapSound() {
+      if (!l3State.soundEnabled) return;
+      try {
+        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        if (audioCtx.state === 'suspended') audioCtx.resume();
+        const now = audioCtx.currentTime;
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(520, now);
+        osc.frequency.exponentialRampToValueAtTime(140, now + 0.12);
+        gain.gain.setValueAtTime(0.07, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.13);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start(now);
+        osc.stop(now + 0.14);
+      } catch (e) {}
+    }
+
+    function applyPreset(name) {
+      if (name === 'classic') {
+        state.shape = 'ball';
+        state.colorHex = '#ff6347';
+        state.colorName = 'tomato';
+        state.radius = 36;
+        state.cx = 160;
+        state.dropY = 210;
+        state.duration = 1.4;
+        state.easing = 'ease-in-out';
+        state.squash = false;
+        state.spin = false;
+      } else if (name === 'rubber') {
+        state.shape = 'smiley';
+        state.colorHex = '#f59e0b';
+        state.colorName = 'orange';
+        state.radius = 40;
+        state.cx = 160;
+        state.dropY = 225;
+        state.duration = 1.1;
+        state.easing = 'cubic-bezier(0.55, 0.055, 0.675, 0.19)';
+        state.squash = true;
+        state.spin = false;
+      } else if (name === 'rocket') {
+        state.shape = 'rocket';
+        state.colorHex = '#1e90ff';
+        state.colorName = 'dodgerblue';
+        state.radius = 34;
+        state.cx = 160;
+        state.dropY = 215;
+        state.duration = 1.6;
+        state.easing = 'cubic-bezier(0.68, -0.55, 0.265, 1.55)';
+        state.squash = false;
+        state.spin = true;
+      }
+
+      state.slowMo = false;
+      const slowBtn = document.getElementById('btn-slowmo');
+      if (slowBtn) {
+        slowBtn.className = 'px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-200 text-slate-700 hover:bg-slate-300 transition';
+      }
+
+      document.getElementById('input-radius').value = state.radius;
+      document.getElementById('input-cx').value = state.cx;
+      document.getElementById('input-drop').value = state.dropY;
+      document.getElementById('input-duration').value = state.duration;
+      document.getElementById('input-easing').value = state.easing;
+      document.getElementById('input-squash').checked = state.squash;
+      document.getElementById('input-spin').checked = state.spin;
+
+      setShape(state.shape);
+    }
+
+    // =========================================================================
+    // 2. LEVEL 2 ENGINE: DIGITAL FLIPBOOK (WEBCAM SNAPSHOT + 60 FPS CANVAS)
+    // =========================================================================
+    const faceSnapshotCanvas = document.createElement('canvas');
+    faceSnapshotCanvas.width = 200;
+    faceSnapshotCanvas.height = 200;
+    const faceSnapshotCtx = faceSnapshotCanvas.getContext('2d');
+
+    const faceSnapshotCanvasB = document.createElement('canvas');
+    faceSnapshotCanvasB.width = 200;
+    faceSnapshotCanvasB.height = 200;
+    const faceSnapshotCtxB = faceSnapshotCanvasB.getContext('2d');
+
+    const l2State = {
+      x: 170,
+      y: 160,
+      vx: 3.5,
+      vy: 2.8,
+      gravity: 0,
+      radius: 44,
+      angle: 0,
+      frameCount: 0,
+      cornerHits: 0,
+      onionSkin: false,
+      spin: false,
+      particlesEnabled: true,
+      particles: [],
+      squishTimer: 0,
+      squishAxis: 'y',
+      hasFrameB: false,
+      orbitMode: false,
+      orbitTick: 0,
+      frameStyle: 'none',
+      isPlaying: true,
+      showVectors: true,
+      soundEnabled: false,
+      isDragging: false,
+      dragLastX: 0,
+      dragLastY: 0,
+      hasCustomPhoto: false
+    };
+
+    function initLevel2Flipbook() {
+      generateHeroAvatar();
+      setupL2CanvasInteractions();
+      window.addEventListener('resize', () => {
+        if (activeLevel === 2) resizeL2Canvas();
+        if (activeLevel === 3) resizeL3Canvas();
+      });
+      requestAnimationFrame(l2FlipbookLoop);
+    }
+
+    function resizeL2Canvas() {
+      const wrapper = document.getElementById('l2-canvas-wrapper');
+      const canvas = document.getElementById('flipbook-canvas');
+      if (!wrapper || !canvas) return;
+      const rect = wrapper.getBoundingClientRect();
+      if (rect.width > 0 && rect.height > 0) {
+        canvas.width = Math.round(rect.width);
+        canvas.height = Math.round(rect.height);
+        document.getElementById('l2-stage-size').textContent = `${canvas.width} × ${canvas.height} px`;
+        l2State.x = Math.min(Math.max(l2State.radius, l2State.x), canvas.width - l2State.radius);
+        l2State.y = Math.min(Math.max(l2State.radius, l2State.y), canvas.height - l2State.radius);
+      }
+    }
+
+    async function startWebcam() {
+      const video = document.getElementById('webcam-video');
+      const guide = document.getElementById('webcam-guide');
+      const placeholder = document.getElementById('webcam-placeholder');
+      const statusText = document.getElementById('webcam-status-text');
+      const snapBtn = document.getElementById('btn-snap-photo');
+      const startBtn = document.getElementById('btn-start-cam');
+
+      try {
+        statusText.textContent = 'Requesting camera permission...';
+        if (!sharedWebcamStream) {
+          sharedWebcamStream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
+            audio: false
+          });
+        }
+        video.srcObject = sharedWebcamStream;
+        await video.play();
+
+        video.classList.remove('hidden');
+        guide.classList.remove('hidden');
+        placeholder.classList.add('hidden');
+        snapBtn.disabled = false;
+        const snapBtnB = document.getElementById('btn-snap-frame-b');
+        if (snapBtnB) snapBtnB.disabled = false;
+        startBtn.textContent = '✅ Camera On';
+        startBtn.className = 'py-2 px-2.5 rounded-xl text-xs font-bold bg-slate-700 text-white transition flex items-center justify-center gap-1';
+      } catch (err) {
+        console.warn('Webcam error:', err);
+        statusText.innerHTML = 'Camera blocked or unavailable here — use <strong class="text-amber-300">Upload Photo</strong> or <strong class="text-amber-300">Hero Avatar</strong> below!';
+      }
+    }
+
+    function snapWebcamPhoto(slot = 'A') {
+      const video = document.getElementById('webcam-video');
+      if (!video || video.readyState < 2) return;
+
+      const flash = document.getElementById('shutter-flash');
+      flash.classList.remove('hidden');
+      setTimeout(() => flash.classList.add('hidden'), 140);
+      playShutterSound();
+
+      const targetCtx = slot === 'B' ? faceSnapshotCtxB : faceSnapshotCtx;
+      const vw = video.videoWidth;
+      const vh = video.videoHeight;
+      const cropSize = Math.min(vw, vh);
+      const sx = (vw - cropSize) / 2;
+      const sy = (vh - cropSize) / 2;
+
+      targetCtx.save();
+      targetCtx.clearRect(0, 0, 200, 200);
+
+      targetCtx.beginPath();
+      targetCtx.arc(100, 100, 96, 0, Math.PI * 2);
+      targetCtx.closePath();
+      targetCtx.clip();
+
+      targetCtx.translate(200, 0);
+      targetCtx.scale(-1, 1);
+      targetCtx.drawImage(video, sx, sy, cropSize, cropSize, 0, 0, 200, 200);
+      targetCtx.restore();
+
+      l2State.hasCustomPhoto = true;
+
+      if (slot === 'B') {
+        l2State.hasFrameB = true;
+        document.getElementById('frame-b-badge').classList.remove('hidden');
+        document.getElementById('btn-clear-frame-b').classList.remove('hidden');
+        renderL2CodePreview();
+      }
+    }
+
+    function clearFrameB() {
+      l2State.hasFrameB = false;
+      document.getElementById('frame-b-badge').classList.add('hidden');
+      document.getElementById('btn-clear-frame-b').classList.add('hidden');
+      renderL2CodePreview();
+    }
+
+    function handlePhotoUpload(event) {
+      const file = event.target.files?.[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        const img = new Image();
+        img.onload = function() {
+          const minSide = Math.min(img.width, img.height);
+          const sx = (img.width - minSide) / 2;
+          const sy = (img.height - minSide) / 2;
+
+          faceSnapshotCtx.save();
+          faceSnapshotCtx.clearRect(0, 0, 200, 200);
+          faceSnapshotCtx.beginPath();
+          faceSnapshotCtx.arc(100, 100, 96, 0, Math.PI * 2);
+          faceSnapshotCtx.closePath();
+          faceSnapshotCtx.clip();
+          faceSnapshotCtx.drawImage(img, sx, sy, minSide, minSide, 0, 0, 200, 200);
+          faceSnapshotCtx.restore();
+
+          l2State.hasCustomPhoto = true;
+          clearFrameB();
+          showToast('Photo loaded onto the Flipbook Canvas!');
+        };
+        img.src = e.target.result;
+      };
+      reader.readAsDataURL(file);
+    }
+
+    function generateHeroAvatar() {
+      const ctx = faceSnapshotCtx;
+      ctx.save();
+      ctx.clearRect(0, 0, 200, 200);
+
+      ctx.beginPath();
+      ctx.arc(100, 100, 96, 0, Math.PI * 2);
+      ctx.closePath();
+      ctx.clip();
+
+      const grad = ctx.createLinearGradient(0, 0, 200, 200);
+      grad.addColorStop(0, '#4f46e5');
+      grad.addColorStop(1, '#0ea5e9');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, 200, 200);
+
+      ctx.fillStyle = '#fde68a';
+      ctx.beginPath();
+      ctx.arc(100, 112, 56, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = '#1e293b';
+      ctx.beginPath();
+      ctx.arc(100, 82, 56, Math.PI, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = '#ef4444';
+      ctx.fillRect(42, 82, 116, 26);
+
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.ellipse(76, 95, 13, 8, -0.1, 0, Math.PI * 2);
+      ctx.ellipse(124, 95, 13, 8, 0.1, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.strokeStyle = '#1e293b';
+      ctx.lineWidth = 5;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.arc(100, 122, 24, 0.15 * Math.PI, 0.85 * Math.PI);
+      ctx.stroke();
+
+      ctx.restore();
+      l2State.hasCustomPhoto = false;
+      clearFrameB();
+    }
+
+    function advanceL2Step(canvas, forceStep = false) {
+      const ctx = canvas.getContext('2d');
+      const W = canvas.width;
+      const H = canvas.height;
+
+      if (l2State.onionSkin) {
+        ctx.fillStyle = 'rgba(2, 6, 23, 0.18)';
+        ctx.fillRect(0, 0, W, H);
+      } else {
+        ctx.clearRect(0, 0, W, H);
+        drawL2Grid(ctx, W, H);
+      }
+
+      if ((l2State.isPlaying || forceStep) && !l2State.isDragging) {
+        l2State.frameCount++;
+        if (l2State.squishTimer > 0) l2State.squishTimer--;
+
+        if (l2State.orbitMode) {
+          l2State.orbitTick += 0.04;
+          const ampX = (W / 2) - l2State.radius - 16;
+          const ampY = (H / 2) - l2State.radius - 24;
+          l2State.x = W / 2 + Math.cos(l2State.orbitTick) * ampX;
+          l2State.y = H / 2 + Math.sin(l2State.orbitTick * 2) * (ampY * 0.65);
+        } else {
+          l2State.vy += l2State.gravity;
+          l2State.x += l2State.vx;
+          l2State.y += l2State.vy;
+
+          let hitX = false;
+          let hitY = false;
+
+          if (l2State.x + l2State.radius >= W) {
+            l2State.x = W - l2State.radius;
+            l2State.vx = -Math.abs(l2State.vx);
+            hitX = true;
+            triggerWallImpact(W, l2State.y, 'x');
+          } else if (l2State.x - l2State.radius <= 0) {
+            l2State.x = l2State.radius;
+            l2State.vx = Math.abs(l2State.vx);
+            hitX = true;
+            triggerWallImpact(0, l2State.y, 'x');
+          }
+
+          if (l2State.y + l2State.radius >= H) {
+            l2State.y = H - l2State.radius;
+            l2State.vy = l2State.gravity > 0
+              ? -Math.max(6, Math.abs(l2State.vy) * 0.92)
+              : -Math.abs(l2State.vy);
+            hitY = true;
+            triggerWallImpact(l2State.x, H, 'y');
+          } else if (l2State.y - l2State.radius <= 0) {
+            l2State.y = l2State.radius;
+            l2State.vy = Math.abs(l2State.vy);
+            hitY = true;
+            triggerWallImpact(l2State.x, 0, 'y');
+          }
+
+          if (hitX && hitY) {
+            l2State.cornerHits++;
+            document.getElementById('l2-corner-hits').textContent = l2State.cornerHits;
+            spawnL2Sparks(l2State.x, l2State.y, 18);
+          }
+
+          if ((hitX || hitY) && l2State.soundEnabled) {
+            playBoingSound();
+          }
+        }
+
+        if (l2State.spin) {
+          l2State.angle += 0.06;
+        } else {
+          l2State.angle = 0;
+        }
+      }
+
+      updateAndDrawL2Sparks(ctx);
+      drawL2Actor(ctx);
+
+      if (l2State.showVectors && !l2State.onionSkin) {
+        drawL2MathOverlay(ctx);
+      }
+
+      if (l2State.frameCount % 3 === 0 || !l2State.isPlaying || forceStep) {
+        document.getElementById('l2-frame-counter').textContent = `Page #${l2State.frameCount}`;
+        document.getElementById('l2-readout-x').textContent = Math.round(l2State.x);
+        document.getElementById('l2-readout-y').textContent = Math.round(l2State.y);
+      }
+    }
+
+    function triggerWallImpact(hitX, hitY, axis) {
+      l2State.squishTimer = 7;
+      l2State.squishAxis = axis;
+      if (l2State.particlesEnabled) {
+        spawnL2Sparks(hitX, hitY, 8);
+      }
+    }
+
+    function spawnL2Sparks(px, py, count) {
+      const palette = ['#38bdf8', '#fbbf24', '#f472b6', '#34d399', '#a78bfa'];
+      for (let i = 0; i < count; i++) {
+        const angle = Math.random() * Math.PI * 2;
+        const speed = 1.5 + Math.random() * 4.5;
+        l2State.particles.push({
+          x: px,
+          y: py,
+          vx: Math.cos(angle) * speed,
+          vy: Math.sin(angle) * speed,
+          life: 1.0,
+          color: palette[i % palette.length],
+          size: 2.5 + Math.random() * 2.5
+        });
+      }
+    }
+
+    function updateAndDrawL2Sparks(ctx) {
+      if (l2State.particles.length === 0) return;
+      for (let i = l2State.particles.length - 1; i >= 0; i--) {
+        const p = l2State.particles[i];
+        p.x += p.vx;
+        p.y += p.vy;
+        p.life -= 0.045;
+        if (p.life <= 0) {
+          l2State.particles.splice(i, 1);
+          continue;
+        }
+        ctx.globalAlpha = Math.max(0, p.life);
+        ctx.fillStyle = p.color;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.size * p.life, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1.0;
+    }
+
+    function l2FlipbookLoop() {
+      if (activeLevel === 2) {
+        const canvas = document.getElementById('flipbook-canvas');
+        if (canvas && canvas.width > 0) {
+          advanceL2Step(canvas, false);
+        }
+      }
+      requestAnimationFrame(l2FlipbookLoop);
+    }
+
+    function stepL2SingleFrame() {
+      if (l2State.isPlaying) {
+        toggleL2Play();
+      }
+      const canvas = document.getElementById('flipbook-canvas');
+      if (canvas && canvas.width > 0) {
+        advanceL2Step(canvas, true);
+      }
+    }
+
+    function drawL2Grid(ctx, W, H) {
+      ctx.strokeStyle = 'rgba(99, 102, 241, 0.14)';
+      ctx.lineWidth = 1;
+      const step = 40;
+      for (let gx = 0; gx < W; gx += step) {
+        ctx.beginPath();
+        ctx.moveTo(gx, 0);
+        ctx.lineTo(gx, H);
+        ctx.stroke();
+      }
+      for (let gy = 0; gy < H; gy += step) {
+        ctx.beginPath();
+        ctx.moveTo(0, gy);
+        ctx.lineTo(W, gy);
+        ctx.stroke();
+      }
+    }
+
+    function drawL2Actor(ctx) {
+      const { x, y, radius, angle, frameStyle, squishTimer, squishAxis, hasFrameB, frameCount } = l2State;
+
+      const showFrameB = hasFrameB && (Math.floor(frameCount / 18) % 2 === 1);
+      const activeFaceCanvas = showFrameB ? faceSnapshotCanvasB : faceSnapshotCanvas;
+
+      let scaleX = 1;
+      let scaleY = 1;
+      if (squishTimer > 0) {
+        const squishAmount = (squishTimer / 7) * 0.22;
+        if (squishAxis === 'x') {
+          scaleX = 1 - squishAmount;
+          scaleY = 1 + squishAmount;
+        } else {
+          scaleX = 1 + squishAmount;
+          scaleY = 1 - squishAmount;
+        }
+      }
+
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(angle);
+      ctx.scale(scaleX, scaleY);
+
+      ctx.drawImage(activeFaceCanvas, -radius, -radius, radius * 2, radius * 2);
+
+      if (frameStyle === 'none') {
+        ctx.beginPath();
+        ctx.arc(0, 0, radius, 0, Math.PI * 2);
+        ctx.lineWidth = 3.5;
+        ctx.strokeStyle = showFrameB ? '#c084fc' : '#38bdf8';
+        ctx.stroke();
+      } else if (frameStyle === 'astronaut') {
+        ctx.beginPath();
+        ctx.arc(0, 0, radius + 5, 0, Math.PI * 2);
+        ctx.lineWidth = 7;
+        ctx.strokeStyle = '#f8fafc';
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.arc(0, 0, radius + 9, 0, Math.PI * 2);
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = '#38bdf8';
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.moveTo(0, -(radius + 9));
+        ctx.lineTo(0, -(radius + 22));
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = '#cbd5e1';
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.arc(0, -(radius + 24), 4.5, 0, Math.PI * 2);
+        ctx.fillStyle = '#ef4444';
+        ctx.fill();
+      } else if (frameStyle === 'hero') {
+        ctx.beginPath();
+        ctx.arc(0, 0, radius + 3, 0, Math.PI * 2);
+        ctx.lineWidth = 5;
+        ctx.strokeStyle = '#facc15';
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.arc(0, 0, radius + 8, 0, Math.PI * 2);
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = '#ef4444';
+        ctx.stroke();
+      } else if (frameStyle === 'crown') {
+        ctx.beginPath();
+        ctx.arc(0, 0, radius, 0, Math.PI * 2);
+        ctx.lineWidth = 4;
+        ctx.strokeStyle = '#fbbf24';
+        ctx.stroke();
+
+        const cw = radius * 0.85;
+        const baseY = -(radius - 2);
+        ctx.fillStyle = '#facc15';
+        ctx.strokeStyle = '#b45309';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(-cw, baseY);
+        ctx.lineTo(-cw * 1.1, baseY - 22);
+        ctx.lineTo(-cw * 0.45, baseY - 10);
+        ctx.lineTo(0, baseY - 26);
+        ctx.lineTo(cw * 0.45, baseY - 10);
+        ctx.lineTo(cw * 1.1, baseY - 22);
+        ctx.lineTo(cw, baseY);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+      }
+
+      ctx.restore();
+    }
+
+    function drawL2MathOverlay(ctx) {
+      const { x, y, vx, vy, radius } = l2State;
+
+      ctx.save();
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(x + vx * 10, y + vy * 10);
+      ctx.strokeStyle = '#34d399';
+      ctx.lineWidth = 2.5;
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.arc(x, y, 4, 0, Math.PI * 2);
+      ctx.fillStyle = '#f43f5e';
+      ctx.fill();
+
+      const label = `(${Math.round(x)}, ${Math.round(y)})`;
+      ctx.font = 'bold 11px "JetBrains Mono", monospace';
+      const labelY = y - radius - 14 < 18 ? y + radius + 20 : y - radius - 12;
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.82)';
+      ctx.fillRect(x - 38, labelY - 11, 76, 16);
+      ctx.fillStyle = '#a5f3fc';
+      ctx.textAlign = 'center';
+      ctx.fillText(label, x, labelY);
+      ctx.restore();
+    }
+
+    function setupL2CanvasInteractions() {
+      const canvas = document.getElementById('flipbook-canvas');
+      if (!canvas) return;
+
+      function getCanvasCoords(e) {
+        const rect = canvas.getBoundingClientRect();
+        const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+        const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+        return {
+          x: clientX - rect.left,
+          y: clientY - rect.top
+        };
+      }
+
+      function onDown(e) {
+        const pos = getCanvasCoords(e);
+        l2State.isDragging = true;
+        l2State.orbitMode = false;
+        l2State.x = pos.x;
+        l2State.y = pos.y;
+        l2State.dragLastX = pos.x;
+        l2State.dragLastY = pos.y;
+      }
+
+      function onMove(e) {
+        if (!l2State.isDragging) return;
+        e.preventDefault();
+        const pos = getCanvasCoords(e);
+        l2State.vx = Math.max(-14, Math.min(14, (pos.x - l2State.dragLastX) * 0.65));
+        l2State.vy = Math.max(-14, Math.min(14, (pos.y - l2State.dragLastY) * 0.65));
+        l2State.x = pos.x;
+        l2State.y = pos.y;
+        l2State.dragLastX = pos.x;
+        l2State.dragLastY = pos.y;
+      }
+
+      function onUp() {
+        if (!l2State.isDragging) return;
+        l2State.isDragging = false;
+        if (Math.abs(l2State.vx) < 0.3 && Math.abs(l2State.vy) < 0.3) {
+          l2State.vx = 3.5;
+          l2State.vy = 2.8;
+        }
+        renderL2CodePreview();
+      }
+
+      canvas.addEventListener('mousedown', onDown);
+      window.addEventListener('mousemove', onMove);
+      window.addEventListener('mouseup', onUp);
+
+      canvas.addEventListener('touchstart', onDown, { passive: false });
+      canvas.addEventListener('touchmove', onMove, { passive: false });
+      window.addEventListener('touchend', onUp);
+    }
+
+    function updateL2Controls() {
+      const speedX = parseFloat(document.getElementById('l2-input-vx').value);
+      const speedY = parseFloat(document.getElementById('l2-input-vy').value);
+      l2State.vx = (l2State.vx < 0 ? -1 : 1) * speedX;
+      l2State.vy = (l2State.vy < 0 ? -1 : 1) * speedY;
+      l2State.gravity = parseFloat(document.getElementById('l2-input-gravity').value);
+      l2State.radius = parseInt(document.getElementById('l2-input-size').value, 10);
+      l2State.onionSkin = document.getElementById('l2-input-onion').checked;
+      l2State.spin = document.getElementById('l2-input-spin').checked;
+      l2State.particlesEnabled = document.getElementById('l2-input-particles').checked;
+      l2State.orbitMode = false;
+
+      document.getElementById('l2-val-vx').textContent = `${speedX.toFixed(1)} px/frame`;
+      document.getElementById('l2-val-vy').textContent = `${speedY.toFixed(1)} px/frame`;
+      document.getElementById('l2-val-gravity').textContent = l2State.gravity === 0
+        ? '0.00 (Zero-G)'
+        : `${l2State.gravity.toFixed(2)} px/frame²`;
+      document.getElementById('l2-val-size').textContent = `${l2State.radius}px`;
+
+      renderL2CodePreview();
+    }
+
+    function setL2Frame(styleName) {
+      l2State.frameStyle = styleName;
+      document.querySelectorAll('.l2-frame-btn').forEach(btn => {
+        const active = btn.getAttribute('data-frame') === styleName;
+        btn.className = active
+          ? 'l2-frame-btn py-1.5 rounded-lg text-[11px] font-bold border-2 border-indigo-600 bg-indigo-50 text-indigo-700 transition'
+          : 'l2-frame-btn py-1.5 rounded-lg text-[11px] font-bold border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 transition';
+      });
+      renderL2CodePreview();
+    }
+
+    function toggleL2Play() {
+      l2State.isPlaying = !l2State.isPlaying;
+      const btn = document.getElementById('btn-l2-play');
+      btn.textContent = l2State.isPlaying ? '⏸ Pause' : '▶ Play';
+      btn.className = l2State.isPlaying
+        ? 'px-3 py-1.5 rounded-lg text-xs font-bold bg-indigo-600 text-white hover:bg-indigo-700 shadow-sm transition'
+        : 'px-3 py-1.5 rounded-lg text-xs font-bold bg-emerald-600 text-white hover:bg-emerald-700 shadow-sm transition';
+    }
+
+    function toggleL2Vectors() {
+      l2State.showVectors = !l2State.showVectors;
+      const btn = document.getElementById('btn-l2-vectors');
+      btn.textContent = l2State.showVectors ? '📐 Math: ON' : '📐 Math: OFF';
+      btn.className = l2State.showVectors
+        ? 'px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-indigo-100 text-indigo-700 hover:bg-indigo-200 transition'
+        : 'px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-200 text-slate-600 hover:bg-slate-300 transition';
+    }
+
+    function toggleL2Sound() {
+      l2State.soundEnabled = !l2State.soundEnabled;
+      if (l2State.soundEnabled && !audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      }
+      if (l2State.soundEnabled && audioCtx.state === 'suspended') {
+        audioCtx.resume();
+      }
+      const btn = document.getElementById('btn-l2-sound');
+      btn.textContent = l2State.soundEnabled ? '🔊 Wall FX' : '🔇 Wall FX';
+      btn.className = l2State.soundEnabled
+        ? 'px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-amber-100 text-amber-800 hover:bg-amber-200 transition'
+        : 'px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-200 text-slate-700 hover:bg-slate-300 transition';
+    }
+
+    function applyL2Preset(preset) {
+      if (preset === 'dvd') {
+        l2State.orbitMode = false;
+        l2State.gravity = 0;
+        l2State.vx = 3.5;
+        l2State.vy = 2.8;
+        l2State.spin = false;
+        l2State.onionSkin = false;
+        setL2Frame('none');
+      } else if (preset === 'gravity') {
+        l2State.orbitMode = false;
+        l2State.gravity = 0.35;
+        l2State.vx = 3.0;
+        l2State.vy = 0;
+        l2State.spin = false;
+        l2State.onionSkin = false;
+        setL2Frame('hero');
+      } else if (preset === 'orbit') {
+        l2State.orbitMode = true;
+        l2State.gravity = 0;
+        l2State.spin = true;
+        l2State.onionSkin = true;
+        setL2Frame('astronaut');
+      }
+
+      document.getElementById('l2-input-vx').value = Math.abs(l2State.vx);
+      document.getElementById('l2-input-vy').value = Math.abs(l2State.vy);
+      document.getElementById('l2-input-gravity').value = l2State.gravity;
+      document.getElementById('l2-input-spin').checked = l2State.spin;
+      document.getElementById('l2-input-onion').checked = l2State.onionSkin;
+      document.getElementById('l2-val-vx').textContent = `${Math.abs(l2State.vx).toFixed(1)} px/frame`;
+      document.getElementById('l2-val-vy').textContent = `${Math.abs(l2State.vy).toFixed(1)} px/frame`;
+      document.getElementById('l2-val-gravity').textContent = l2State.gravity === 0 ? '0.00 (Zero-G)' : `${l2State.gravity.toFixed(2)} px/frame²`;
+      renderL2CodePreview();
+    }
+
+    function renderL2CodePreview() {
+      const el = document.getElementById('l2-code-preview');
+      if (!el) return;
+      const vxVal = l2State.vx.toFixed(1);
+      const vyVal = l2State.vy.toFixed(1);
+      const gravLine = l2State.gravity > 0
+        ? `\n  vy += <span class="text-amber-300">${l2State.gravity.toFixed(2)}</span>; <span class="text-slate-400">// Gravity pulls downward!</span>`
+        : '';
+      const clearCode = l2State.onionSkin
+        ? `<span class="text-slate-400">// Onion-skin trail (fades old pages instead of full erase)</span>\n  ctx.fillStyle = <span class="text-emerald-300">'rgba(2, 6, 23, 0.18)'</span>;\n  ctx.fillRect(0, 0, canvas.width, canvas.height);`
+        : `<span class="text-slate-400">// 1. Erase previous flipbook page</span>\n  ctx.clearRect(0, 0, canvas.width, canvas.height);`;
+      const drawFaceLine = l2State.hasFrameB
+        ? `<span class="text-sky-300">const</span> photo = (Math.floor(page / 18) % 2 === 0) ? faceA : faceB;\n  ctx.drawImage(photo, x, y, <span class="text-emerald-300">${l2State.radius * 2}</span>, <span class="text-emerald-300">${l2State.radius * 2}</span>);`
+        : `ctx.drawImage(facePhoto, x, y, <span class="text-emerald-300">${l2State.radius * 2}</span>, <span class="text-emerald-300">${l2State.radius * 2}</span>);`;
+
+      const jsCode = `<span class="text-sky-300">let</span> x = 170, y = 160, page = 0;
+<span class="text-sky-300">let</span> vx = <span class="text-rose-300 font-bold">${vxVal}</span>, vy = <span class="text-rose-300 font-bold">${vyVal}</span>;
+
+<span class="text-sky-300">function</span> <span class="text-amber-300">flipbookLoop</span>() {
+  page++;
+  ${clearCode}
+
+  <span class="text-slate-400">// 2. Move coordinates for the next frame</span>${gravLine}
+  x += vx;
+  y += vy;
+
+  <span class="text-slate-400">// 3. Bounce off canvas walls</span>
+  <span class="text-purple-300">if</span> (x &gt; canvas.width || x &lt; 0) vx = -vx;
+  <span class="text-purple-300">if</span> (y &gt; canvas.height || y &lt; 0) vy = -vy;
+
+  <span class="text-slate-400">// 4. Draw his webcam snapshot at (x, y)</span>
+  ${drawFaceLine}
+
+  <span class="text-slate-400">// 5. Ask browser for the next frame (60 FPS!)</span>
+  <span class="text-sky-300">requestAnimationFrame</span>(flipbookLoop);
+}
+flipbookLoop();`;
+
+      el.innerHTML = jsCode;
+    }
+
+    // =========================================================================
+    // 3. LEVEL 3 ENGINE: REAL-TIME AI MOTION CAPTURE & DIGITAL PUPPET RIG
+    // =========================================================================
+    const l3State = {
+      inputMode: 'dance',       // 'dance' | 'mouse' | 'webcam'
+      trackerEngine: 'demo',    // 'demo' | 'mouse' | 'mediapipe' | 'motion-fallback'
+      skin: 'robot',            // 'robot' | 'hero' | 'wizard' | 'xray'
+      backdropMode: 'dim',      // 'dim' | 'full' | 'void'
+      scale: 1.0,
+      showSkeleton: true,
+      powerFx: true,
+      useL2Face: false,
+      soundEnabled: false,
+      tick: 0,
+      mouseX: 0.5,
+      mouseY: 0.35,
+      particles: [],
+      lastZapFrame: -999,
+      // Normalized skeletal joints (0.0 to 1.0 across canvas)
+      joints: {
+        nose:          { x: 0.50, y: 0.25 },
+        leftEye:       { x: 0.47, y: 0.23 },
+        rightEye:      { x: 0.53, y: 0.23 },
+        leftShoulder:  { x: 0.40, y: 0.40 },
+        rightShoulder: { x: 0.60, y: 0.40 },
+        leftElbow:     { x: 0.33, y: 0.53 },
+        rightElbow:    { x: 0.67, y: 0.53 },
+        leftWrist:     { x: 0.30, y: 0.64 },
+        rightWrist:    { x: 0.70, y: 0.64 },
+        leftHip:       { x: 0.44, y: 0.66 },
+        rightHip:      { x: 0.56, y: 0.66 },
+        leftKnee:      { x: 0.43, y: 0.82 },
+        rightKnee:     { x: 0.57, y: 0.82 },
+        leftAnkle:     { x: 0.42, y: 0.96 },
+        rightAnkle:    { x: 0.58, y: 0.96 }
+      }
+    };
+
+    let mpPoseInstance = null;
+    let mpSendingFrame = false;
+
+    // Offscreen low-res canvas for built-in optical motion fallback if CDN is blocked
+    const motionDiffCanvas = document.createElement('canvas');
+    motionDiffCanvas.width = 64;
+    motionDiffCanvas.height = 48;
+    const motionDiffCtx = motionDiffCanvas.getContext('2d', { willReadFrequently: true });
+    let prevMotionFrame = null;
+
+    function initLevel3Mocap() {
+      setupL3CanvasInteractions();
+      renderL3CodePreview();
+      requestAnimationFrame(l3MocapLoop);
+    }
+
+    function resizeL3Canvas() {
+      const wrapper = document.getElementById('l3-canvas-wrapper');
+      const canvas = document.getElementById('mocap-canvas');
+      if (!wrapper || !canvas) return;
+      const rect = wrapper.getBoundingClientRect();
+      if (rect.width > 0 && rect.height > 0) {
+        canvas.width = Math.round(rect.width);
+        canvas.height = Math.round(rect.height);
+      }
+    }
+
+    function setupL3CanvasInteractions() {
+      const canvas = document.getElementById('mocap-canvas');
+      if (!canvas) return;
+
+      function updatePointer(e) {
+        const rect = canvas.getBoundingClientRect();
+        const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+        const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+        l3State.mouseX = Math.max(0.12, Math.min(0.88, (clientX - rect.left) / rect.width));
+        l3State.mouseY = Math.max(0.12, Math.min(0.85, (clientY - rect.top) / rect.height));
+      }
+
+      canvas.addEventListener('mousemove', (e) => {
+        if (l3State.inputMode === 'mouse') updatePointer(e);
+      });
+      canvas.addEventListener('mousedown', (e) => {
+        if (l3State.inputMode !== 'webcam') {
+          setL3InputMode('mouse');
+          updatePointer(e);
+        }
+      });
+      canvas.addEventListener('touchstart', (e) => {
+        if (l3State.inputMode !== 'webcam') {
+          setL3InputMode('mouse');
+          updatePointer(e);
+        }
+      }, { passive: true });
+      canvas.addEventListener('touchmove', (e) => {
+        if (l3State.inputMode === 'mouse') {
+          e.preventDefault();
+          updatePointer(e);
+        }
+      }, { passive: false });
+    }
+
+    function setL3InputMode(mode) {
+      l3State.inputMode = mode;
+      const danceBtn = document.getElementById('btn-l3-mode-dance');
+      const mouseBtn = document.getElementById('btn-l3-mode-mouse');
+      const badge = document.getElementById('l3-tracker-badge');
+
+      danceBtn.className = mode === 'dance'
+        ? 'py-2 px-2 rounded-xl text-[11px] font-bold border-2 border-fuchsia-600 bg-fuchsia-50 text-fuchsia-800 transition'
+        : 'py-2 px-2 rounded-xl text-[11px] font-bold border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 transition';
+
+      mouseBtn.className = mode === 'mouse'
+        ? 'py-2 px-2 rounded-xl text-[11px] font-bold border-2 border-fuchsia-600 bg-fuchsia-50 text-fuchsia-800 transition'
+        : 'py-2 px-2 rounded-xl text-[11px] font-bold border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 transition';
+
+      if (mode === 'dance') {
+        badge.textContent = '🕺 Demo Dance Rig';
+        document.getElementById('l3-fps-pill').textContent = 'DEMO RIG';
+      } else if (mode === 'mouse') {
+        badge.textContent = '👆 Puppeteer Mode';
+        document.getElementById('l3-fps-pill').textContent = 'TOUCH / MOUSE';
+      }
+      renderL3CodePreview();
+    }
+
+    async function startL3WebcamMocap() {
+      const loadingBanner = document.getElementById('l3-loading-banner');
+      const loadingText = document.getElementById('l3-loading-text');
+      const startBtn = document.getElementById('btn-start-l3-cam');
+
+      try {
+        loadingBanner.classList.remove('hidden');
+        loadingText.textContent = '📷 Turning on webcam...';
+
+        if (!sharedWebcamStream) {
+          sharedWebcamStream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
+            audio: false
+          });
+        }
+
+        await attachStreamToL3Video(sharedWebcamStream);
+        startBtn.textContent = '✅ Live AI Mocap Active';
+      } catch (err) {
+        console.warn('Level 3 webcam error:', err);
+        loadingBanner.classList.add('hidden');
+        showToast('Camera blocked here — try Auto-Dance or Puppeteer mode!');
+      }
+    }
+
+    async function attachStreamToL3Video(stream) {
+      const video = document.getElementById('l3-webcam-video');
+      const loadingBanner = document.getElementById('l3-loading-banner');
+      const loadingText = document.getElementById('l3-loading-text');
+      const badge = document.getElementById('l3-tracker-badge');
+
+      video.srcObject = stream;
+      await video.play();
+
+      setL3InputMode('webcam');
+      l3State.backdropMode = 'dim';
+      document.getElementById('btn-l3-cam-view').textContent = '👁️ Studio Dim';
+
+      // Initialize MediaPipe Pose if available
+      if (typeof window.Pose !== 'undefined') {
+        try {
+          loadingText.textContent = '🧠 Loading AI Body Skeleton Model...';
+          if (!mpPoseInstance) {
+            mpPoseInstance = new window.Pose({
+              locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404/${file}`
+            });
+            mpPoseInstance.setOptions({
+              modelComplexity: 0, // Fastest Lite model for super smooth kid-friendly FPS!
+              smoothLandmarks: true,
+              enableSegmentation: false,
+              minDetectionConfidence: 0.5,
+              minTrackingConfidence: 0.5
+            });
+            mpPoseInstance.onResults(onMediaPipePoseResults);
+          }
+          l3State.trackerEngine = 'mediapipe';
+          badge.textContent = '🧠 AI Pose Skeleton';
+          document.getElementById('l3-fps-pill').textContent = 'AI TRACKING';
+          setTimeout(() => loadingBanner.classList.add('hidden'), 1200);
+        } catch (aiErr) {
+          console.warn('MediaPipe fallback to motion tracker:', aiErr);
+          l3State.trackerEngine = 'motion-fallback';
+          badge.textContent = '📹 Motion Tracker';
+          loadingBanner.classList.add('hidden');
+        }
+      } else {
+        // Offline / Sandbox fallback: real-time optical motion centroid tracker
+        l3State.trackerEngine = 'motion-fallback';
+        badge.textContent = '📹 Motion Tracker';
+        loadingBanner.classList.add('hidden');
+      }
+      renderL3CodePreview();
+    }
+
+    /**
+     * Callback fired by MediaPipe Pose whenever AI finds 33 human landmarks!
+     */
+    function onMediaPipePoseResults(results) {
+      const loadingBanner = document.getElementById('l3-loading-banner');
+      if (!loadingBanner.classList.contains('hidden')) {
+        loadingBanner.classList.add('hidden');
+      }
+
+      if (!results.poseLandmarks || results.poseLandmarks.length < 29) return;
+      const lm = results.poseLandmarks;
+
+      // Helper to mirror X so moving left moves the puppet left like a mirror
+      const mapPt = (idx, fallbackX, fallbackY) => {
+        const p = lm[idx];
+        if (!p || (p.visibility !== undefined && p.visibility < 0.25)) {
+          return { x: fallbackX, y: fallbackY };
+        }
+        return {
+          x: 1 - p.x,
+          y: p.y
+        };
+      };
+
+      const j = l3State.joints;
+      j.nose          = mapPt(0, j.nose.x, j.nose.y);
+      j.leftEye       = mapPt(2, j.nose.x - 0.03, j.nose.y - 0.02);
+      j.rightEye      = mapPt(5, j.nose.x + 0.03, j.nose.y - 0.02);
+      // Note: because we mirrored X, MediaPipe's landmark 11 (person's left) appears on the viewer's right
+      j.rightShoulder = mapPt(11, j.rightShoulder.x, j.rightShoulder.y);
+      j.leftShoulder  = mapPt(12, j.leftShoulder.x, j.leftShoulder.y);
+      j.rightElbow    = mapPt(13, j.rightElbow.x, j.rightElbow.y);
+      j.leftElbow     = mapPt(14, j.leftElbow.x, j.leftElbow.y);
+      j.rightWrist    = mapPt(15, j.rightWrist.x, j.rightWrist.y);
+      j.leftWrist     = mapPt(16, j.leftWrist.x, j.leftWrist.y);
+      j.rightHip      = mapPt(23, j.rightHip.x, j.rightHip.y);
+      j.leftHip       = mapPt(24, j.leftHip.x, j.leftHip.y);
+      j.rightKnee     = mapPt(25, j.rightKnee.x, j.rightKnee.y);
+      j.leftKnee      = mapPt(26, j.leftKnee.x, j.leftKnee.y);
+      j.rightAnkle    = mapPt(27, j.rightAnkle.x, j.rightAnkle.y);
+      j.leftAnkle     = mapPt(28, j.leftAnkle.x, j.leftAnkle.y);
+    }
+
+    /**
+     * Built-in optical motion fallback if MediaPipe CDN is unavailable
+     */
+    function updateFallbackWebcamMotion(video) {
+      if (!video || video.readyState < 2) return;
+      const w = 64, h = 48;
+      motionDiffCtx.save();
+      motionDiffCtx.translate(w, 0);
+      motionDiffCtx.scale(-1, 1);
+      motionDiffCtx.drawImage(video, 0, 0, w, h);
+      motionDiffCtx.restore();
+
+      const curr = motionDiffCtx.getImageData(0, 0, w, h).data;
+      if (prevMotionFrame) {
+        let sumX = 0, sumY = 0, weight = 0;
+        let leftHandY = 0.62, rightHandY = 0.62;
+        let leftActivity = 0, rightActivity = 0;
+
+        for (let y = 0; y < h; y++) {
+          for (let x = 0; x < w; x++) {
+            const idx = (y * w + x) * 4;
+            const diff = Math.abs(curr[idx] - prevMotionFrame[idx])
+                       + Math.abs(curr[idx + 1] - prevMotionFrame[idx + 1])
+                       + Math.abs(curr[idx + 2] - prevMotionFrame[idx + 2]);
+            if (diff > 75) {
+              sumX += (x / w) * diff;
+              sumY += (y / h) * diff;
+              weight += diff;
+              if (x < w * 0.35 && y < h * 0.6) leftActivity += diff;
+              if (x > w * 0.65 && y < h * 0.6) rightActivity += diff;
+            }
+          }
+        }
+
+        if (weight > 2000) {
+          const cx = sumX / weight;
+          const cy = Math.max(0.2, Math.min(0.45, sumY / weight));
+          if (leftActivity > 1800) leftHandY = 0.22;
+          if (rightActivity > 1800) rightHandY = 0.22;
+          applySyntheticPose(cx, cy, leftHandY, rightHandY);
+        }
+      }
+      prevMotionFrame = new Uint8ClampedArray(curr);
+    }
+
+    /**
+     * Generates smooth procedural skeleton joints for Demo Dance & Mouse Puppeteer modes
+     */
+    function updateSyntheticSkeleton() {
+      l3State.tick += 0.055;
+      const t = l3State.tick;
+
+      if (l3State.inputMode === 'dance') {
+        const swayX = 0.5 + Math.sin(t * 0.9) * 0.08;
+        const bounceY = 0.26 + Math.abs(Math.sin(t * 1.8)) * 0.04;
+        // Periodically raise left/right hands above shoulders to trigger Power FX!
+        const leftWave = Math.sin(t * 1.1) > 0.25 ? 0.22 + Math.sin(t * 4) * 0.05 : 0.56 + Math.cos(t * 2) * 0.05;
+        const rightWave = Math.cos(t * 1.1) > 0.25 ? 0.22 + Math.cos(t * 4) * 0.05 : 0.56 + Math.sin(t * 2) * 0.05;
+        applySyntheticPose(swayX, bounceY, leftWave, rightWave);
+      } else if (l3State.inputMode === 'mouse') {
+        const cx = l3State.mouseX;
+        const cy = Math.max(0.18, Math.min(0.45, l3State.mouseY));
+        // Raising cursor high raises BOTH hands above shoulders to blast power beams!
+        const raiseFactor = Math.max(0, (0.42 - l3State.mouseY) * 2.2);
+        const handY = 0.60 - raiseFactor * 0.42;
+        applySyntheticPose(cx, cy, handY, handY);
+      }
+    }
+
+    function applySyntheticPose(cx, headY, leftWristY, rightWristY) {
+      const j = l3State.joints;
+      const tilt = Math.sin(l3State.tick * 1.2) * 0.015;
+      j.nose          = { x: cx, y: headY };
+      j.leftEye       = { x: cx - 0.03, y: headY - 0.02 + tilt };
+      j.rightEye      = { x: cx + 0.03, y: headY - 0.02 - tilt };
+
+      const shY = headY + 0.14;
+      j.leftShoulder  = { x: cx - 0.10, y: shY };
+      j.rightShoulder = { x: cx + 0.10, y: shY };
+
+      const reachOut = 0.19 + Math.sin(l3State.tick * 2) * 0.02;
+      j.leftWrist     = { x: cx - reachOut, y: leftWristY };
+      j.rightWrist    = { x: cx + reachOut, y: rightWristY };
+
+      j.leftElbow     = { x: (j.leftShoulder.x + j.leftWrist.x) / 2 - 0.03, y: (shY + leftWristY) / 2 + 0.03 };
+      j.rightElbow    = { x: (j.rightShoulder.x + j.rightWrist.x) / 2 + 0.03, y: (shY + rightWristY) / 2 + 0.03 };
+
+      const hipY = shY + 0.25;
+      j.leftHip       = { x: cx - 0.06, y: hipY };
+      j.rightHip      = { x: cx + 0.06, y: hipY };
+
+      const kneeBend = Math.sin(l3State.tick * 1.8) * 0.02;
+      j.leftKnee      = { x: cx - 0.07 - kneeBend, y: hipY + 0.16 };
+      j.rightKnee     = { x: cx + 0.07 + kneeBend, y: hipY + 0.16 };
+      j.leftAnkle     = { x: cx - 0.08, y: Math.min(0.97, hipY + 0.31) };
+      j.rightAnkle    = { x: cx + 0.08, y: Math.min(0.97, hipY + 0.31) };
+    }
+
+    /**
+     * Main 60 FPS Level 3 Render & AI Inference Loop
+     */
+    function l3MocapLoop() {
+      if (activeLevel === 3) {
+        const canvas = document.getElementById('mocap-canvas');
+        const video = document.getElementById('l3-webcam-video');
+
+        if (canvas && canvas.width > 0) {
+          // 1. Update Joint Coordinates from Webcam AI or Synthetic Mode
+          if (l3State.inputMode === 'webcam' && video && video.readyState >= 2) {
+            if (l3State.trackerEngine === 'mediapipe' && mpPoseInstance && !mpSendingFrame) {
+              mpSendingFrame = true;
+              mpPoseInstance.send({ image: video })
+                .catch(() => {})
+                .finally(() => { mpSendingFrame = false; });
+            } else if (l3State.trackerEngine === 'motion-fallback') {
+              updateFallbackWebcamMotion(video);
+            }
+          } else {
+            updateSyntheticSkeleton();
+          }
+
+          // 2. Render Backdrop, Digital Puppet Skin, AI Skeleton & Power Particles
+          renderL3Stage(canvas, video);
+        }
+      }
+      requestAnimationFrame(l3MocapLoop);
+    }
+
+    function renderL3Stage(canvas, video) {
+      const ctx = canvas.getContext('2d');
+      const W = canvas.width;
+      const H = canvas.height;
+      const j = l3State.joints;
+
+      // Convert normalized (0..1) joints to pixel coordinates
+      const px = {};
+      for (const key in j) {
+        px[key] = { x: j[key].x * W, y: j[key].y * H };
+      }
+
+      // STEP 1: STAGE BACKDROP (Webcam Feed or Cyberpunk Mocap Grid)
+      ctx.clearRect(0, 0, W, H);
+      if (l3State.inputMode === 'webcam' && video && video.readyState >= 2 && l3State.backdropMode !== 'void') {
+        ctx.save();
+        ctx.translate(W, 0);
+        ctx.scale(-1, 1);
+        ctx.drawImage(video, 0, 0, W, H);
+        ctx.restore();
+
+        if (l3State.backdropMode === 'dim') {
+          ctx.fillStyle = 'rgba(2, 6, 23, 0.72)';
+          ctx.fillRect(0, 0, W, H);
+        }
+      } else {
+        // Futuristic Mocap Volume Floor Grid
+        ctx.fillStyle = '#020617';
+        ctx.fillRect(0, 0, W, H);
+        ctx.strokeStyle = 'rgba(192, 38, 211, 0.16)';
+        ctx.lineWidth = 1;
+        for (let gx = 0; gx < W; gx += 36) {
+          ctx.beginPath(); ctx.moveTo(gx, 0); ctx.lineTo(gx, H); ctx.stroke();
+        }
+        for (let gy = 0; gy < H; gy += 36) {
+          ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(W, gy); ctx.stroke();
+        }
+      }
+
+      // Calculate body proportions from live shoulder width!
+      const shoulderDist = Math.max(36, Math.hypot(px.rightShoulder.x - px.leftShoulder.x, px.rightShoulder.y - px.leftShoulder.y));
+      const headRadius = Math.max(24, Math.min(58, shoulderDist * 0.44 * l3State.scale));
+      const headTiltAngle = Math.atan2(px.rightEye.y - px.leftEye.y, px.rightEye.x - px.leftEye.x);
+
+      // Check if either hand is raised above shoulder height (Power Gesture!)
+      const leftHandRaised = px.leftWrist.y < px.leftShoulder.y - 10;
+      const rightHandRaised = px.rightWrist.y < px.rightShoulder.y - 10;
+
+      if (l3State.powerFx && (leftHandRaised || rightHandRaised)) {
+        if (leftHandRaised) spawnL3PowerParticles(px.leftWrist.x, px.leftWrist.y, l3State.skin);
+        if (rightHandRaised) spawnL3PowerParticles(px.rightWrist.x, px.rightWrist.y, l3State.skin);
+        if (l3State.tick - l3State.lastZapFrame > 2.2) {
+          l3State.lastZapFrame = l3State.tick;
+          playPowerZapSound();
+        }
+      }
+
+      // STEP 2: DRAW DIGITAL PUPPET COSTUME SKIN
+      drawL3PuppetSkin(ctx, px, headRadius, headTiltAngle, shoulderDist);
+
+      // STEP 3: UPDATE & DRAW HAND POWER PARTICLES
+      updateAndDrawL3Particles(ctx);
+
+      // STEP 4: DRAW UNDERLYING AI SKELETON BONES & JOINT DOTS (X-RAY OVERLAY)
+      if (l3State.showSkeleton) {
+        drawL3SkeletonOverlay(ctx, px);
+      }
+
+      // STEP 5: UPDATE LIVE JOINT COORDINATE READOUTS
+      if (Math.round(l3State.tick * 20) % 3 === 0) {
+        document.getElementById('l3-joint-nose').textContent = `${Math.round(j.nose.x * 100)}%, ${Math.round(j.nose.y * 100)}%`;
+        document.getElementById('l3-joint-lhand').textContent = `${Math.round(j.leftWrist.x * 100)}%, ${Math.round(j.leftWrist.y * 100)}%`;
+        document.getElementById('l3-joint-rhand').textContent = `${Math.round(j.rightWrist.x * 100)}%, ${Math.round(j.rightWrist.y * 100)}%`;
+        document.getElementById('l3-joint-tilt').textContent = `${Math.round((headTiltAngle * 180) / Math.PI)}°`;
+
+        const powerBadge = document.getElementById('l3-power-status');
+        if (leftHandRaised || rightHandRaised) {
+          powerBadge.textContent = '⚡ POWER BLAST ACTIVE!';
+          powerBadge.className = 'font-mono text-[11px] font-extrabold text-amber-800 bg-amber-100 border border-amber-300 px-2 py-0.5 rounded';
+        } else {
+          powerBadge.textContent = 'Hands: Resting';
+          powerBadge.className = 'font-mono text-[11px] font-bold text-slate-500 bg-slate-100 px-2 py-0.5 rounded';
+        }
+      }
+    }
+
+    /**
+     * Draws the chosen Digital Character Skin anchored to the tracked joints
+     */
+    function drawL3PuppetSkin(ctx, px, headRadius, headTilt, shoulderDist) {
+      const skin = l3State.skin;
+      const limbWidth = Math.max(10, shoulderDist * 0.18 * l3State.scale);
+
+      ctx.save();
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+
+      if (skin === 'xray') {
+        // Pure Neon Hollywood Mocap Suit Look
+        const bones = [
+          [px.leftShoulder, px.rightShoulder],
+          [px.leftShoulder, px.leftElbow], [px.leftElbow, px.leftWrist],
+          [px.rightShoulder, px.rightElbow], [px.rightElbow, px.rightWrist],
+          [px.leftShoulder, px.leftHip], [px.rightShoulder, px.rightHip],
+          [px.leftHip, px.rightHip],
+          [px.leftHip, px.leftKnee], [px.leftKnee, px.leftAnkle],
+          [px.rightHip, px.rightKnee], [px.rightKnee, px.rightAnkle]
+        ];
+        ctx.strokeStyle = '#e879f9';
+        ctx.lineWidth = limbWidth * 0.7;
+        bones.forEach(([a, b]) => {
+          ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+        });
+      } else {
+        // Palette per costume
+        const palettes = {
+          robot:  { torso: '#334155', trim: '#38bdf8', limb: '#64748b', glove: '#0ea5e9' },
+          hero:   { torso: '#dc2626', trim: '#facc15', limb: '#2563eb', glove: '#facc15' },
+          wizard: { torso: '#581c87', trim: '#c084fc', limb: '#6b21a8', glove: '#fde047' }
+        };
+        const pal = palettes[skin] || palettes.robot;
+
+        // Flowing Hero Cape or Wizard Cloak behind torso
+        if (skin === 'hero' || skin === 'wizard') {
+          const wave = Math.sin(l3State.tick * 2.5) * 14;
+          ctx.fillStyle = skin === 'hero' ? 'rgba(220, 38, 38, 0.75)' : 'rgba(88, 28, 135, 0.8)';
+          ctx.beginPath();
+          ctx.moveTo(px.leftShoulder.x, px.leftShoulder.y);
+          ctx.lineTo(px.rightShoulder.x, px.rightShoulder.y);
+          ctx.lineTo(px.rightHip.x + 28 + wave, px.rightKnee.y + 15);
+          ctx.lineTo(px.leftHip.x - 28 + wave, px.leftKnee.y + 15);
+          ctx.closePath();
+          ctx.fill();
+        }
+
+        // Legs
+        drawLimbSegment(ctx, px.leftHip, px.leftKnee, limbWidth, pal.limb);
+        drawLimbSegment(ctx, px.leftKnee, px.leftAnkle, limbWidth * 0.9, pal.limb);
+        drawLimbSegment(ctx, px.rightHip, px.rightKnee, limbWidth, pal.limb);
+        drawLimbSegment(ctx, px.rightKnee, px.rightAnkle, limbWidth * 0.9, pal.limb);
+
+        // Torso Armor / Tunic Polygon
+        ctx.fillStyle = pal.torso;
+        ctx.strokeStyle = pal.trim;
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(px.leftShoulder.x - 6, px.leftShoulder.y);
+        ctx.lineTo(px.rightShoulder.x + 6, px.rightShoulder.y);
+        ctx.lineTo(px.rightHip.x + 4, px.rightHip.y);
+        ctx.lineTo(px.leftHip.x - 4, px.leftHip.y);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+
+        // Chest Emblem (Arc Reactor / Hero Shield / Star)
+        const chestX = (px.leftShoulder.x + px.rightShoulder.x) / 2;
+        const chestY = (px.leftShoulder.y + px.leftHip.y) / 2 - 4;
+        ctx.fillStyle = pal.trim;
+        ctx.beginPath();
+        ctx.arc(chestX, chestY, Math.max(7, shoulderDist * 0.13), 0, Math.PI * 2);
+        ctx.fill();
+
+        // Arms
+        drawLimbSegment(ctx, px.leftShoulder, px.leftElbow, limbWidth * 0.85, pal.limb);
+        drawLimbSegment(ctx, px.leftElbow, px.leftWrist, limbWidth * 0.8, pal.limb);
+        drawLimbSegment(ctx, px.rightShoulder, px.rightElbow, limbWidth * 0.85, pal.limb);
+        drawLimbSegment(ctx, px.rightElbow, px.rightWrist, limbWidth * 0.8, pal.limb);
+
+        // Glowing Gauntlets / Hands
+        [px.leftWrist, px.rightWrist].forEach(hand => {
+          ctx.fillStyle = pal.glove;
+          ctx.beginPath();
+          ctx.arc(hand.x, hand.y, limbWidth * 0.65, 0, Math.PI * 2);
+          ctx.fill();
+        });
+      }
+
+      // HEAD RENDERING (Either Level 2 Webcam Face Photo OR Stylized Character Head!)
+      ctx.save();
+      ctx.translate(px.nose.x, px.nose.y);
+      ctx.rotate(headTilt);
+
+      if (l3State.useL2Face) {
+        // Put his own snapped Level 2 face right onto the AI mocap rig!
+        ctx.drawImage(faceSnapshotCanvas, -headRadius, -headRadius, headRadius * 2, headRadius * 2);
+        ctx.beginPath();
+        ctx.arc(0, 0, headRadius, 0, Math.PI * 2);
+        ctx.lineWidth = 3.5;
+        ctx.strokeStyle = '#facc15';
+        ctx.stroke();
+      } else if (skin === 'robot') {
+        // Cyber Mecha Helmet + Glowing Visor
+        ctx.fillStyle = '#1e293b';
+        ctx.strokeStyle = '#38bdf8';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.roundRect(-headRadius * 0.9, -headRadius * 0.95, headRadius * 1.8, headRadius * 1.85, 14);
+        ctx.fill();
+        ctx.stroke();
+
+        // Glowing Cyber Visor
+        ctx.fillStyle = '#0ea5e9';
+        ctx.fillRect(-headRadius * 0.68, -headRadius * 0.3, headRadius * 1.36, headRadius * 0.38);
+
+        // Antenna
+        ctx.beginPath();
+        ctx.moveTo(0, -headRadius * 0.95);
+        ctx.lineTo(0, -headRadius * 1.35);
+        ctx.stroke();
+        ctx.fillStyle = '#f43f5e';
+        ctx.beginPath();
+        ctx.arc(0, -headRadius * 1.4, 5, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (skin === 'hero') {
+        // Superhero Head + Mask
+        ctx.fillStyle = '#fde68a';
+        ctx.beginPath();
+        ctx.arc(0, 0, headRadius * 0.88, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = '#dc2626';
+        ctx.fillRect(-headRadius * 0.84, -headRadius * 0.25, headRadius * 1.68, headRadius * 0.38);
+
+        ctx.fillStyle = '#ffffff';
+        ctx.beginPath();
+        ctx.ellipse(-headRadius * 0.34, -headRadius * 0.06, headRadius * 0.2, headRadius * 0.11, -0.15, 0, Math.PI * 2);
+        ctx.ellipse(headRadius * 0.34, -headRadius * 0.06, headRadius * 0.2, headRadius * 0.11, 0.15, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (skin === 'wizard') {
+        // Star Wizard Head + Pointed Hat
+        ctx.fillStyle = '#fde68a';
+        ctx.beginPath();
+        ctx.arc(0, 0, headRadius * 0.85, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Wizard Hat Brim & Cone
+        ctx.fillStyle = '#6b21a8';
+        ctx.strokeStyle = '#facc15';
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        ctx.ellipse(0, -headRadius * 0.65, headRadius * 1.25, headRadius * 0.26, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.moveTo(-headRadius * 0.75, -headRadius * 0.65);
+        ctx.lineTo(headRadius * 0.15, -headRadius * 1.9);
+        ctx.lineTo(headRadius * 0.75, -headRadius * 0.65);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+      } else {
+        // Neon X-Ray Skull Ring
+        ctx.strokeStyle = '#22d3ee';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.arc(0, 0, headRadius * 0.82, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+
+      ctx.restore();
+      ctx.restore();
+    }
+
+    function drawLimbSegment(ctx, p1, p2, width, color) {
+      ctx.strokeStyle = color;
+      ctx.lineWidth = width;
+      ctx.beginPath();
+      ctx.moveTo(p1.x, p1.y);
+      ctx.lineTo(p2.x, p2.y);
+      ctx.stroke();
+    }
+
+    /**
+     * Draws the raw AI Motion Capture Skeleton dots & connecting bones on top
+     */
+    function drawL3SkeletonOverlay(ctx, px) {
+      const connections = [
+        [px.leftShoulder, px.rightShoulder],
+        [px.leftShoulder, px.leftElbow], [px.leftElbow, px.leftWrist],
+        [px.rightShoulder, px.rightElbow], [px.rightElbow, px.rightWrist],
+        [px.leftShoulder, px.leftHip], [px.rightShoulder, px.rightHip],
+        [px.leftHip, px.rightHip],
+        [px.leftHip, px.leftKnee], [px.leftKnee, px.leftAnkle],
+        [px.rightHip, px.rightKnee], [px.rightKnee, px.rightAnkle]
+      ];
+
+      ctx.save();
+      ctx.strokeStyle = '#22d3ee';
+      ctx.lineWidth = 2.5;
+      connections.forEach(([a, b]) => {
+        ctx.beginPath();
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(b.x, b.y);
+        ctx.stroke();
+      });
+
+      // Draw glowing joint keypoint dots
+      const keyJoints = [
+        px.nose, px.leftShoulder, px.rightShoulder,
+        px.leftElbow, px.rightElbow, px.leftWrist, px.rightWrist,
+        px.leftHip, px.rightHip, px.leftKnee, px.rightKnee
+      ];
+      keyJoints.forEach(pt => {
+        ctx.fillStyle = '#facc15';
+        ctx.beginPath();
+        ctx.arc(pt.x, pt.y, 4.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = '#0f172a';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+      });
+      ctx.restore();
+    }
+
+    function spawnL3PowerParticles(x, y, skin) {
+      const colorsBySkin = {
+        robot:  ['#38bdf8', '#22d3ee', '#ffffff'],
+        hero:   ['#facc15', '#f97316', '#ef4444'],
+        wizard: ['#e879f9', '#a855f7', '#fde047'],
+        xray:   ['#22d3ee', '#f472b6', '#34d399']
+      };
+      const palette = colorsBySkin[skin] || colorsBySkin.robot;
+
+      for (let i = 0; i < 3; i++) {
+        const angle = -Math.PI / 2 + (Math.random() - 0.5) * 1.4;
+        const speed = 2.5 + Math.random() * 4.5;
+        l3State.particles.push({
+          x: x + (Math.random() - 0.5) * 10,
+          y: y + (Math.random() - 0.5) * 10,
+          vx: Math.cos(angle) * speed,
+          vy: Math.sin(angle) * speed,
+          life: 1.0,
+          color: palette[Math.floor(Math.random() * palette.length)],
+          size: 3 + Math.random() * 4
+        });
+      }
+    }
+
+    function updateAndDrawL3Particles(ctx) {
+      if (l3State.particles.length === 0) return;
+      ctx.save();
+      for (let i = l3State.particles.length - 1; i >= 0; i--) {
+        const p = l3State.particles[i];
+        p.x += p.vx;
+        p.y += p.vy;
+        p.life -= 0.04;
+        if (p.life <= 0) {
+          l3State.particles.splice(i, 1);
+          continue;
+        }
+        ctx.globalAlpha = Math.max(0, p.life);
+        ctx.fillStyle = p.color;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.size * p.life, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+
+    function setL3Skin(skinName) {
+      l3State.skin = skinName;
+      document.querySelectorAll('.l3-skin-btn').forEach(btn => {
+        const active = btn.getAttribute('data-skin') === skinName;
+        btn.className = active
+          ? 'l3-skin-btn py-2 px-2 rounded-xl text-xs font-bold border-2 border-fuchsia-600 bg-fuchsia-50 text-fuchsia-800 transition'
+          : 'l3-skin-btn py-2 px-2 rounded-xl text-xs font-bold border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 transition';
+      });
+      renderL3CodePreview();
+    }
+
+    function updateL3Controls() {
+      l3State.scale = parseFloat(document.getElementById('l3-input-scale').value);
+      l3State.showSkeleton = document.getElementById('l3-show-skeleton').checked;
+      l3State.powerFx = document.getElementById('l3-power-fx').checked;
+      l3State.useL2Face = document.getElementById('l3-use-l2-face').checked;
+
+      document.getElementById('l3-val-scale').textContent = `${l3State.scale.toFixed(1)}x`;
+      renderL3CodePreview();
+    }
+
+    function cycleL3Backdrop() {
+      const order = ['dim', 'full', 'void'];
+      const labels = {
+        dim: '👁️ Studio Dim',
+        full: '👁️ Full Video',
+        void: '👁️ Avatar Only'
+      };
+      const next = order[(order.indexOf(l3State.backdropMode) + 1) % order.length];
+      l3State.backdropMode = next;
+      document.getElementById('btn-l3-cam-view').textContent = labels[next];
+    }
+
+    function toggleL3Sound() {
+      l3State.soundEnabled = !l3State.soundEnabled;
+      const btn = document.getElementById('btn-l3-sound');
+      btn.textContent = l3State.soundEnabled ? '🔊 Power FX' : '🔇 Power FX';
+      btn.className = l3State.soundEnabled
+        ? 'px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-fuchsia-700 text-white border border-fuchsia-500 transition'
+        : 'px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 text-slate-200 hover:bg-slate-700 border border-slate-700 transition';
+    }
+
+    function applyL3Preset(preset) {
+      if (preset === 'robot') {
+        setL3Skin('robot');
+        l3State.showSkeleton = true;
+        l3State.powerFx = true;
+      } else if (preset === 'hero') {
+        setL3Skin('hero');
+        l3State.showSkeleton = false;
+        l3State.powerFx = true;
+      } else if (preset === 'xray') {
+        setL3Skin('xray');
+        l3State.showSkeleton = true;
+        l3State.powerFx = true;
+      }
+      document.getElementById('l3-show-skeleton').checked = l3State.showSkeleton;
+      document.getElementById('l3-power-fx').checked = l3State.powerFx;
+      renderL3CodePreview();
+    }
+
+    function renderL3CodePreview() {
+      const el = document.getElementById('l3-code-preview');
+      if (!el) return;
+
+      const headDrawCode = l3State.useL2Face
+        ? `ctx.drawImage(level2FacePhoto, nose.x, nose.y); <span class="text-slate-400">// His real face!</span>`
+        : `drawPuppetHead(<span class="text-emerald-300">"${l3State.skin}"</span>, nose.x, nose.y);`;
+
+      const powerCode = l3State.powerFx
+        ? `\n  <span class="text-slate-400">// 3. Trigger hand plasma blasts when hands rise above shoulders!</span>\n  <span class="text-purple-300">if</span> (leftWrist.y &lt; leftShoulder.y) spawnPowerBlast(leftWrist);`
+        : '';
+
+      el.innerHTML = `<span class="text-slate-400">// 1. AI scans webcam frame &amp; returns 33 body joint (X, Y) coordinates</span>
+pose.<span class="text-amber-300">onResults</span>((results) =&gt; {
+  <span class="text-sky-300">const</span> nose = results.poseLandmarks[<span class="text-emerald-300">0</span>];
+  <span class="text-sky-300">const</span> leftShoulder = results.poseLandmarks[<span class="text-emerald-300">11</span>];
+  <span class="text-sky-300">const</span> leftWrist = results.poseLandmarks[<span class="text-emerald-300">15</span>];
+
+  <span class="text-slate-400">// 2. Attach digital character skin onto his live body joints</span>
+  drawBodyArmor(<span class="text-emerald-300">"${l3State.skin}"</span>, leftShoulder, leftWrist);
+  ${headDrawCode}${powerCode}
+});`;
+    }
+
+    // =========================================================================
+    // 4. STANDALONE HTML EXPORT (COPIES ACTIVE LEVEL CODE TO CLIPBOARD)
+    // =========================================================================
+    function copyActiveCode() {
+      if (activeLevel === 1) {
+        const cleanKeyframes = buildKeyframesCSS();
+        const standaloneHTML = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>My Custom SVG Animation</title>
+  <style>
+    body {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      margin: 0;
+      background: #f8fafc;
+    }
+
+    /* 1. The Timeline (CSS Keyframes) */
+    ${cleanKeyframes.split('\n').join('\n    ')}
+
+    /* 2. The Director (Telling the shape how to move) */
+    #bouncing-actor {
+      transform-box: fill-box;
+      transform-origin: center;
+      animation: bounce ${state.duration.toFixed(1)}s ${state.easing} infinite;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- 3. The Actor (SVG Shape) -->
+  <svg width="320" height="360" style="border: 2px solid #cbd5e1; border-radius: 16px; background: white;">
+    ${document.getElementById('actor-mount').innerHTML.trim()}
+  </svg>
+
+</body>
+</html>`;
+        copyStringToClipboard(standaloneHTML, 'Copied standalone Level 1 HTML!');
+      } else if (activeLevel === 2) {
+        const standaloneL2HTML = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>Level 2: Webcam Digital Flipbook</title>
+  <style>
+    body { margin: 0; background: #020617; color: white; font-family: sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; gap: 12px; }
+    canvas { border: 2px solid #6366f1; border-radius: 16px; background: #0f172a; }
+    button { padding: 10px 18px; border-radius: 10px; border: none; background: #4f46e5; color: white; font-weight: bold; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <button id="snap">📸 Snap Webcam Photo</button>
+  <video id="cam" autoplay playsinline muted style="display:none"></video>
+  <canvas id="stage" width="480" height="360"></canvas>
+  <script>
+    const canvas = document.getElementById('stage');
+    const ctx = canvas.getContext('2d');
+    const video = document.getElementById('cam');
+    let photo = null;
+    let x = 240, y = 180, vx = ${l2State.vx.toFixed(1)}, vy = ${l2State.vy.toFixed(1)}, r = ${l2State.radius};
+
+    navigator.mediaDevices.getUserMedia({ video: true }).then(s => { video.srcObject = s; });
+    document.getElementById('snap').onclick = () => {
+      const off = document.createElement('canvas');
+      off.width = off.height = 200;
+      off.getContext('2d').drawImage(video, 0, 0, 200, 200);
+      photo = off;
+    };
+
+    function flipbookLoop() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      vy += ${l2State.gravity.toFixed(2)};
+      x += vx; y += vy;
+      if (x + r > canvas.width || x - r < 0) vx = -vx;
+      if (y + r > canvas.height || y - r < 0) vy = -vy;
+
+      ctx.save();
+      ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.clip();
+      if (photo) ctx.drawImage(photo, x - r, y - r, r * 2, r * 2);
+      else { ctx.fillStyle = '#38bdf8'; ctx.fill(); }
+      ctx.restore();
+      requestAnimationFrame(flipbookLoop);
+    }
+    flipbookLoop();
+  <\/script>
+</body>
+</html>`;
+        copyStringToClipboard(standaloneL2HTML, 'Copied standalone Level 2 Flipbook app!');
+      } else {
+        const standaloneL3HTML = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>Level 3: AI Motion Capture Puppet</title>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404/pose.js" crossorigin="anonymous"><\/script>
+  <style>
+    body { margin: 0; background: #020617; color: white; font-family: sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; }
+    canvas { border: 2px solid #d946ef; border-radius: 16px; max-width: 95vw; }
+  </style>
+</head>
+<body>
+  <video id="cam" autoplay playsinline muted style="display:none"></video>
+  <canvas id="mocap" width="640" height="480"></canvas>
+  <script>
+    const video = document.getElementById('cam');
+    const canvas = document.getElementById('mocap');
+    const ctx = canvas.getContext('2d');
+    const pose = new Pose({ locateFile: f => 'https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404/' + f });
+    pose.setOptions({ modelComplexity: 0, smoothLandmarks: true });
+    pose.onResults(res => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      if (!res.poseLandmarks) return;
+      res.poseLandmarks.forEach(pt => {
+        ctx.fillStyle = '#facc15';
+        ctx.beginPath();
+        ctx.arc((1 - pt.x) * canvas.width, pt.y * canvas.height, 6, 0, Math.PI * 2);
+        ctx.fill();
+      });
+    });
+    navigator.mediaDevices.getUserMedia({ video: true }).then(async stream => {
+      video.srcObject = stream;
+      await video.play();
+      async function loop() {
+        await pose.send({ image: video });
+        requestAnimationFrame(loop);
+      }
+      loop();
+    });
+  <\/script>
+</body>
+</html>`;
+        copyStringToClipboard(standaloneL3HTML, 'Copied standalone Level 3 AI Mocap app!');
+      }
+    }
+
+    function copyStringToClipboard(text, message) {
+      const tempTextarea = document.createElement('textarea');
+      tempTextarea.value = text;
+      tempTextarea.style.position = 'fixed';
+      tempTextarea.style.opacity = '0';
+      document.body.appendChild(tempTextarea);
+      tempTextarea.select();
+
+      try {
+        document.execCommand('copy');
+        showToast(message);
+      } catch (err) {
+        showToast('Press Ctrl+C / Cmd+C to copy the code block.');
+      } finally {
+        document.body.removeChild(tempTextarea);
+      }
+    }
+
+    function showToast(msg) {
+      const toast = document.getElementById('toast');
+      const toastMsg = document.getElementById('toast-message');
+      toastMsg.textContent = msg;
+      toast.classList.remove('hidden');
+      toast.classList.add('toast-animate');
+
+      clearTimeout(window.__toastTimer);
+      window.__toastTimer = setTimeout(() => {
+        toast.classList.add('hidden');
+      }, 3000);
+    }
+  </script>
+</body>
+</html>
