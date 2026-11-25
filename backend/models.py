@@ -345,6 +345,9 @@ class MotionRecord(BaseModel):
     fps: Literal[4, 6, 8, 12, 24] = 8
     strength: float = Field(default=1, ge=0.2, le=2.5, allow_inf_nan=False)
     tracks: list[MotionTrack] = Field(min_length=1, max_length=4)
+    # Effects are code, not AI: a layer of tiny strokes computed per frame from a fixed seed.
+    effects: list[Literal["snow", "rain", "sparkles", "confetti", "bubbles"]] = Field(
+        default_factory=list, max_length=2, exclude_if=lambda value: not value)
 
 
 def fit_box(value):
@@ -453,6 +456,8 @@ class ClipRequest(BaseModel):
     prompt: str = Field(default="", max_length=300)
     layers: list[Layer] = Field(default_factory=list, max_length=MAX_LAYERS)
     previous_id: Annotated[str, Field(pattern=UUID_PATTERN)] | None = None
+    starring: str = Field(default="", max_length=80)
+    backdrop: str = Field(default="", max_length=40)
 
     @model_validator(mode="after")
     def limits(self) -> "ClipRequest":

@@ -107,9 +107,24 @@ def shot_summary(record: dict) -> dict:
     }
 
 
+def remap_ids(value, ids: dict[str, str]):
+    """A copy of a record with every old id swapped for its new one, wherever it appears."""
+    if isinstance(value, str):
+        if value in ids:
+            return ids[value]
+        head, sep, tail = value.partition(":")  # element ("{shot}:{layer}") and frame ("{shot}:f{n}") ids
+        return f"{ids[head]}:{tail}" if sep and head in ids else value
+    if isinstance(value, list):
+        return value if value and isinstance(value[0], float) else [remap_ids(item, ids) for item in value]
+    if isinstance(value, dict):
+        return {key: remap_ids(item, ids) for key, item in value.items()}
+    return value
+
+
 def clip_summary(record: dict) -> dict:
     return {
-        "id": record["id"], "name": record["name"], "prompt": record["prompt"],
+        "id": record["id"], "name": record["name"], "prompt": record["prompt"], "brief": record.get("brief", ""),
+        "revision": bool(record.get("previous_id")),
         "asset_ids": record.get("asset_ids", []), "updated_at": record["updated_at"],
         "image_url": f"/api/clips/{record['id']}/image",
         "video_url": f"/api/clips/{record['id']}/video",
@@ -314,7 +329,7 @@ class Production(Scoped):
                 raise ProductionError("An asset in this scene is no longer available.")
 
     def save_clip(self, layers: list[Layer], prompt: str, interaction_id: str, video: bytes,
-                  previous: dict | None = None) -> dict:
+                  previous: dict | None = None, *, brief: str = "") -> dict:
         self.validate_clip_layers(layers)
         links = [layer.asset for layer in layers if layer.asset]
         name = (previous or {}).get("name") or next(
@@ -324,7 +339,7 @@ class Production(Scoped):
         media_id = self.clip_media.upload_from_stream("scene.mp4", video)
         record = {
             "id": str(uuid4()), "owner": self.q()["owner"], "name": name, "prompt": prompt,
-            "story": story, "layers": [layer.model_dump() for layer in layers],
+            "story": story, "brief": brief[:2000], "layers": [layer.model_dump() for layer in layers],
             "asset_ids": list(dict.fromkeys(link.asset_id for link in links)),
             "interaction_id": interaction_id, "media_id": media_id,
             "image": image, "png": base64.b64encode(image).decode("ascii"),
@@ -871,28 +886,42 @@ class Production(Scoped):
         ids = {row["id"]: str(uuid4()) for store in (self.library.drawings.mongo, self.assets.mongo, self.shots.mongo, self.clips.mongo)
                for row in store.find({"owner": source}, {"_id": 0, "id": 1})}
 
-        def remap(value):
-            if isinstance(value, str):
-                if value in ids:
-                    return ids[value]
-                head, sep, tail = value.partition(":")  # element ("{shot}:{layer}") and frame ("{shot}:f{n}") ids
-                return f"{ids[head]}:{tail}" if sep and head in ids else value
-            if isinstance(value, list):
-                return value if value and isinstance(value[0], float) else [remap(item) for item in value]
-            if isinstance(value, dict):
-                return {key: remap(item) for key, item in value.items()}
-            return value
-
         copied = {}
         for store in self.stores:
             docs = []
             for doc in store.find({"owner": source}):
                 doc.pop("_id", None)
-                docs.append({**remap(doc), "owner": self.q()["owner"]})
+                docs.append({**remap_ids(doc, ids), "owner": self.q()["owner"]})
             if docs:
                 store.insert_many(docs)
             copied[store.name] = len(docs)
         return copied
+
+    def add_starter(self, source: str) -> dict:
+        """The starter pack: copy the shared ready-made assets this library doesn't have yet, with their versions
+        and search vectors (nothing is re-embedded). Each copy remembers its starter, so it's never added twice."""
+        owner = self.q()["owner"]
+        if source == owner:
+            raise ProductionError("That library is already yours.")
+        have = {doc["starter"]: doc["id"] for doc in self.assets.mongo.find({"owner": owner}, {"_id": 0, "id": 1, "starter": 1})
+                if doc.get("starter")}
+        wanted = [doc for doc in self.assets.mongo.find({"owner": source}) if doc["id"] not in have]
+        # Lineage to a starter already in the library points at the artist's copy of it.
+        ids = {**have, **{doc["id"]: str(uuid4()) for doc in wanted}}
+        assets = []
+        for doc in wanted:
+            doc.pop("_id", None)
+            assets.append({**remap_ids(doc, ids), "owner": owner, "starter": doc["id"]})
+        versions = []
+        for doc in self.versions.find({"owner": source}):
+            if doc.get("asset_id") in ids and doc["asset_id"] not in have:
+                doc.pop("_id", None)
+                versions.append({**remap_ids(doc, ids), "owner": owner})
+        if assets:
+            self.assets.mongo.insert_many(assets)
+        if versions:
+            self.versions.insert_many(versions)
+        return {"assets": len(assets), "asset_versions": len(versions)}
 
     def claim_unowned(self, owner: str, *, ideas_owner: str | None = None) -> dict:
         """One-time migration: work saved before accounts existed gets an owner (ideas may go elsewhere)."""

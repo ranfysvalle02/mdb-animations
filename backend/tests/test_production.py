@@ -552,10 +552,11 @@ def test_generated_clip_is_owner_scoped_and_media_is_removed_if_indexing_fails()
     production.assets.mongo.find_one.return_value = {"_id": "owned"}
     production.clip_media.upload_from_stream.return_value = "media"
     layers = [Layer.model_validate(layer) for layer in shot_payload()["layers"][:2]]
-    saved = production.save_clip(layers, "explores the moon", "interaction", b"video")
+    saved = production.save_clip(layers, "explores the moon", "interaction", b"video", brief="exact words")
     record = production.clips.add.call_args.args[0][0]
     assert record["owner"] == "tester" and record["asset_ids"] == [ASSET_ID]
     assert record["interaction_id"] == "interaction" and saved["video_url"].startswith("/api/clips/")
+    assert saved["brief"] == "exact words"
     production.clips.add.side_effect = RuntimeError("index unavailable")
     with pytest.raises(RuntimeError, match="index unavailable"):
         production.save_clip(layers, "again", "interaction", b"video")
@@ -654,3 +655,13 @@ def test_shared_scenes_are_public_by_token_only_and_escaped(client):
     assert http.delete(f"/api/shots/{SHOT_ID}/share").status_code == 204
     scope = {"type": "http", "method": "POST", "path": f"/api/shots/{SHOT_ID}/share", "query_string": b"", "headers": []}
     assert budget_for(Req(scope)) is EMBED_BUDGET
+
+
+def test_scene_motion_records_code_effects_but_rejects_unknown_ones():
+    from backend.models import MotionRecord
+    record = MotionRecord.model_validate({**MOTION, "effects": ["snow", "rain"]})
+    assert record.model_dump()["effects"] == ["snow", "rain"]
+    assert "effects" not in MotionRecord.model_validate(MOTION).model_dump()
+    for bad in (["lava"], ["snow", "rain", "bubbles"]):
+        with pytest.raises(ValidationError):
+            MotionRecord.model_validate({**MOTION, "effects": bad})

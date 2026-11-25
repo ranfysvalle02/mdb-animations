@@ -59,7 +59,7 @@ def main() -> None:
 
     shadow = Image.new("RGBA", (W, H))
     shade = ImageDraw.Draw(shadow)
-    back, front = phone(SHOTS / "12-studio-phone.png", 500), phone(SHOTS / "13-replay-phone.png", 520)
+    back, front = phone(SHOTS / "01-sign-in-phone.png", 500), phone(SHOTS / "13-shared-scene-phone.png", 520)
     spots = [(back, (712, 78)), (front, (930, 58))]
     for image, (x, y) in spots:
         shade.rounded_rectangle((x + 8, y + 18, x + image.width + 8, y + image.height + 18), radius=26, fill=(0, 0, 0, 140))
@@ -72,15 +72,15 @@ def main() -> None:
     left, width = 72, 600
     brand_mark(draw, left, 68, 1.6)
     draw.text((left + 58, 70), "inkling", font=font(serif, 40), fill=INK)
-    head = fit(draw, "Animate it anywhere.", serif, 66, width)
-    draw.text((left, 180), "Draw it once.", font=head, fill=INK)
-    draw.text((left, 180 + head.size + 8), "Animate it anywhere.", font=head, fill=MUTED)
+    head = fit(draw, "Hand AI the in-betweens.", serif, 66, width)
+    draw.text((left, 180), "Keep the pencil.", font=head, fill=INK)
+    draw.text((left, 180 + head.size + 8), "Hand AI the in-betweens.", font=head, fill=MUTED)
     body = font(sans, 30)
     y = 180 + 2 * head.size + 48
-    for line in ("AI drafts. You decide.", "Every stroke is remembered."):
+    for line in ("Choreography, not replacement.", "Every stroke has an author."):
         draw.text((left, y), line, font=body, fill=LIME)
         y += 42
-    draw.text((left, H - 78), "Find any frame by describing or doodling it.", font=font(sans, 22), fill=MUTED)
+    draw.text((left, H - 78), "Your sketchbook, remembered: find art by sketch or words.", font=font(sans, 22), fill=MUTED)
     draw.text((left, H - 46), "MongoDB Atlas \u00b7 Voyage AI \u00b7 Gemini", font=font(sans, 20), fill=MUTED)
     out = ROOT / "og.png"
     card.save(out, optimize=True)

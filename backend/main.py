@@ -21,7 +21,7 @@ from starlette.concurrency import run_in_threadpool
 from voyageai.error import VoyageError
 
 from backend import boot, director
-from backend.ai import AIError, AIUnavailable, Sparks
+from backend.ai import AIError, AIUnavailable, Sparks, clip_brief
 from backend.auth import DEMO_OWNER, SESSION_COOKIE, AuthError, AuthUnavailable, Budget, MStash, OpenAuth, Throttle, jwt_claims, service_owner
 from backend.library import Library, LibraryError, ink_crop, render_image
 from backend.models import (
@@ -359,6 +359,14 @@ async def copy_demo(request: Request) -> dict:
     return {"copied": copied, "library": await run_in_threadpool(production.counts)}
 
 
+@app.post("/api/library/starter")
+async def add_starter(request: Request) -> dict:
+    """The starter pack: ready-made assets copied into your library with their search vectors (no new AI calls)."""
+    production = prod(request)
+    added = await run_in_threadpool(production.add_starter, DEMO_OWNER)
+    return {"added": added, "library": await run_in_threadpool(production.counts)}
+
+
 @app.post(
     "/api/drawings",
     status_code=201,
@@ -535,9 +543,12 @@ async def create_clip(request: Request) -> dict:
         layers = [Layer.model_validate(layer) for layer in previous["layers"]] if previous else body.layers
         await run_in_threadpool(production.validate_clip_layers, layers)
         interaction, video = await run_in_threadpool(
-            request.app.state.ai.clip, layers, body.prompt, previous["interaction_id"] if previous else None)
+            request.app.state.ai.clip, layers, body.prompt, previous["interaction_id"] if previous else None,
+            starring=body.starring, backdrop=body.backdrop)
+        brief = body.prompt if previous else clip_brief(body.prompt, body.starring, body.backdrop)
         try:
-            return await run_in_threadpool(production.save_clip, layers, body.prompt, interaction, video, previous)
+            return await run_in_threadpool(production.save_clip, layers, body.prompt, interaction, video, previous,
+                                           brief=brief)
         except (ProductionError, LibraryError, CinematlasError, PyMongoError, VoyageError) as exc:
             logger.error("Could not save generated video (%s)", type(exc).__name__)
             raise HTTPException(503, "Video was generated but couldn't be saved. Gemini charges may still apply.") from exc

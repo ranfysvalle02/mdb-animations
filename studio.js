@@ -7,6 +7,18 @@
   const octx = overlay.getContext('2d');
   const W = canvas.width;
   const H = canvas.height;
+  // Crisp ink on retina screens: bitmaps follow the screen's pixel density (up to 2x), while every
+  // coordinate stays in the 1000 x 650 artwork space that is saved and rendered by the server.
+  const DENSITY = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
+  function hiRes(c) {
+    c.width = Math.round(W * DENSITY);
+    c.height = Math.round(H * DENSITY);
+    const g = c.getContext('2d');
+    g.setTransform(DENSITY, 0, 0, DENSITY, 0, 0);
+    return g;
+  }
+  hiRes(canvas);
+  hiRes(overlay);
   const MAX_STROKES = 1000;
   const MAX_POINTS = 20000;
   const MAX_LAYERS = 12;
@@ -15,7 +27,7 @@
   const TAG_PATTERN = /^[a-z0-9][a-z0-9 -]{0,29}$/;
   const TEXT_INPUTS = new Set(['text', 'search', 'email', 'url', 'tel', 'password', 'number']);
   const SHAPES = new Set(['line', 'rect', 'ellipse']);
-  const TOOL_KEYS = { b: 'pen', p: 'pen', e: 'eraser', l: 'line', r: 'rect', o: 'ellipse', m: 'move', v: 'move', s: 'spark' };
+  const TOOL_KEYS = { b: 'pen', p: 'pen', e: 'eraser', l: 'line', r: 'rect', o: 'ellipse', m: 'move', v: 'move', s: 'spark', k: 'stamp' };
   const MAX_FRAMES = 80;
 
   let layerSeq = 0;
@@ -29,6 +41,15 @@
   let onionSkin = true;
   let playing = null; // { at, timer }
   let motionDraft = null; // { spec, stacks, at, timer, paths } while a motion previews
+  // Takes: every AI attempt is kept side by side until the artist keeps one. Nothing touches the canvas before that.
+  let takes = []; // motion specs, in the order they arrived
+  let takeAt = -1;
+  let directing = false;
+  let currentClip = null;
+  let clipTakes = []; // AI video takes in this session (each one is already saved)
+  let targets = null; // the layers the box talks to (a Set of ids); null means everything that can move
+  let targetGlow = 0; // until when the canvas outlines them
+  let peeking = false; // while "hold to compare" is held, previews step aside to show the original
   let motionSeconds = 10;
   let sceneMotion = null; // the accepted direction behind this scene's frames, saved with the scene
   let showMath = false;
@@ -74,6 +95,10 @@
   let opacityBefore = null; // snapshot taken when an opacity drag starts
   let placing = null; // asset being placed: { id, version, name, strokes, bbox }
   let placeDraft = null; // the box being dragged for it
+  // The stamp brush: the artist's own art as a brush. { name, size, strokes centered on 0,0 in canvas px }
+  let stamp = null;
+  let stampHover = null; // where the ghost previews (mouse and pencil hover)
+  let stamping = null; // { layer, last, count } during a stamp drag
 
   const message = (id, text, error = false, actions = []) => {
     $(id).textContent = text;
@@ -134,15 +159,19 @@
       selection = null;
       placeDraft = null;
       moving = null;
+      stamping = null;
+      inkState = null;
     }
     return pointer !== null;
   }
 
   // ---------------------------------------------------------------- history
   const snapshot = () => ({ active: activeId, frame: frameIndex, frames: frames.map(copyStack) });
+  let redoBackup = []; // what the last pushUndo cleared, in case that step is called off (a two-finger tap)
   function pushUndo(state = snapshot()) {
     undoStack.push(state);
     if (undoStack.length > MAX_HISTORY) undoStack.shift();
+    redoBackup = redoStack.slice();
     redoStack.length = 0;
     revision++;
     updateControls();
@@ -180,8 +209,7 @@
     let sheet = layerCanvases.get(id);
     if (!sheet) {
       sheet = document.createElement('canvas');
-      sheet.width = W;
-      sheet.height = H;
+      hiRes(sheet);
       layerCanvases.set(id, sheet);
     }
     return sheet;
@@ -230,16 +258,14 @@
   }
   // ---------------------------------------------------------------- frames: rendering any stack, onion skin
   const scratch = document.createElement('canvas');
-  scratch.width = W;
-  scratch.height = H;
-  const sctx = scratch.getContext('2d');
+  const sctx = hiRes(scratch);
   function paintStack(c, stack) {
     for (const layer of stack) {
       if (!layer.visible) continue;
       sctx.clearRect(0, 0, W, H);
       layer.strokes.forEach(stroke => drawStroke(sctx, stroke));
       c.globalAlpha = layer.opacity;
-      c.drawImage(scratch, 0, 0);
+      c.drawImage(scratch, 0, 0, W, H);
     }
     c.globalAlpha = 1;
   }
@@ -287,7 +313,7 @@
     for (const layer of layers) {
       if (!layer.visible) continue;
       c.globalAlpha = layer.opacity;
-      c.drawImage(layerCanvas(layer.id), 0, 0);
+      c.drawImage(layerCanvas(layer.id), 0, 0, W, H);
     }
     c.globalAlpha = 1;
   }
@@ -311,6 +337,9 @@
     renderStarters();
   }
   function updateControls() {
+    // Ink on the page wakes up the "bring it to life" box.
+    document.body.classList.toggle('has-ink', !canvasIsBlank());
+    renderAuthorship();
     $('undo').disabled = !undoStack.length;
     $('redo').disabled = !redoStack.length;
     $('guide-controls').hidden = !guides.length;
@@ -413,7 +442,6 @@
       ...(layer.xf ? { xf: layer.xf, xfBase: layer.xfBase, xfStrokes: layer.xfStrokes } : {}), ...(layer.backdrop ? { backdrop: layer.backdrop } : {}) })));
     showFrame(frameIndex + 1);
     logEvent('artist', 'Added frame', `frame ${frameIndex + 1}, a copy of frame ${frameIndex}`);
-    markGuide('animate');
     if (saveKind !== 'shot' && !editing) setSaveKind('shot');
     if (frames.length === 2) {
       message('drawing-status', 'Frame 2 is a copy of frame 1 (the red ghost). Change what moves: draw, erase, or slide a layer with \u2725 Move (M).');
@@ -499,7 +527,7 @@
       name.className = 'layer-name';
       name.textContent = layer.name;
       name.dataset.tip = `${layer.name}|Click to draw on this layer. Double-click to rename it.`;
-      name.addEventListener('click', () => { activeId = layer.id; renderLayersPanel(); });
+      name.addEventListener('click', event => { activeId = layer.id; followSelection(layer.id, event.shiftKey); renderLayersPanel(); });
       name.addEventListener('dblclick', () => renameLayer(layer, item, name));
       if (layer.asset) {
         // A layer placed from a library asset: "Where used" finds this shot by exact link.
@@ -522,9 +550,11 @@
     $('layer-delete').disabled = layers.length === 1;
     $('layer-add').disabled = layers.length >= MAX_LAYERS;
     $('layer-copy').disabled = layers.length >= MAX_LAYERS;
+    $('layer-brush').disabled = !activeLayer().strokes.some(stroke => !stroke.erase);
     $('layers-count').textContent = String(layers.length);
     renderSaveKind(); // the shot panel lists placed assets, which undo/delete can change
     updateHud();
+    renderWho();
   }
   function renameLayer(layer, item, nameButton) {
     const input = document.createElement('input');
@@ -562,23 +592,6 @@
     layers.splice(layers.indexOf(activeLayer()) + 1, 0, layer);
     activeId = layer.id;
     rebuildAll();
-  });
-  $('layer-copy').addEventListener('click', () => {
-    const source = activeLayer();
-    if (layers.length >= MAX_LAYERS || allStrokes().length + source.strokes.length > MAX_STROKES
-      || pointCount + countPoints(source.strokes) > MAX_POINTS) {
-      message('drawing-status', 'Duplicating this layer would exceed the canvas limits.', true);
-      return;
-    }
-    pushUndo();
-    const copy = newLayer(`${source.name.slice(0, 33)} copy`, { visible: source.visible, opacity: source.opacity,
-      strokes: source.strokes.map(stroke => ({ ...stroke, points: stroke.points.map(point => ({ ...point })) })),
-      asset: source.asset ? { ...source.asset } : null, ...(source.backdrop ? { backdrop: source.backdrop } : {}) });
-    layers.splice(layers.indexOf(source) + 1, 0, copy);
-    activeId = copy.id;
-    recount();
-    rebuildAll();
-    message('drawing-status', `Duplicated "${source.name}". Move or edit the copy.`);
   });
   $('layer-delete').addEventListener('click', () => {
     if (layers.length === 1) return;
@@ -626,24 +639,71 @@
       y: Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height))
     };
   }
-  function appendPoint(event) {
+  // The ink engine. Raw input is steadied (a light stabilizer), drawn as smooth curves through the
+  // midpoints of the samples, and tapered like a brush pen. What's saved is still plain points, so the
+  // server renders every stroke exactly like the canvas does.
+  let inkState = null; // { pen, stab, base, from, ctrl, n } for the stroke being drawn (never saved)
+  const inkDist = (a, b) => Math.hypot((a.x - b.x) * W, (a.y - b.y) * H);
+  function pushInk(point) {
     if (pointCount >= MAX_POINTS) {
       message('drawing-status', 'This canvas has reached 20,000 points. Save it or undo a stroke to continue.', true);
-      return;
+      return false;
     }
     const previous = active.points[active.points.length - 1];
-    const at = normPoint(event);
-    let pressure = event.pointerType === 'pen' ? event.pressure : 0.5;
-    if (event.pointerType !== 'pen' && previous) {
-      // Fingers and mice have no pressure: quick flicks thin out and slow lines swell, like a brush pen.
-      const speed = Math.hypot((at.x - previous.x) * W, (at.y - previous.y) * H);
-      pressure = previous.pressure * 0.75 + Math.max(0.3, 0.62 - speed / 70) * 0.25;
-    }
-    const point = { ...at, pressure };
     active.points.push(point);
     pointCount++;
     const c = layerCanvas(activeStrokeLayer.id).getContext('2d');
     withMode(c, active, () => paintPoint(c, active, point, previous));
+    return true;
+  }
+  function curveTo(a, control, b) {
+    const steps = Math.max(1, Math.ceil((inkDist(a, control) + inkDist(control, b)) / 2.5));
+    for (let i = 1; i <= steps; i++) {
+      const t = i / steps, u = 1 - t;
+      if (!pushInk({ x: u * u * a.x + 2 * u * t * control.x + t * t * b.x, y: u * u * a.y + 2 * u * t * control.y + t * t * b.y,
+        pressure: a.pressure + (b.pressure - a.pressure) * t })) return;
+    }
+  }
+  function appendPoint(event) {
+    const raw = normPoint(event);
+    if (!inkState) {
+      const pen = event.pointerType === 'pen';
+      const base = pen ? Math.max(0.05, event.pressure || 0.5) : 0.5;
+      const first = { ...raw, pressure: pen ? base : base * 0.55 };
+      inkState = { pen, stab: first, base, from: first, ctrl: null, n: 1 };
+      pushInk(first);
+      scheduleComposite();
+      return;
+    }
+    // Steady hands for everyone: mice and fingers get more smoothing than a pencil.
+    const pull = inkState.pen ? 0.7 : 0.45;
+    const at = { x: inkState.stab.x + (raw.x - inkState.stab.x) * pull, y: inkState.stab.y + (raw.y - inkState.stab.y) * pull };
+    const step = inkDist(at, inkState.stab);
+    if (step < 0.8) return;
+    // A pencil's pressure is smoothed; fingers and mice get a brush-pen feel: slow lines swell, flicks thin out.
+    inkState.base = inkState.pen ? inkState.base * 0.4 + Math.max(0.05, event.pressure || inkState.base) * 0.6
+      : inkState.base * 0.75 + Math.max(0.3, 0.62 - step / 70) * 0.25;
+    inkState.n++;
+    const point = { ...at, pressure: Math.min(1, inkState.pen ? inkState.base : inkState.base * Math.min(1, 0.55 + inkState.n * 0.09)) };
+    inkState.stab = point;
+    if (!inkState.ctrl) { inkState.ctrl = point; return; }
+    const to = { x: (inkState.ctrl.x + point.x) / 2, y: (inkState.ctrl.y + point.y) / 2, pressure: (inkState.ctrl.pressure + point.pressure) / 2 };
+    curveTo(inkState.from, inkState.ctrl, to);
+    inkState.from = to;
+    inkState.ctrl = point;
+    scheduleComposite();
+  }
+  function endInk() {
+    if (!inkState || !active) { inkState = null; return; }
+    if (inkState.ctrl) curveTo(inkState.from, { x: (inkState.from.x + inkState.ctrl.x) / 2, y: (inkState.from.y + inkState.ctrl.y) / 2, pressure: inkState.ctrl.pressure }, inkState.ctrl);
+    const points = active.points;
+    if (!inkState.pen && points.length > 6) {
+      // Finger and mouse strokes lift off like a brush: the last few points thin out.
+      const k = Math.min(12, Math.floor(points.length / 3));
+      for (let i = 0; i < k; i++) points[points.length - 1 - i].pressure *= 0.3 + 0.7 * (i / k);
+      renderLayer(activeStrokeLayer);
+    }
+    inkState = null;
     scheduleComposite();
   }
   function canDrawOn(layer) {
@@ -698,12 +758,24 @@
         return;
       }
       activeId = target.id;
+      followSelection(target.id, event.shiftKey);
       renderLayersPanel();
       const b = inkBounds(target.strokes);
       pointer = event.pointerId;
       canvas.setPointerCapture(pointer);
       moving = { layer: target, start: point, original: target.strokes, bounds: pointBounds(target.strokes), mode: scaling ? 'scale' : 'move',
         center: { x: b.x + b.w / 2, y: b.y + b.h / 2 }, before: snapshot(), changed: false };
+      return;
+    }
+    if (tool === 'stamp' && stamp) {
+      const layer = inkTarget();
+      if (!canDrawOn(layer)) return;
+      pointer = event.pointerId;
+      canvas.setPointerCapture(pointer);
+      pushUndo();
+      stamping = { layer, last: point, count: 0 };
+      stampHover = null;
+      placeStamp(point, false);
       return;
     }
     const layer = tool === 'eraser' ? activeLayer() : inkTarget();
@@ -721,6 +793,7 @@
     activeStart = performance.now();
     activeStrokeLayer = layer;
     layer.strokes.push(active);
+    inkState = null;
     appendPoint(event);
   });
   canvas.addEventListener('pointermove', event => {
@@ -763,6 +836,13 @@
       shapeDraft.end = normPoint(event);
       shapeDraft.shift = event.shiftKey;
       renderOverlay();
+    } else if (stamping) {
+      // A trail of stamps, one per stamp-width, like a scatter brush.
+      const point = normPoint(event);
+      if (Math.hypot((point.x - stamping.last.x) * W, (point.y - stamping.last.y) * H) >= Math.max(12, stampSize() * 0.8)) {
+        stamping.last = point;
+        placeStamp(point, true);
+      }
     } else if (active) {
       const samples = event.getCoalescedEvents?.();
       for (const sample of samples?.length ? samples : [event]) appendPoint(sample);
@@ -802,12 +882,17 @@
       renderOverlay();
       if (stroke) stroke.ms = Math.round(performance.now() - shapeDraft.t0);
       if (stroke && commitStrokes([stroke])) handStrokes++;
+    } else if (stamping) {
+      const { count } = stamping;
+      stamping = null;
+      if (count) logEvent('artist', 'Stamped', `${count} \u00d7 ${stamp.name}`);
+      renderLayersPanel();
     } else if (active) {
+      endInk();
       active.ms = Math.min(3_600_000, Math.round(performance.now() - activeStart));
       active = null;
       activeStrokeLayer = null;
       renderLayersPanel();
-      markGuide('draw');
     }
   }
   canvas.addEventListener('pointerup', finish);
@@ -821,6 +906,84 @@
     finish(event);
   });
   canvas.addEventListener('lostpointercapture', finish);
+
+  // Two fingers tap to undo, three to redo (like the drawing apps artists already know). A stroke the
+  // first finger started is called off, so the gesture never leaves a mark.
+  const touches = new Map();
+  let gesture = null;
+  function callOff() {
+    if (pointer !== null && canvas.hasPointerCapture(pointer)) canvas.releasePointerCapture(pointer);
+    const started = active || stamping || moving?.changed;
+    if (active) handStrokes = Math.max(0, handStrokes - 1);
+    pointer = null;
+    active = null;
+    activeStrokeLayer = null;
+    inkState = null;
+    stamping = null;
+    moving = null;
+    shapeDraft = null;
+    selection = null;
+    placeDraft = null;
+    if (started && undoStack.length) {
+      restore(undoStack.pop());
+      redoStack.splice(0, redoStack.length, ...redoBackup);
+      updateControls();
+    } else renderOverlay();
+  }
+  canvas.addEventListener('pointerdown', event => {
+    if (event.pointerType !== 'touch') return;
+    touches.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    if (touches.size < 2) return;
+    if (!gesture) { gesture = { fingers: touches.size, t0: performance.now(), moved: false }; callOff(); }
+    else gesture.fingers = Math.max(gesture.fingers, touches.size);
+  });
+  canvas.addEventListener('pointermove', event => {
+    const start = touches.get(event.pointerId);
+    if (gesture && start && Math.hypot(event.clientX - start.x, event.clientY - start.y) > 14) gesture.moved = true;
+  });
+  const touchUp = event => {
+    if (!touches.delete(event.pointerId) || !gesture || touches.size) return;
+    const tap = !gesture.moved && performance.now() - gesture.t0 < 400;
+    if (tap && gesture.fingers === 2 && undoStack.length) { undo(); flashTray('\u21b6 Undo \u00b7 two-finger tap'); }
+    else if (tap && gesture.fingers >= 3 && redoStack.length) { redo(); flashTray('\u21b7 Redo \u00b7 three-finger tap'); }
+    gesture = null;
+  };
+  canvas.addEventListener('pointerup', touchUp);
+  canvas.addEventListener('pointercancel', touchUp);
+
+  // A live brush ring under the mouse or pencil: the exact size and color of the next line.
+  const brushCursor = $('brush-cursor');
+  function placeBrushCursor(x, y) {
+    const rect = canvas.getBoundingClientRect();
+    const frame = $('canvas-frame').getBoundingClientRect();
+    const size = Math.max(4, Number($('width').value) * rect.width / W);
+    brushCursor.style.setProperty('--size', `${size}px`);
+    brushCursor.style.setProperty('--ink', tool === 'eraser' ? '#64748b' : $('ink').value);
+    brushCursor.style.transform = `translate(${x - frame.left - size / 2}px, ${y - frame.top - size / 2}px)`;
+  }
+  const inkTool = () => tool === 'pen' || tool === 'eraser';
+  function showBrush(on) {
+    brushCursor.hidden = !on;
+    $('canvas-frame').classList.toggle('brushing', on); // the ring replaces the arrow, never leaves you cursorless
+  }
+  canvas.addEventListener('pointermove', event => {
+    if (event.pointerType === 'touch' || !inkTool() || playing || motionDraft) { showBrush(false); return; }
+    showBrush(true);
+    brushCursor.classList.toggle('erasing', tool === 'eraser');
+    placeBrushCursor(event.clientX, event.clientY);
+  });
+  canvas.addEventListener('pointerleave', () => showBrush(false));
+  // Dragging the size slider previews the brush in the middle of the paper.
+  let sizePreview = null;
+  $('width').addEventListener('input', () => {
+    if (!inkTool()) return;
+    const rect = canvas.getBoundingClientRect();
+    showBrush(true);
+    brushCursor.classList.add('preview');
+    placeBrushCursor(rect.left + rect.width / 2, rect.top + rect.height / 2);
+    clearTimeout(sizePreview);
+    sizePreview = setTimeout(() => { showBrush(false); brushCursor.classList.remove('preview'); }, 700);
+  });
 
   function shapeStroke({ tool: kind, start, end, shift }) {
     let x0 = start.x * W;
@@ -875,7 +1038,6 @@
     recount();
     composite();
     renderLayersPanel();
-    markGuide('draw');
     return true;
   }
 
@@ -898,8 +1060,422 @@
     return { x, y, w, h };
   }
 
+  // ---------------------------------------------------------------- your hand, always visible
+  // Who made what, live: strokes by the artist's hand vs. AI drafts they accepted. Never a black box.
+  function renderAuthorship() {
+    const counts = madeBy([layers]);
+    const ai = counts.ai + counts.placedAi;
+    const mine = counts.hand + counts.placed - counts.placedAi;
+    const total = mine + ai + counts.kit;
+    const meter = $('authorship');
+    meter.hidden = !total;
+    if (!total) return;
+    const pct = n => Math.round(n / total * 100);
+    meter.textContent = !mine && !ai ? '\ud83e\udde9 Kit lines \u00b7 your turn \u270d'
+      : `\u270d ${pct(mine)}% your hand${ai ? ` \u00b7 \u2726 ${pct(ai)}% AI` : ''}${counts.kit ? ` \u00b7 ${pct(counts.kit)}% kit` : ''}`;
+    meter.classList.toggle('pure', !ai);
+  }
+  $('authorship').addEventListener('click', () => $('breakdown-open').click());
+
+  // ---------------------------------------------------------------- copy, paste, duplicate: plain computer superpowers
+  const CLIP_KEY = 'inkling.clipboard.v1';
+  let clipboard = (() => { try { return JSON.parse(localStorage.getItem(CLIP_KEY) || 'null'); } catch { return null; } })();
+  const cloneStroke = stroke => ({ ...stroke, points: stroke.points.map(point => ({ ...point })) });
+  function setClipboard(item) {
+    clipboard = item;
+    try { localStorage.setItem(CLIP_KEY, JSON.stringify(item)); } catch { /* too big to keep across tabs; this tab still has it */ }
+  }
+  function clipboardActions() {
+    return [{ label: 'Paste', tip: 'Paste \u00b7 Cmd/Ctrl+V', run: pasteClipboard },
+      { label: '\ud83d\udd8c Use as brush', tip: 'Stamp brush|Your own art as a brush. Tap to stamp, drag to scatter.', run: brushFromClipboard }];
+  }
+  function copyLayer() {
+    const layer = activeLayer();
+    if (!layer.strokes.some(stroke => !stroke.erase)) { flashTray('Nothing to copy on this layer yet.'); return; }
+    setClipboard({ name: layer.name, strokes: layer.strokes.map(cloneStroke), link: layer.asset ? { ...layer.asset } : null });
+    message('drawing-status', `Copied \u201c${layer.name}\u201d. It's yours to reuse, as a copy or as a brush.`, false, clipboardActions());
+  }
+  function copyAsset(item) {
+    setClipboard({ name: item.name, item: { id: item.id, name: item.name, type: item.type, version: item.version } });
+    message('drawing-status', `Copied \u201c${item.name}\u201d. Paste places it (linked, so it knows where it's used).`, false, clipboardActions());
+    showTop();
+  }
+  // A pasted layer lands a little down and right, like any design app, then Move is ready to drag it.
+  function pasteStrokes(name, strokes, link = null) {
+    const bounds = pointBounds(strokes);
+    if (!bounds) return;
+    const dx = Math.min(0.03, 1 - bounds.x1), dy = Math.min(0.03, 1 - bounds.y1);
+    const total = countPoints(strokes);
+    if (layers.length >= MAX_LAYERS || allStrokes().length + strokes.length > MAX_STROKES || pointCount + total > MAX_POINTS) {
+      message('drawing-status', 'That would exceed the canvas limits. Delete a layer or undo a few strokes first.', true);
+      return;
+    }
+    pushUndo();
+    const copy = newLayer(`${name.slice(0, 33)} copy`, { asset: link ? { ...link } : null,
+      strokes: strokes.map(stroke => ({ ...cloneStroke(stroke), seq: nextSeq(),
+        points: stroke.points.map(point => ({ ...point, x: point.x + dx, y: point.y + dy })) })) });
+    layers.splice(layers.indexOf(activeLayer()) + 1, 0, copy);
+    activeId = copy.id;
+    recount();
+    rebuildAll();
+    logEvent('artist', 'Pasted', copy.name);
+    setTool('move');
+    flashTray(`Pasted \u201c${copy.name}\u201d. Drag it into place, or pull its corner to resize.`);
+  }
+  function pasteClipboard() {
+    if (!clipboard) { flashTray('Copy something first: Cmd/Ctrl+C copies the layer you\u2019re on.'); return; }
+    if (clipboard.item) { showTop(); startPlacing(clipboard.item); return; }
+    pasteStrokes(clipboard.name, clipboard.strokes, clipboard.link);
+  }
+  function duplicateLayer() {
+    const layer = activeLayer();
+    if (!layer.strokes.length) { flashTray('Nothing to duplicate on this layer yet.'); return; }
+    pasteStrokes(layer.name, layer.strokes, layer.asset);
+  }
+  $('layer-copy').addEventListener('click', duplicateLayer);
+  const showTop = () => { setFocus(false); $('canvas-frame').scrollIntoView({ behavior: 'smooth', block: 'center' }); };
+
+  // ---------------------------------------------------------------- the stamp brush: your art, multiplied (no AI)
+  const stampSize = () => 24 * Number($('width').value);
+  function makeStamp(name, strokes) {
+    const ink = strokes.filter(stroke => !stroke.erase && stroke.points.length);
+    const b = pointBounds(ink);
+    if (!b) return null;
+    const cx = (b.x0 + b.x1) / 2 * W, cy = (b.y0 + b.y1) / 2 * H;
+    // A brush must stay light: very detailed art is thinned to ~800 points per stamp.
+    const step = Math.max(1, Math.ceil(countPoints(ink) / 800));
+    return {
+      name: name.slice(0, 40),
+      size: Math.max((b.x1 - b.x0) * W, (b.y1 - b.y0) * H, 4),
+      strokes: ink.map(stroke => {
+        const points = stroke.points.filter((_, i) => i % step === 0 || i === stroke.points.length - 1);
+        return { color: stroke.color, width: stroke.width, fill: stroke.fill || null, ai: !!stroke.ai, kit: !!stroke.kit,
+          points: points.map(p => ({ x: p.x * W - cx, y: p.y * H - cy, pressure: p.pressure ?? 0.75 })) };
+      })
+    };
+  }
+  // Scaled to the brush size; a dragged trail gets a touch of natural wobble in size and angle.
+  function stampStrokes(at, scatter) {
+    const k = stampSize() / stamp.size * (scatter ? 0.88 + Math.random() * 0.24 : 1);
+    const angle = scatter ? (Math.random() - 0.5) * 0.35 : 0;
+    const cos = Math.cos(angle), sin = Math.sin(angle);
+    const clamp = v => Math.max(0, Math.min(1, v));
+    const ink = stamp.tint ? $('ink').value : null;
+    return stamp.strokes.map(({ ai, kit, ...stroke }) => ({
+      ...stroke, erase: false, width: Math.max(1, Math.min(40, Math.round(stroke.width * k * 10) / 10)),
+      ...(ink ? { color: ink, fill: stroke.fill ? ink : null } : {}),
+      ...(ai ? { ai: true } : {}), ...(kit ? { kit: true } : {}), // provenance travels with the art
+      points: stroke.points.map(p => ({ x: clamp((p.x * cos - p.y * sin) * k / W + at.x), y: clamp((p.x * sin + p.y * cos) * k / H + at.y), pressure: p.pressure }))
+    }));
+  }
+  function placeStamp(at, scatter) {
+    const list = stampStrokes(at, scatter);
+    if (allStrokes().length + list.length > MAX_STROKES || pointCount + countPoints(list) > MAX_POINTS) {
+      flashTray('Canvas limit reached. Save it, or undo a few stamps.', true);
+      return;
+    }
+    const layer = stamping.layer;
+    for (const stroke of list) stroke.seq = nextSeq();
+    layer.strokes.push(...list);
+    const c = layerCanvas(layer.id).getContext('2d');
+    list.forEach(stroke => drawStroke(c, stroke));
+    stamping.count++;
+    recount();
+    scheduleComposite();
+  }
+  function drawStampIcon(icon = $('stamp-icon'), source = stamp) {
+    const c = icon.getContext('2d');
+    c.clearRect(0, 0, icon.width, icon.height);
+    const k = icon.width * 0.82 / source.size;
+    c.save();
+    c.translate(icon.width / 2, icon.height / 2);
+    for (const stroke of source.strokes) {
+      const tint = $('ink').value;
+      const color = source.tint ? tint : stroke.color;
+      if (stroke.fill) {
+        c.fillStyle = source.tint ? tint : stroke.fill;
+        c.beginPath();
+        stroke.points.forEach((p, i) => (i ? c.lineTo(p.x * k, p.y * k) : c.moveTo(p.x * k, p.y * k)));
+        c.closePath();
+        c.fill();
+      }
+      c.strokeStyle = color;
+      c.lineWidth = Math.max(1, stroke.width * k);
+      c.lineCap = c.lineJoin = 'round';
+      c.beginPath();
+      stroke.points.forEach((p, i) => (i ? c.lineTo(p.x * k, p.y * k) : c.moveTo(p.x * k, p.y * k)));
+      if (stroke.points.length === 1) c.lineTo(stroke.points[0].x * k + 0.1, stroke.points[0].y * k);
+      c.stroke();
+    }
+    c.restore();
+  }
+  function useAsBrush(name, strokes) {
+    const made = makeStamp(name, strokes);
+    if (!made) { flashTray('Nothing to make a brush from yet.', true); return; }
+    myBrush = made;
+    selectStamp(made, `\ud83d\udd8c \u201c${made.name}\u201d is your brush. Tap to stamp, drag to scatter. The size slider (or [ ]) sets its size.`);
+    logEvent('artist', 'Made a brush', made.name);
+  }
+  function selectStamp(made, tip) {
+    stamp = made;
+    drawStampIcon();
+    const button = document.querySelector('.tool[data-tool="stamp"]');
+    button.hidden = false;
+    button.setAttribute('aria-label', `Stamp brush: ${stamp.name}`);
+    button.classList.remove('fresh');
+    void button.offsetWidth;
+    button.classList.add('fresh');
+    setTool('stamp');
+    flashTray(tip);
+    renderKit();
+  }
+  async function brushFromClipboard() {
+    if (!clipboard) return;
+    if (!clipboard.item) { showTop(); useAsBrush(clipboard.name, clipboard.strokes); return; }
+    await brushFromAsset(clipboard.item);
+  }
+  async function brushFromAsset(item) {
+    try {
+      const record = await api(`/api/assets/${encodeURIComponent(item.id)}`);
+      showTop();
+      useAsBrush(item.name, record.layers.filter(layer => layer.visible !== false).flatMap(layer => layer.strokes));
+    } catch (error) {
+      message('drawing-status', error.message, true);
+    }
+  }
+  $('layer-brush').addEventListener('click', () => { const layer = activeLayer(); useAsBrush(layer.name, layer.strokes); });
+  canvas.addEventListener('pointermove', event => {
+    if (tool !== 'stamp' || !stamp || pointer !== null || event.pointerType === 'touch') return;
+    stampHover = normPoint(event);
+    renderOverlay();
+  });
+  canvas.addEventListener('pointerleave', () => { if (stampHover) { stampHover = null; renderOverlay(); } });
+
+  // ---------------------------------------------------------------- the kit: shapes, figures, and brushes to build on
+  // Plain geometry, drawn in your ink color. Tap to stamp, drag to scatter. Marked as kit, never as your hand.
+  let myBrush = null;
+  const arc = (cx, cy, rx, ry = rx, n = 40, from = 0, to = Math.PI * 2) =>
+    Array.from({ length: n + 1 }, (_, i) => { const t = from + (to - from) * i / n; return [cx + rx * Math.cos(t), cy + ry * Math.sin(t)]; });
+  const path = (...pts) => pts;
+  const KIT = [
+    { id: 'star', name: 'Star', group: 'Brushes', make: () => [{ fill: true, pts: Array.from({ length: 11 }, (_, i) => {
+      const r = i % 2 ? 22 : 50, t = -Math.PI / 2 + i * Math.PI / 5; return [r * Math.cos(t), r * Math.sin(t)]; }) }] },
+    { id: 'heart', name: 'Heart', group: 'Brushes', make: () => [{ fill: true, pts: Array.from({ length: 49 }, (_, i) => {
+      const t = i / 48 * Math.PI * 2; return [3 * 16 * Math.sin(t) ** 3, -3 * (13 * Math.cos(t) - 5 * Math.cos(2 * t) - 2 * Math.cos(3 * t) - Math.cos(4 * t))]; }) }] },
+    { id: 'leaf', name: 'Leaf', group: 'Brushes', make: () => [
+      { pts: [...arc(0, 26, 56, 56, 16, -Math.PI * 0.75, -Math.PI * 0.25), ...arc(0, -26, 56, 56, 16, Math.PI * 0.25, Math.PI * 0.75)] },
+      { width: 3, pts: path([-52, 8], [-40, 0], [38, 0]) }, { width: 2, pts: path([-12, 0], [2, -12]) }, { width: 2, pts: path([10, 0], [22, 10]) }] },
+    { id: 'cloud', name: 'Cloud', group: 'Brushes', make: () => [{ pts: [...arc(-30, 6, 22, 22, 14, Math.PI * 0.5, Math.PI * 1.5), ...arc(-6, -12, 28, 28, 14, Math.PI, Math.PI * 2),
+      ...arc(28, 0, 24, 24, 14, -Math.PI * 0.5, Math.PI * 0.5), [-30, 28]] }] },
+    { id: 'grass', name: 'Grass', group: 'Brushes', make: () => [-24, -10, 4, 18, 30].map((x, i) => ({ width: 4,
+      pts: Array.from({ length: 9 }, (_, j) => [x + (j / 8) ** 2 * (i % 2 ? 14 : -12), 40 - j * (9 + (i % 3) * 1.5)]) })) },
+    { id: 'sparkle', name: 'Sparkle', group: 'Brushes', make: () => [{ fill: true, pts: Array.from({ length: 41 }, (_, i) => {
+      const t = i / 40 * Math.PI * 2; return [50 * Math.cos(t) ** 3, 50 * Math.sin(t) ** 3]; }) }] },
+    { id: 'flower', name: 'Flower', group: 'Brushes', make: () => [
+      ...[0, 1, 2, 3, 4].map(i => { const t = -Math.PI / 2 + i * Math.PI * 2 / 5; return { pts: arc(Math.cos(t) * 26, Math.sin(t) * 26, 18, 18, 20) }; }),
+      { fill: true, pts: arc(0, 0, 11, 11, 18) }] },
+    { id: 'drop', name: 'Drop', group: 'Brushes', make: () => [{ fill: true, pts: [[0, -50], ...arc(0, 14, 30, 30, 24, -Math.PI * 0.15, Math.PI * 1.15), [0, -50]] }] },
+    { id: 'bubbles', name: 'Bubbles', group: 'Brushes', make: () => [{ pts: arc(-14, 10, 26, 26, 30) }, { pts: arc(26, -18, 15, 15, 22) }, { pts: arc(24, 26, 9, 9, 16) }] },
+    { id: 'wave', name: 'Wave', group: 'Brushes', make: () => [{ width: 5, pts: Array.from({ length: 41 }, (_, i) => [-60 + i * 3, 14 * Math.sin(i / 40 * Math.PI * 4)]) }] },
+    { id: 'figure', name: 'Figure', group: 'Figures', make: () => [{ pts: arc(0, -46, 13, 13, 24) }, { pts: path([0, -33], [0, 12]) },
+      { pts: path([-28, -8], [0, -22], [28, -8]) }, { pts: path([-20, 52], [0, 12], [20, 52]) }] },
+    { id: 'house', name: 'House', group: 'Figures', make: () => [{ pts: path([-40, -4], [-40, 46], [40, 46], [40, -4]) }, { pts: path([-50, 2], [0, -46], [50, 2]) },
+      { pts: path([-10, 46], [-10, 18], [10, 18], [10, 46]) }] },
+    { id: 'tree', name: 'Tree', group: 'Figures', make: () => [{ pts: path([-6, 50], [-6, 10]) }, { pts: path([6, 50], [6, 10]) },
+      { pts: [...arc(-20, -6, 20, 20, 12, Math.PI * 0.5, Math.PI * 1.4), ...arc(0, -30, 24, 24, 14, Math.PI * 1.1, Math.PI * 1.9), ...arc(20, -6, 20, 20, 12, -Math.PI * 0.4, Math.PI * 0.5), [-20, 14]] }] },
+    { id: 'mountain', name: 'Mountain', group: 'Figures', make: () => [{ pts: path([-60, 36], [-18, -30], [2, -4], [20, -36], [60, 36]) }, { pts: path([-30, -12], [-18, -30], [-8, -14]) }] },
+    { id: 'sun', name: 'Sun', group: 'Figures', make: () => [{ fill: true, pts: arc(0, 0, 22, 22, 32) },
+      ...Array.from({ length: 8 }, (_, i) => { const t = i * Math.PI / 4; return { pts: path([Math.cos(t) * 32, Math.sin(t) * 32], [Math.cos(t) * 48, Math.sin(t) * 48]) }; })] },
+    { id: 'face', name: 'Face', group: 'Figures', make: () => [{ pts: arc(0, 0, 46, 46, 40) }, { fill: true, pts: arc(-16, -10, 5, 5, 12) },
+      { fill: true, pts: arc(16, -10, 5, 5, 12) }, { pts: arc(0, 6, 22, 18, 16, Math.PI * 0.15, Math.PI * 0.85) }] }
+  ];
+  function kitStamp(item) {
+    const strokes = item.make().map(({ pts, fill, width }) => ({ color: '#123b38', width: width ?? 4, fill: fill ? '#123b38' : null, kit: true,
+      points: pts.map(([x, y]) => ({ x, y, pressure: 0.75 })) }));
+    const xs = strokes.flatMap(s => s.points.map(p => p.x)), ys = strokes.flatMap(s => s.points.map(p => p.y));
+    return { name: item.name, tint: true, size: Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)), strokes };
+  }
+  function kitButton(made, onPick, label = made.name) {
+    const button = el('button', 'kit-item');
+    button.type = 'button';
+    button.setAttribute('aria-pressed', String(stamp?.name === made.name && stamp?.tint === made.tint));
+    const icon = document.createElement('canvas');
+    icon.width = icon.height = 56;
+    drawStampIcon(icon, made);
+    button.append(icon, el('span', '', label));
+    button.addEventListener('click', onPick);
+    return button;
+  }
+  function renderKit() {
+    const groups = ['Brushes', 'Figures'].map(group => {
+      const wrap = el('div', 'kit-group');
+      wrap.append(el('p', 'kit-label', group));
+      const grid = el('div', 'kit-grid');
+      grid.append(...KIT.filter(item => item.group === group).map(item => {
+        const made = kitStamp(item);
+        return kitButton(made, () => { closeKit(); selectStamp(made, `${made.name}: tap to stamp, drag to scatter. Uses your ink color; [ ] sets the size.`); });
+      }));
+      wrap.append(grid);
+      return wrap;
+    });
+    const mine = el('div', 'kit-group');
+    mine.append(el('p', 'kit-label', 'Yours'));
+    if (myBrush) {
+      const grid = el('div', 'kit-grid');
+      grid.append(kitButton(myBrush, () => { closeKit(); selectStamp(myBrush, `\ud83d\udd8c \u201c${myBrush.name}\u201d: tap to stamp, drag to scatter.`); }));
+      mine.append(grid);
+    }
+    mine.append(el('p', 'kit-hint', myBrush ? 'Make another: Layers \u203a \ud83d\udd8c Brush, or \ud83d\udd8c Brush on any asset card.'
+      : 'Any drawing can be a brush: Layers \u203a \ud83d\udd8c Brush, or \ud83d\udd8c Brush on an asset card.'));
+    $('kit-body').replaceChildren(...groups, mine);
+  }
+  function openKit() {
+    closeNudge();
+    renderKit();
+    $('kit').hidden = false;
+    $('kit').classList.remove('dealt');
+    void $('kit').offsetWidth;
+    $('kit').classList.add('dealt');
+    document.querySelector('.stamp-tool').setAttribute('aria-expanded', 'true');
+  }
+  function closeKit() {
+    $('kit').hidden = true;
+    document.querySelector('.stamp-tool').setAttribute('aria-expanded', 'false');
+  }
+  function toggleKit() { $('kit').hidden ? openKit() : closeKit(); }
+  drawStampIcon($('stamp-icon'), kitStamp(KIT[0])); // the toolbar shows a star until a brush is picked
+  $('kit-close').addEventListener('click', closeKit);
+  $('kit').addEventListener('keydown', event => { if (event.key === 'Escape') { event.stopPropagation(); closeKit(); } });
+
+  // ---------------------------------------------------------------- the magic wand: a nudge into flow
+  // Free and instant: a playful prompt and a creative rule, or a "what if" for a drawing in progress.
+  // AI is one optional tap away, and the artist's hand still does the drawing.
+  const NUDGE_SUBJECTS = ['a sleepy dragon', 'a robot learning to dance', 'a cat astronaut', 'a tiny house on a giant turtle',
+    'a cactus who wants a hug', 'a fox in a raincoat', 'a lighthouse that is afraid of the dark', 'a snail racing a rocket',
+    'a cloud having a bad day', 'a whale in a teacup', 'a knight made of fruit', 'an octopus barista', 'a mushroom village',
+    'a dog flying a kite', 'a monster who loves gardening', 'a bicycle with wings', 'a penguin on vacation',
+    'a bear knitting a scarf', 'a tree full of lanterns', 'the moon, fishing for stars'];
+  const NUDGE_TWISTS = ['guarding a single cookie', 'at sunrise', 'in the middle of a storm', 'meeting a new friend',
+    'on its very first day', 'who just won a prize', 'hiding from the rain', 'seen from far, far away', 'up close and dramatic',
+    'in the year 3000'];
+  const NUDGE_RULES = ['Rule: draw the first line without lifting your pen.', 'Rule: only three colors.', 'Rule: twelve strokes or fewer.',
+    'Rule: start with one big circle.', 'Rule: exaggerate one feature.', 'Rule: no erasing. Every mark stays.',
+    'Rule: use the thickest brush for everything.', 'Rule: draw the shadow first.', 'Rule: give it a backdrop with just three lines.',
+    'Rule: draw it fast, then draw it again slowly.'];
+  const NUDGE_NEXT = ['Give it a friend who is its total opposite.', 'What is the weather doing? Draw it.',
+    'Add something tiny in the background that tells a story.', 'Make one thing much bigger than it should be.',
+    'What is it holding? What is it afraid of?', 'Draw where it lives.', 'Add motion lines: where is it going?',
+    'Copy it, paste it, and make the copy different.', 'Turn your favorite part into a brush and scatter it.',
+    'What happens next? Flipbook it.'];
+  const pick = list => list[Math.floor(Math.random() * list.length)];
+  let nudge = null; // { prompt, rule, fresh }
+  let flowSeconds = 120;
+  function dealNudge() {
+    const fresh = !hasInk();
+    let prompt;
+    do { prompt = fresh ? `Draw ${pick(NUDGE_SUBJECTS)} ${pick(NUDGE_TWISTS)}.` : pick(NUDGE_NEXT); } while (nudge && prompt === nudge.prompt);
+    nudge = { prompt, rule: fresh ? pick(NUDGE_RULES) : '', fresh };
+    $('nudge-kicker').textContent = fresh ? '\ud83e\ude84 A little nudge' : '\ud83e\ude84 What if\u2026';
+    $('nudge-title').textContent = prompt;
+    $('nudge-rule').textContent = nudge.rule;
+    $('nudge-rule').hidden = !nudge.rule;
+    $('nudge-ai').textContent = fresh ? '\u2726 Sketch a start' : '\u2726 Ask AI for ideas';
+    $('nudge-ai').dataset.tip = fresh ? 'AI sketch|A faint blue-pencil draft of this prompt, on its own layer, to trace or ignore. Uses one AI draft.'
+      : 'Refine ideas|AI looks at your drawing and suggests what it could use. You pick, or skip.';
+    const card = $('nudge');
+    card.classList.remove('dealt');
+    void card.offsetWidth;
+    card.classList.add('dealt');
+  }
+  function openNudge() {
+    closeKit();
+    dealNudge();
+    $('nudge').hidden = false;
+    $('wand').setAttribute('aria-expanded', 'true');
+    $('nudge-go').focus({ preventScroll: true });
+    buzz();
+  }
+  function closeNudge() {
+    $('nudge').hidden = true;
+    $('wand').setAttribute('aria-expanded', 'false');
+  }
+  $('wand').addEventListener('click', () => ($('nudge').hidden ? openNudge() : closeNudge()));
+  $('nudge-close').addEventListener('click', closeNudge);
+  $('nudge-again').addEventListener('click', dealNudge);
+  $('nudge').addEventListener('keydown', event => { if (event.key === 'Escape') { event.stopPropagation(); closeNudge(); $('wand').focus(); } });
+  document.querySelectorAll('.nudge-time [data-seconds]').forEach(button => button.addEventListener('click', () => {
+    flowSeconds = Number(button.dataset.seconds);
+    document.querySelectorAll('.nudge-time [data-seconds]').forEach(b => b.setAttribute('aria-checked', String(b === button)));
+  }));
+  $('nudge-go').addEventListener('click', () => {
+    const { prompt, rule, fresh } = nudge;
+    closeNudge();
+    if (fresh) {
+      startersDismissed = true;
+      renderStarters();
+      if (!$('description').value.trim()) $('description').value = prompt.replace(/^Draw /, '').replace(/\.$/, '');
+    }
+    if (tool !== 'pen' && tool !== 'eraser' && tool !== 'stamp') setTool('pen');
+    setFocus(true);
+    const twist = rule.replace('Rule: ', '');
+    startFlow(twist ? `${prompt} ${twist.charAt(0).toUpperCase()}${twist.slice(1)}` : prompt);
+  });
+  $('nudge-ai').addEventListener('click', () => {
+    const { prompt, fresh } = nudge;
+    closeNudge();
+    if (!fresh) { startRefineFlow(); return; }
+    setFocus(false);
+    $('ai-tools').open = true;
+    setAiMode('sketch');
+    $('ai-prompt').value = prompt.replace(/^Draw /, '').replace(/\.$/, '');
+    $('ai-bar').requestSubmit();
+    $('canvas-frame').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  });
+
+  // The flow timer: the prompt stays in view with a gentle countdown, then a nudge toward what's next.
+  let flow = null; // { end, total, timer }
+  const clock = seconds => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`;
+  function startFlow(text) {
+    stopFlow();
+    $('flow-text').textContent = text;
+    $('flow-banner').hidden = false;
+    $('flow-banner').classList.remove('done');
+    $('flow-actions').replaceChildren();
+    $('flow-clock').hidden = !flowSeconds;
+    $('flow-bar').style.transform = 'scaleX(1)';
+    if (!flowSeconds) return;
+    flow = { end: performance.now() + flowSeconds * 1000, total: flowSeconds * 1000, timer: null };
+    const tick = () => {
+      const left = Math.max(0, flow.end - performance.now());
+      $('flow-clock').textContent = clock(left / 1000);
+      $('flow-bar').style.transform = `scaleX(${left / flow.total})`;
+      if (left > 0) return;
+      clearInterval(flow.timer);
+      flow = null;
+      $('flow-banner').classList.add('done');
+      $('flow-clock').textContent = 'Time! \u2728';
+      buzz();
+      // What's next, right where the eyes already are (the status line is tucked away in full screen).
+      const next = (label, run) => { const b = el('button', 'flow-next', label); b.type = 'button'; b.addEventListener('click', () => { stopFlow(); run(); }); return b; };
+      $('flow-actions').replaceChildren(next('\ud83c\udf9e Flipbook it', () => autoAnimate()), next('\ud83e\ude84 Another', () => openNudge()));
+    };
+    tick();
+    flow.timer = setInterval(tick, 250);
+  }
+  function stopFlow() {
+    if (flow) clearInterval(flow.timer);
+    flow = null;
+    $('flow-banner').hidden = true;
+  }
+  $('flow-stop').addEventListener('click', stopFlow);
+
+  // While the pen is down in Focus, the chrome steps back so the page is all there is.
+  canvas.addEventListener('pointerdown', () => { if (pointer !== null) document.body.classList.add('inking'); });
+  for (const type of ['pointerup', 'pointercancel']) addEventListener(type, () => document.body.classList.remove('inking'));
+
   // ---------------------------------------------------------------- tools
   function setTool(next) {
+    if (next === 'stamp' && !stamp) { openKit(); return; }
     const wasPlacing = tool === 'place';
     if (next !== 'place') placing = null;
     tool = next;
@@ -909,6 +1485,10 @@
     canvas.classList.toggle('spark-mode', tool === 'spark');
     canvas.classList.toggle('eraser-mode', tool === 'eraser');
     canvas.classList.toggle('move-mode', tool === 'move');
+    canvas.classList.toggle('stamp-mode', tool === 'stamp');
+    canvas.classList.toggle('ink-mode', tool === 'pen' || tool === 'eraser');
+    if (tool !== 'pen' && tool !== 'eraser') { $('brush-cursor').hidden = true; $('canvas-frame').classList.remove('brushing'); }
+    if (tool !== 'stamp' && stampHover) { stampHover = null; renderOverlay(); }
     updateHud();
     if (tool !== 'spark') pendingFix = null;
     else if (pendingFix === null) flashTray('Drag a box around the stuck spot, or tap it.');
@@ -916,11 +1496,13 @@
   }
   document.querySelectorAll('.tool').forEach(button => button.addEventListener('click', () => {
     closePopover();
+    if (button.dataset.tool === 'stamp') { toggleKit(); return; }
     setTool(button.dataset.tool === tool && tool === 'spark' ? drawTool : button.dataset.tool);
   }));
   const setWidth = value => {
     $('width').value = String(Math.max(1, Math.min(40, value)));
     $('width-value').value = $('width').value;
+    if (tool === 'stamp' && stampHover) renderOverlay(); // the ghost grows and shrinks with the size
   };
   $('width').addEventListener('input', () => setWidth(Number($('width').value)));
   for (const id of ['title', 'description']) $(id).addEventListener('input', () => { revision++; });
@@ -1253,8 +1835,15 @@
     $('focus-toggle').setAttribute('aria-pressed', String(on));
     $('focus-toggle').querySelector('span').textContent = on ? 'Done' : 'Focus';
     if (on) setLayersOpen(false);
+    // Real full screen where the device allows it (it hides the browser's own bars); phones turn sideways.
+    if (on && !document.fullscreenElement && document.documentElement.requestFullscreen) {
+      document.documentElement.requestFullscreen({ navigationUI: 'hide' })
+        .then(() => matchMedia('(pointer: coarse)').matches && screen.orientation?.lock?.('landscape'))
+        .catch(() => { /* not allowed here: the in-page full screen still works */ });
+    } else if (!on && document.fullscreenElement) document.exitFullscreen().catch(() => {});
     requestAnimationFrame(fitFocus);
   }
+  document.addEventListener('fullscreenchange', () => requestAnimationFrame(fitFocus));
   $('focus-toggle').addEventListener('click', () => setFocus(!document.body.classList.contains('focus-mode')));
   addEventListener('resize', () => requestAnimationFrame(fitFocus));
 
@@ -1262,10 +1851,13 @@
   function setInk(color) {
     $('ink').value = color;
     document.querySelectorAll('#swatches .ink-dot').forEach(dot => dot.setAttribute('aria-pressed', String(dot.dataset.color === color)));
+    // Kit stamps wear the ink color, so their icon does too.
+    drawStampIcon($('stamp-icon'), stamp || kitStamp(KIT[0]));
+    if (tool === 'stamp' && stampHover) renderOverlay();
   }
   document.querySelectorAll('#swatches .ink-dot').forEach(dot => dot.addEventListener('click', () => {
     setInk(dot.dataset.color);
-    if (tool !== 'pen' && SHAPES.has(tool) === false) setTool('pen');
+    if (tool !== 'pen' && tool !== 'stamp' && SHAPES.has(tool) === false) setTool('pen');
   }));
   $('ink').addEventListener('input', () => setInk($('ink').value));
 
@@ -1341,7 +1933,6 @@
     layers.splice(Math.max(0, below), 0, layer);
     recount();
     rebuildAll();
-    markGuide('draw');
     message('drawing-status', `Added a blue-pencil sketch under "${activeLayer().name}". Draw over it, then hide or delete it.`, false, [
       { label: 'Hide the sketch', run: () => { pushUndo(); layer.visible = false; rebuildAll(); message('drawing-status', 'Sketch hidden. Show it again from Layers.'); } }
     ]);
@@ -1380,10 +1971,10 @@
     rebuildAll();
     renderLayersPanel();
     const r = spark.result;
-    markGuide('refine');
     logEvent('ai', 'Refine', `"${spark.prompt}" on "${layer.name}": kept ${r.kept} of ${r.source_strokes} strokes, added ${r.added} (${r.note})`);
-    message('drawing-status', `\u2726 Refined "${layer.name}": kept ${r.kept} of your ${r.source_strokes} strokes, added ${r.added}. Undo brings the old one back.`, false, [
-      { label: '\u2726 Animate it', run: () => autoAnimate() }, { label: '\u2726 Refine more', run: () => startRefineFlow() }]);
+    message('drawing-status', `\u2726 Refined "${layer.name}": kept ${r.kept} of your ${r.source_strokes} strokes exactly, added ${r.added}.`, false, [
+      { label: '\u21b6 Undo', tip: 'Undo \u00b7 Cmd/Ctrl+Z|Your layer exactly as it was.', run: () => { undo(); message('drawing-status', 'Undone. Your layer is back as it was.'); } },
+      { label: '\u2726 Refine more', run: () => startRefineFlow() }, { label: '\ud83c\udf9e Flipbook it', run: () => autoAnimate() }]);
     return true;
   }
 
@@ -1395,12 +1986,14 @@
     } else if (spark.kind === 'sketch') {
       if (!addSketchLayer(spark)) return;
       logEvent('ai', 'AI sketch', `"${spark.prompt}": ${plural(spark.result.strokes.length, 'blue-pencil stroke')} as their own layer`);
+      undoable('\u2726 Sketch added as its own faint layer. Trace it, hide it, or undo.');
     } else if (spark.kind === 'strokes') {
       if (!commitStrokes(spark.result.strokes)) {
         flashTray(`Can't add to "${activeLayer().name}" right now. See the note under the canvas.`, true);
         return;
       }
       logEvent('ai', 'Fix a spot', `${spark.prompt ? `"${spark.prompt}"` : 'no prompt'}: ${plural(spark.result.strokes.length, 'stroke')} on "${activeLayer().name}" (${spark.result.note})`);
+      undoable(`\u2726 Added ${plural(spark.result.strokes.length, 'line')} to "${activeLayer().name}". Marked as AI.`);
     } else {
       guides.push({ region: spark.region, img: spark.img });
       guidesVisible = true;
@@ -1476,9 +2069,17 @@
       octx.restore();
       return;
     }
-    if (motionDraft) {
+    if (motionDraft && !peeking) {
       paintMotionPreview();
       return;
+    }
+    if (motionDraft) return; // peeking: the untouched canvas shows through
+    paintTargetGlow(layers, mathScale(canvas.getBoundingClientRect().width));
+    if (tool === 'stamp' && stamp && stampHover && pointer === null) {
+      octx.save();
+      octx.globalAlpha = 0.35;
+      stampStrokes(stampHover, false).forEach(stroke => drawStroke(octx, stroke));
+      octx.restore();
     }
     if (shapeDraft) {
       const preview = shapeStroke(shapeDraft);
@@ -1508,7 +2109,7 @@
       octx.strokeStyle = '#7c3aed';
     }
     octx.globalAlpha = 1;
-    const ready = activeSpark();
+    const ready = peeking ? null : activeSpark();
     if (ready?.kind === 'refine') {
       // The refined layer in place: what you'd keep, what AI adds (drawing itself in, with a glow).
       const target = layers.find(layer => layer.id === ready.layerId);
@@ -1651,8 +2252,8 @@
     rebuildAll();
     renderSaveKind();
     if (!directing) {
-      flashTray(`\u25c6 ${name} is in. Drag it anywhere, pull the corner to resize, then \u2726 Animate.`);
-      message('drawing-status', `Placed "${name}" as a linked layer (it always knows where it's used). Drag to position it, or \u2726 Animate it.`);
+      flashTray(`\u25c6 ${name} is in. Drag it anywhere, pull the corner to resize, then bring it to life.`);
+      message('drawing-status', `Placed "${name}" as a linked layer (it always knows where it's used). Drag to position it, then bring it to life.`);
     }
     logEvent('artist', 'Placed', `${name} v${layer.asset.version}${frames.length > 1 ? ` on frame ${frameIndex + 1}` : ''}`);
   }
@@ -1660,12 +2261,12 @@
   // ---------------------------------------------------------------- direct manipulation: grab what you made
   // Scenery from a starter (all kit strokes, or ink covering most of the canvas) isn't grabbed by a stray tap:
   // you grab what you drew or placed. Pick the scenery layer in Layers to move it on purpose.
-  const isScenery = layer => {
+  function isScenery(layer) {
     if (layer.backdrop) return true;
     if (layer.asset) return false;
     const b = inkBounds(layer.strokes);
     return !b || b.w * b.h > W * H * 0.6 || layer.strokes.every(stroke => stroke.kit);
-  };
+  }
   function inkAt(layer, point, radius = 7) {
     const x = Math.round(point.x * W), y = Math.round(point.y * H);
     const size = radius * 2 + 1;
@@ -1762,6 +2363,148 @@
     turn: 'Rotation, eased in and out.',
     contact: 'The moment a foot (or a ball) meets the ground.'
   };
+  // Effects: "make it snow" is a pattern, not a prompt. An effect is one extra layer of tiny strokes, computed
+  // for every frame from a fixed seed: instant, free, the same every time, and no AI. Gemini only moves what you drew.
+  const r4 = v => Math.round(v * 1e4) / 1e4;
+  function seeded(seed) {
+    let a = seed >>> 0;
+    return () => {
+      a = (a + 0x6d2b79f5) >>> 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  const onCanvas = p => p.x >= 0 && p.x <= 1 && p.y >= 0 && p.y <= 1;
+  const fxStroke = (points, color, width, fill = null) => ({ points: points.map(p => ({ x: r4(p.x), y: r4(p.y), pressure: 0.75 })), color, width,
+    ...(fill ? { fill } : {}), kit: true, seq: 0 });
+  const ASPECT = H / W; // keeps circles round on a 1000 x 650 canvas
+  const CONFETTI = ['#ef4444', '#f59e0b', '#22c55e', '#3b82f6', '#a855f7', '#ec4899'];
+  const FX = [
+    { id: 'snow', icon: '\u2744\ufe0f', name: 'Snow', hint: 'Flakes drift down and sway.', count: 46, seed: 11,
+      words: /\b(snow(s|ing|y|fall|flakes?|storm)?|blizzard|flurr(y|ies))\b/i,
+      particle: r => ({ x: r(), y: r(), v: 0.05 + r() * 0.07, w: 3 + r() * 5, a: 0.006 + r() * 0.018, p: r() * 6.28 }),
+      draw: (q, t) => { const p = { x: q.x + q.a * Math.sin(t * 1.6 + q.p), y: (q.y + q.v * t) % 1.04 - 0.02 }; return onCanvas(p) ? [fxStroke([p], '#b7d3ec', q.w)] : []; } },
+    { id: 'rain', icon: '\ud83c\udf27\ufe0f', name: 'Rain', hint: 'Slanted streaks pour down.', count: 40, seed: 23,
+      words: /\b(rain(s|ing|y|fall|drops?)?|drizzl\w*|downpour|storm(s|y)?)\b/i,
+      particle: r => ({ x: r() * 1.15, y: r(), v: 0.8 + r() * 0.4, l: 0.035 + r() * 0.03 }),
+      draw: (q, t) => { const y = (q.y + q.v * t) % 1.12 - 0.06, head = { x: q.x - 0.12 * y, y }, tail = { x: head.x + 0.12 * q.l, y: y - q.l };
+        return onCanvas(head) && onCanvas(tail) ? [fxStroke([tail, head], '#7aa7d6', 2)] : []; } },
+    { id: 'sparkles', icon: '\u2728', name: 'Sparkles', hint: 'Little stars twinkle on and off.', count: 16, seed: 37,
+      words: /\b(sparkl\w*|twinkl\w*|glitter\w*|shimmer\w*|glow\w*)\b/i,
+      particle: r => ({ x: 0.04 + r() * 0.92, y: 0.04 + r() * 0.92, s: 0.014 + r() * 0.014, f: 1.6 + r() * 1.8, p: r() * 6.28 }),
+      draw: (q, t) => { const size = q.s * Math.max(0, Math.sin(t * q.f + q.p)); if (size < 0.004) return [];
+        const pts = Array.from({ length: 9 }, (_, k) => { const a = (k % 8) * Math.PI / 4 - Math.PI / 2, rad = k % 2 ? size * 0.3 : size;
+          return { x: Math.max(0, Math.min(1, q.x + Math.cos(a) * rad * ASPECT)), y: Math.max(0, Math.min(1, q.y + Math.sin(a) * rad)) }; });
+        return [fxStroke(pts, '#e0a526', 1, '#f8d34a')]; } },
+    { id: 'confetti', icon: '\ud83c\udf89', name: 'Confetti', hint: 'Bright bits tumble down.', count: 44, seed: 41,
+      words: /\b(confetti)\b/i,
+      particle: r => ({ x: r(), y: r(), v: 0.12 + r() * 0.1, a: r() * 6.28, spin: 2 + r() * 4, c: CONFETTI[Math.floor(r() * CONFETTI.length)], w: 4 + r() * 3, p: r() * 6.28 }),
+      draw: (q, t) => { const c = { x: q.x + 0.02 * Math.sin(t * 1.3 + q.p), y: (q.y + q.v * t) % 1.06 - 0.03 }, a = q.a + q.spin * t, len = 0.014 * (0.35 + 0.65 * Math.abs(Math.cos(t * 3 + q.p)));
+        const one = { x: c.x - Math.cos(a) * len * ASPECT, y: c.y - Math.sin(a) * len }, two = { x: c.x + Math.cos(a) * len * ASPECT, y: c.y + Math.sin(a) * len };
+        return onCanvas(one) && onCanvas(two) ? [fxStroke([one, two], q.c, q.w)] : []; } },
+    { id: 'bubbles', icon: '\ud83e\udee7', name: 'Bubbles', hint: 'Bubbles wobble up and away.', count: 14, points: 12, seed: 53,
+      words: /\b(bubbl\w*|underwater|fizz\w*)\b/i,
+      particle: r => ({ x: 0.05 + r() * 0.9, y: r(), v: 0.06 + r() * 0.06, rad: 0.012 + r() * 0.02, p: r() * 6.28 }),
+      draw: (q, t) => { const c = { x: q.x + 0.015 * Math.sin(t * 2 + q.p), y: 1.04 - (q.y + q.v * t) % 1.1 };
+        const pts = Array.from({ length: 12 }, (_, k) => ({ x: c.x + Math.cos(k / 11 * Math.PI * 2) * q.rad * ASPECT, y: c.y + Math.sin(k / 11 * Math.PI * 2) * q.rad }));
+        return pts.every(onCanvas) ? [fxStroke(pts, '#7cc4e4', 2)] : []; } }
+  ];
+  const MAX_FX = 2;
+  const FX_NAMES = new Set(FX.map(fx => fx.name));
+  function fxLayer(id, frame) {
+    const fx = FX.find(item => item.id === id);
+    if (!fx.parts) { const r = seeded(fx.seed); fx.parts = Array.from({ length: fx.count }, () => fx.particle(r)); }
+    return newLayer(fx.name, { fx: id, strokes: fx.parts.flatMap(q => fx.draw(q, frame / MOTION_FPS)) });
+  }
+  // Free tweaks: the same keyframes, changed by plain arithmetic. No AI either.
+  const TWEAKS = [
+    { id: 'bigger', label: '\u2922 Bigger', say: 'the same keyframes, pushed 30% further',
+      words: /^(bigger|more|stronger|wilder|bolder|more dramatic|more intense|more energy|more energetic|exaggerate|exaggerated)$/,
+      apply: (spec, ids) => scaleTracks(spec, ids, 1.3) },
+    { id: 'calmer', label: 'Calmer', say: 'the same keyframes, 30% gentler',
+      words: /^(calmer|smaller|subtler|more subtle|gentler|softer|less|tone down|calm down)$/,
+      apply: (spec, ids) => scaleTracks(spec, ids, 0.7) },
+    { id: 'faster', label: 'Faster', say: 'the same poses in less time', clock: true,
+      words: /^(faster|quicker|speed up|snappier|hurry|hurry up)$/,
+      apply: spec => ({ ...spec, seconds: Math.max(2, Math.round(spec.seconds * 0.7 * MOTION_FPS) / MOTION_FPS) }) },
+    { id: 'slower', label: 'Slower', say: 'the same poses with more time', clock: true,
+      words: /^(slower|slow down|longer|take more time)$/,
+      apply: spec => ({ ...spec, seconds: Math.min(10, Math.round(spec.seconds * 1.4 * MOTION_FPS) / MOTION_FPS) }) }
+  ];
+  const clampTo = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+  function scaleTracks(spec, ids, f) {
+    const scale = keys => keys.map(k => ({ ...k, x: r4(clampTo(k.x * f, -1.5, 1.5)), y: r4(clampTo(k.y * f, -1.5, 1.5)),
+      sx: r4(clampTo(1 + (k.sx - 1) * f, 0.03, 4)), sy: r4(clampTo(1 + (k.sy - 1) * f, 0.03, 4)), r: r4(clampTo(k.r * f, -1080, 1080)) }));
+    return { ...spec, tracks: spec.tracks.map(track => (!ids || ids.has(track.layerId) ? { ...track, keys: scale(track.keys) } : track)) };
+  }
+  const FILLER = /\b(make|makes|let|lets|let's|please|it|its|it's|the|a|an|bit|little|lot|lots|much|way|whole|just|now|again|some|can|could|you|be|go|do|and|with|plus|also|then|add|start|have|put|turn|on|in|of|to|there|too|falling|fall|everywhere|around|background|effect|effects|heavy|light|motion|movement|moves?|animation|everything|scene)\b/g;
+  const NEGATION = /\b(no|not|stop|remove|without|lose|less|turn off|get rid of)\b/i;
+  const NEGATED = new RegExp(`${NEGATION.source}[^,.;]*$`, 'i');
+  // How the box reads your words, before anything runs: effects and tweaks happen here; the rest goes to Gemini.
+  function readPrompt(text) {
+    const on = [], off = [];
+    let rest = ` ${text} `;
+    for (const fx of FX) {
+      const match = fx.words.exec(rest);
+      if (!match) continue;
+      const negated = NEGATED.test(rest.slice(Math.max(0, match.index - 18), match.index));
+      (negated ? off : on).push(fx);
+      rest = rest.replace(fx.words, ' ');
+      if (negated) rest = rest.replace(NEGATION, ' ');
+    }
+    const core = rest.toLowerCase().replace(/[^a-z' ]+/g, ' ').replace(FILLER, ' ').replace(/\s+/g, ' ').trim();
+    const tweak = core ? TWEAKS.find(item => item.words.test(core)) || null : null;
+    const ai = !!core && !tweak;
+    // "add a hat" asks for a new drawing; "add confetti" was an effect (already taken out of `rest`).
+    const asked = /\b(add|draw|put|insert|create|include|spawn|wearing|holding|give \w+)\s+(?:an?\s+|some\s+|the\s+|more\s+|two\s+|three\s+)?([a-z]{3,})/i.exec(rest);
+    const warn = ai && !!asked && !/^(and|it|its|that|this|them|then|with|more|some|bit|little)$/i.test(asked[2]);
+    return { on, off, tweak, ai, warn };
+  }
+  const fxList = ids => (ids || []).map(id => FX.find(fx => fx.id === id)).filter(Boolean);
+  const pctOf = v => `${Math.round(v * 100)}%`;
+  function trackStats(track, strength = 1) {
+    const ks = track.keys;
+    return { rise: Math.max(0, -Math.min(...ks.map(k => k.y))) * strength, travel: Math.max(...ks.map(k => Math.abs(k.x))) * strength,
+      spin: Math.max(...ks.map(k => Math.abs(k.r))) * strength, squash: Math.max(...ks.map(k => Math.max(Math.abs(k.sx - 1), Math.abs(k.sy - 1)))) * strength,
+      keys: ks.length };
+  }
+  // Plain words for numbers: what a take does, or what changed since the take it was built on.
+  function summarizeMotion(spec) {
+    return spec.tracks.map(track => {
+      const s = trackStats(track, spec.strength), bits = [plural(s.keys, 'keyframe')];
+      if (s.rise > 0.05) bits.push(`rises ${pctOf(s.rise)} of the height`);
+      else if (s.travel > 0.05) bits.push(`travels ${pctOf(s.travel)} of the width`);
+      if (s.spin > 20) bits.push(`turns ${Math.round(s.spin)}\u00b0`);
+      if (s.squash > 0.06) bits.push('squash & stretch');
+      return `${track.name}: ${bits.join(', ')}`;
+    }).join(' \u00b7 ');
+  }
+  function diffMotion(prev, next) {
+    return next.tracks.filter(track => !prev.tracks.some(item => item.keys === track.keys)).map(track => {
+      const old = prev.tracks.find(item => item.name === track.name);
+      if (!old) return `${track.name} now moves`;
+      const a = trackStats(old, prev.strength), b = trackStats(track, next.strength), bits = [];
+      if (Math.abs(b.rise - a.rise) > 0.04) bits.push(`${b.rise > a.rise ? 'rises higher' : 'stays lower'} (${pctOf(a.rise)} \u2192 ${pctOf(b.rise)})`);
+      if (Math.abs(b.travel - a.travel) > 0.05) bits.push(`${b.travel > a.travel ? 'goes farther' : 'stays closer'} (${pctOf(a.travel)} \u2192 ${pctOf(b.travel)})`);
+      if (Math.abs(b.spin - a.spin) > 25) bits.push(`${b.spin > a.spin ? 'turns more' : 'turns less'} (${Math.round(a.spin)}\u00b0 \u2192 ${Math.round(b.spin)}\u00b0)`);
+      if (Math.abs(b.squash - a.squash) > 0.05) bits.push(b.squash > a.squash ? 'more squash & stretch' : 'less squash & stretch');
+      if (a.keys !== b.keys) bits.push(`${a.keys} \u2192 ${b.keys} keyframes`);
+      return `${track.name} ${bits.length ? bits.join(', ') : 'is re-timed, same shape'}`;
+    }).join(' \u00b7 ');
+  }
+  const fxWords = (on, off) => [...on.map(fx => `+ ${fx.icon} ${fx.name}`), ...off.map(fx => `\u2212 ${fx.icon} ${fx.name}`)];
+  // Effects next to the drawing must still fit one frame's limits.
+  function fxFits(spec, effects) {
+    const strokes = spec.base.reduce((n, layer) => n + layer.strokes.length, 0) + fxList(effects).reduce((n, fx) => n + fx.count, 0);
+    const points = countPoints(spec.base.flatMap(layer => layer.strokes)) + fxList(effects).reduce((n, fx) => n + fx.count * (fx.points || 2), 0);
+    if (effects.length > MAX_FX) return `Two effects at a time keeps a scene light. Remove one first.`;
+    if (spec.base.length + effects.length > MAX_LAYERS) return `No room for another layer (${MAX_LAYERS} max).`;
+    if (strokes > MAX_STROKES || points > MAX_POINTS) return 'This drawing is too detailed to add that effect.';
+    return '';
+  }
+  const withFx = (current, on, off) => [...new Set([...(current || []).filter(id => !off.some(fx => fx.id === id)), ...on.map(fx => fx.id)])];
+
   // Catmull-Rom through the keys: smooth arcs, no stop-and-go at every key.
   function sampleKeys(keys, t) {
     if (t <= keys[0].t) return keys[0];
@@ -1806,17 +2549,19 @@
       const b = layer && inkBounds(layer.strokes);
       return { ...track, layer, baseStrokes: layer ? layer.strokes.slice() : [], pivot: b ? { px: (b.x + b.w / 2) / W, py: (b.y + b.h / 2) / H } : { px: 0.5, py: 0.5 } };
     }).filter(track => track.layer);
+    const fx = spec.effects || [];
+    const withEffects = (stack, f) => (fx.length ? [...stack, ...fx.map(id => fxLayer(id, f))] : stack);
     return Array.from({ length: count }, (_, f) => {
-      if (f === 0) return base; // every clip starts exactly as drawn
+      if (f === 0) return withEffects(base, 0); // every clip starts exactly as drawn
       const t = f / (count - 1);
-      return base.map(layer => {
+      return withEffects(base.map(layer => {
         const props = { visible: layer.visible, opacity: layer.opacity, asset: layer.asset, backdrop: layer.backdrop };
         const track = tracks.find(tr => tr.layer === layer);
         if (!track) return newLayer(layer.name, { ...props, strokes: layer.strokes.slice() });
         const xf = xfAt(track.keys, t, spec.strength, track.pivot);
         const strokes = poseXf(track.baseStrokes, xf);
         return newLayer(layer.name, { ...props, strokes, xf, xfBase: track.baseStrokes, xfStrokes: strokes.slice() });
-      });
+      }), f);
     });
   }
   // Saving: a frame layer that still matches "frame 1's layer" (as is, or posed) is stored as a reference.
@@ -1932,7 +2677,12 @@
     }
     c.restore();
   }
-  function previewMotion(spec) {
+  function previewMotion(spec, { take = true } = {}) {
+    if (take) {
+      takes = [...takes, spec].slice(-12);
+      takeAt = takes.length - 1;
+      message('drawing-status', '');
+    }
     stopPlay();
     stopMotionPreview();
     const stacks = motionFrames(spec);
@@ -1943,6 +2693,10 @@
     }, 1000 / MOTION_FPS);
     updateHud();
     renderTray();
+    renderTakes();
+    renderWho();
+    renderFxChips();
+    if (spec.change) message('drawing-status', spec.change, false, [{ label: '\u25c6 How it moves', tip: 'How it moves|Keyframes, in-betweens, and spacing, shown on your shot.', run: () => explainScene() }]);
     // Closing the sheet hands focus back to the Animate button; Enter must mean "keep", not "reopen".
     if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
     canvas.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -1955,6 +2709,7 @@
     paintStack(octx, stacks[at]);
     const k = mathScale(canvas.getBoundingClientRect().width);
     if (showMath) drawMath(octx, paths, at, stacks.length, { scale: k });
+    paintTargetGlow(stacks[at], k);
     octx.save();
     octx.fillStyle = 'rgba(11, 36, 34, 0.85)';
     octx.fillRect(12, 12, 116 * k, 30 * k);
@@ -1973,7 +2728,8 @@
   function restrength(delta) {
     if (!motionDraft) return;
     const spec = { ...motionDraft.spec, strength: Math.round(Math.max(0.4, Math.min(1.9, motionDraft.spec.strength + delta)) * 10) / 10 };
-    previewMotion(spec);
+    takes[takeAt] = spec;
+    previewMotion(spec, { take: false });
   }
   function motionRecord(spec) {
     const clean = v => Math.round(v * 1e4) / 1e4;
@@ -1982,13 +2738,18 @@
       tracks: spec.tracks.slice(0, 4).map(track => ({ name: track.name.slice(0, 40), keys: track.keys.slice(0, 24).map(k => ({
         t: clean(Math.max(0, Math.min(1, k.t))), x: clean(Math.max(-1.5, Math.min(1.5, k.x))), y: clean(Math.max(-1.5, Math.min(1.5, k.y))),
         sx: clean(Math.max(0.03, Math.min(4, k.sx))), sy: clean(Math.max(0.03, Math.min(4, k.sy))), r: clean(Math.max(-1080, Math.min(1080, k.r))),
-        label: (k.label || '').slice(0, 24) })) })) };
+        label: (k.label || '').slice(0, 24) })) })), ...(spec.effects?.length ? { effects: spec.effects.slice(0, MAX_FX) } : {}) };
   }
   function keepMotion() {
     if (!motionDraft) return;
     const { spec, stacks } = motionDraft;
     const replaced = frames.length;
+    const kept = takeAt + 1, of = takes.length;
+    const shelf = { takes, at: takeAt };
+    takes = [];
+    takeAt = -1;
     stopMotionPreview();
+    renderTakes();
     pushUndo();
     frames = stacks;
     frameIndex = 0;
@@ -2012,26 +2773,38 @@
     renderFrames();
     if (saveKind !== 'shot' && !editing) setSaveKind('shot');
     renderSaveKind();
+    $('save-card').open = true;
     const names = spec.tracks.map(track => track.name).join(', ');
     const keyCount = spec.tracks.reduce((n, track) => n + track.keys.length, 0);
     const detail = `${spec.by === 'ai' ? `"${spec.prompt}"` : spec.label}: ${frames.length} frames (${keyCount} keyframes) at ${MOTION_FPS} fps, moving ${names}`
-      + `${spec.strength !== 1 ? ` (strength ${spec.strength}\u00d7)` : ''}`;
+      + `${spec.strength !== 1 ? ` (strength ${spec.strength}\u00d7)` : ''}${spec.effects?.length ? `, effects: ${fxList(spec.effects).map(fx => fx.name).join(', ')} (code, no AI)` : ''}`;
     logEvent(spec.by === 'ai' ? 'ai' : 'artist', spec.by === 'ai' ? 'Motion, accepted' : 'Motion preset', detail);
-    markGuide('animate');
     renderTray();
     $('scene-prompt').placeholder = 'A curious fox discovers a tiny planet...';
     setDockBusy(false);
-    message('drawing-status', `\ud83c\udfac ${frames.length} frames, ${(frames.length / MOTION_FPS).toFixed(1)} s${replaced > 1 ? ` (replacing ${replaced}; Undo brings them back)` : ''}. Each one is yours: scrub, grab with \u2725, redraw. Space plays.`, false,
-      [{ label: '\u25c6 How it moves', tip: 'How it moves|Keyframes, in-betweens, and spacing, shown on your shot.', run: () => explainScene() }]);
+    message('drawing-status', `\ud83c\udfac Kept ${of > 1 ? `take ${kept} of ${of}` : 'it'}: ${frames.length} frames, ${(frames.length / MOTION_FPS).toFixed(1)} s${replaced > 1 ? `, replacing ${replaced}` : ''}. Every frame is yours to redraw. Space plays.`, false,
+      [{ label: of > 1 ? '\u21b6 Undo, back to the takes' : '\u21b6 Undo', tip: 'Undo|Your drawing exactly as it was, with every take still here to choose from.', run: () => {
+        undo();
+        // Nothing was lost: the takes come back, on the one that was kept.
+        takes = shelf.takes;
+        takeAt = shelf.at;
+        previewMotion(takes[takeAt], { take: false });
+        setDockBusy(false);
+        message('drawing-status', of > 1 ? 'Undone. Your takes are back: pick another, or change one.' : 'Undone. The preview is back: keep it, change it, or discard it.');
+      } },
+        { label: '\u25c6 How it moves', tip: 'How it moves|Keyframes, in-betweens, and spacing, shown on your shot.', run: () => explainScene() }]);
     setTool('move');
     play();
   }
   function skipMotion() {
     if (!motionDraft) return;
     const { spec } = motionDraft;
-    if (spec.by === 'ai') logEvent('ai', 'Motion, skipped', `"${spec.prompt}"`);
+    if (spec.by === 'ai') logEvent('ai', 'Motion, skipped', `${takes.length > 1 ? `${takes.length} takes, ` : ''}"${spec.prompt}"`);
+    takes = [];
+    takeAt = -1;
     stopMotionPreview();
     renderTray();
+    renderTakes();
     $('scene-prompt').placeholder = 'A curious fox discovers a tiny planet...';
     setDockBusy(false);
   }
@@ -2057,6 +2830,7 @@
     };
     body.replaceChildren();
     body.append(el('p', 'explain-direction', motion.by === 'ai' ? `\u2726 AI choreographed: "${motion.prompt}"` : `Preset: ${motion.note}`));
+    if (motion.effects?.length) body.append(el('p', 'muted', `${fxList(motion.effects).map(fx => `${fx.icon} ${fx.name}`).join(' and ')}: an effect layer of tiny strokes, computed by code for every frame from a fixed seed. No AI, the same every time.`));
 
     const one = section('\u2460', 'Keyframes: the poses that matter',
       `${motion.by === 'ai' ? 'The AI' : 'The preset'} chose ${track.keys.length} keyframes for ${track.name}${motion.tracks.length > 1 ? ` (and ${motion.tracks.slice(1).map(t => `${t.keys.length} for ${t.name}`).join(', ')})` : ''}. Each is a pose: where it is, how squashed, how turned.`);
@@ -2178,7 +2952,7 @@
     const tracks = chosenTracks(box => preset.keys(box));
     if (!tracks.length) return;
     $('animate-sheet').close();
-    previewMotion({ by: 'preset', label: `${preset.icon} ${preset.name}`, note: `${preset.icon} ${preset.name}`, seconds: preset.seconds, strength: 1, base: layers, tracks });
+    previewMotion({ by: 'preset', label: `${preset.icon} ${preset.name}`, take: preset.name, note: `${preset.icon} ${preset.name}`, seconds: preset.seconds, strength: 1, base: layers, tracks });
   }
   // Your own direction uses the same animation preview.
   function runAIMotion(prompt, ids = animSubjects, title = '') {
@@ -2403,6 +3177,8 @@
   function pipelineFinish(text) {
     $('pipeline').classList.add('finished');
     $('pipeline-title').textContent = text;
+    clearTimeout(pipelineFinish.timer);
+    pipelineFinish.timer = setTimeout(() => { if ($('pipeline').classList.contains('finished')) $('pipeline').hidden = true; }, 2600);
   }
   function pipelineFail(text) {
     $('pipeline').classList.add('failed');
@@ -2410,16 +3186,32 @@
   }
   $('pipeline-close').addEventListener('click', () => { $('pipeline').hidden = true; });
 
-  let directing = false;
-  let currentClip = null;
-  const sceneStyle = () => document.querySelector('input[name="scene-style"]:checked').value;
+  // A take on screen decides what the box does: revise that video, or that flipbook.
+  const revisingMode = () => currentClip ? 'video' : motionDraft ? 'art' : '';
+  const GO_BUTTONS = ['go-flipbook', 'go-video', 'dock-similar'];
   function setDockBusy(on) {
     on = on || directing;
+    const revising = revisingMode();
+    document.querySelector('.scene-maker').classList.toggle('busy', on);
+    document.querySelector('.scene-maker').classList.toggle('revising', !!revising);
+    $('dock-animate').hidden = !revising;
     $('dock-animate').disabled = on;
-    document.querySelectorAll('input[name="scene-style"]').forEach(input => { input.disabled = on; });
     $('dock-animate').classList.toggle('busy', on);
-    const revising = sceneStyle() === 'video' ? !!currentClip : !!motionDraft;
-    $('dock-animate').textContent = on ? 'Creating\u2026' : revising ? '\u2726 Change scene' : '\u2726 Make a scene';
+    $('dock-animate').textContent = on ? 'Creating\u2026' : '\u2726 Change it';
+    for (const id of GO_BUTTONS) $(id).disabled = on;
+    $('go-flipbook').hidden = $('go-video').hidden = !!revising;
+    // While a take is on screen the prompt revises it; who and where only matter for a new take.
+    $('scene-picks').hidden = !!revising;
+    $('scene-prompt').placeholder = revising === 'art' ? 'What would you change? e.g. \u201cjump higher\u201d'
+      : revising ? 'What would you change? e.g. \u201cmake it snow\u201d'
+      : 'What happens? Or leave it blank for a surprise';
+    renderTakes();
+    $('scene-style-note').textContent = revising === 'video' ? 'Each change is a new take, saved in your library. Tap any take to watch it again.'
+      : revising === 'art' ? 'Each change is a new take built on the one you see. Nothing changes until you keep one.'
+      : 'Flipbook moves your own strokes. AI video is filmed by Gemini.';
+    renderWho();
+    renderFxChips();
+    renderReading();
   }
   // Who can move: what you drew or placed (not scenery); a single big drawing still counts.
   const castLayers = () => {
@@ -2431,29 +3223,69 @@
   const unsavedThing = () => frames.length === 1 && hasInk() && (editing?.kind === 'asset' ? revision !== savedRevision
     : !editing && !layers.some(layer => layer.asset || layer.backdrop || layer.strokes.some(stroke => stroke.kit)));
   let savedBackdrops = [];
+  let savedStars = [];
+  const pickOption = (value, label) => {
+    const node = document.createElement('option');
+    node.value = value;
+    node.textContent = label;
+    return node;
+  };
   function renderSceneBackdrops() {
     const select = $('scene-backdrop');
     const selected = select.value;
-    const option = (value, label) => {
-      const node = document.createElement('option');
-      node.value = value;
-      node.textContent = label;
-      return node;
-    };
     const starters = STARTERS.filter(item => item.kind === 'shot' && item.id !== 'bounce');
-    select.replaceChildren(option('', 'None'), ...starters.map(item => option(`starter:${item.id}`, `${item.icon} ${item.name}`)),
-      ...savedBackdrops.map(item => option(`asset:${item.id}`, item.name)));
+    const mine = document.createElement('optgroup');
+    mine.label = 'Your backdrops';
+    mine.append(...savedBackdrops.map(item => pickOption(`asset:${item.id}`, item.name)));
+    const kit = document.createElement('optgroup');
+    kit.label = 'Starters';
+    kit.append(...starters.map(item => pickOption(`starter:${item.id}`, `${item.icon} ${item.name}`)));
+    select.replaceChildren(pickOption('', 'No backdrop'), ...(savedBackdrops.length ? [mine] : []), kit);
+    if ([...select.options].some(item => item.value === selected)) select.value = selected;
+  }
+  function renderSceneStars() {
+    const select = $('scene-star');
+    const selected = select.value;
+    const mine = document.createElement('optgroup');
+    mine.label = 'Your assets';
+    mine.append(...savedStars.map(item => pickOption(item.id, item.name)));
+    select.replaceChildren(pickOption('', '\u270f\ufe0f This drawing'), ...(savedStars.length ? [mine] : []));
     if ([...select.options].some(item => item.value === selected)) select.value = selected;
   }
   async function loadSceneBackdrops() {
     try {
-      const data = await api('/api/assets?type=environment');
-      savedBackdrops = data.items;
+      const [backdrops, assets] = await Promise.all([api('/api/assets?type=environment'), api('/api/assets')]);
+      savedBackdrops = backdrops.items;
+      savedStars = assets.items.filter(item => item.type !== 'environment');
       renderSceneBackdrops();
+      renderSceneStars();
       message('backdrop-status', '');
     } catch (error) {
-      message('backdrop-status', `Couldn't load your backdrops: ${error.message}`, true);
+      message('backdrop-status', `Couldn't load your assets and backdrops: ${error.message}`, true);
     }
+  }
+  // From a library card: cast it (or set the scene), then hand over to the prompt.
+  function castInScene(item) {
+    if (motionDraft) skipMotion();
+    if (currentClip) closeClip();
+    if (item.type === 'environment') {
+      if (!savedBackdrops.some(b => b.id === item.id)) savedBackdrops.unshift(item);
+      renderSceneBackdrops();
+      $('scene-backdrop').value = `asset:${item.id}`;
+    } else {
+      if (!savedStars.some(b => b.id === item.id)) savedStars.unshift(item);
+      renderSceneStars();
+      $('scene-star').value = item.id;
+    }
+    setFocus(false);
+    document.querySelector('.scene-maker').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    $('scene-prompt').focus({ preventScroll: true });
+    pulse('.scene-maker');
+  }
+  // Who stars in a new take: a saved asset picked above, else whatever is on the canvas.
+  function chosenStar() {
+    const id = $('scene-star').value;
+    return id ? savedStars.find(item => item.id === id) || null : null;
   }
   async function backdropLayers(choice) {
     if (!choice) return [];
@@ -2502,11 +3334,10 @@
     tags = [...(saved.tags || assetTags)];
     renderTagChips();
     renderSaveKind();
-    markGuide('asset');
     pipelineStep({ id: 'save', detail: updating ? `\u25c6 ${saved.name} v${saved.version} saved; scenes using older versions get flagged`
       : `\u25c6 ${saved.name} v${saved.version} is in your library, findable by words or by sketch`, ms: performance.now() - started });
     loadGallery(currentQuery);
-    if (saved.type === 'environment') loadSceneBackdrops();
+    loadSceneBackdrops();
     return { id: saved.id, name: saved.name, type: saved.type || $('asset-type').value, tags: saved.tags || assetTags,
       version: saved.version };
   }
@@ -2550,13 +3381,18 @@
     await startPlacing(asset, null, record);
     return layers.find(layer => layer.asset?.asset_id === asset.id) || null;
   }
-  async function autoAnimate({ prompt = '', title = '', ids = null, asset = null } = {}) {
+  async function autoAnimate({ prompt = '', title = '', ids = null, asset = null, another = false, effects = [] } = {}) {
     if (directing || makingVariations || busy()) return;
+    const read = readPrompt(prompt);
+    const fxIds = withFx(effects, read.on, []);
+    if (fxIds.length > MAX_FX) { flashTray('Two effects at a time keeps a scene light.', true); return; }
+    // Only effects in the words? Gemini still picks a motion (a surprise); the effect is code.
+    if (read.on.length && !read.ai && !read.tweak) prompt = '';
     stopPlay();
-    if (motionDraft) skipMotion();
+    if (motionDraft && !another) skipMotion();
     if ($('animate-sheet').open) $('animate-sheet').close();
     if (!asset && !ids && !hasInk()) {
-      flashTray('Draw something first (or place an asset), then \u2726 Animate it.', true);
+      flashTray('Draw something first (or pick a star), then bring it to life.', true);
       canvas.scrollIntoView({ behavior: 'smooth', block: 'center' });
       return;
     }
@@ -2575,7 +3411,7 @@
       if (savedAsset) asset = { id: editing.id, name: $('title').value.trim() };
       if (fresh) {
         asset = await saveAsAsset();
-        if (revision !== savedRevision) throw new Error('Your drawing changed while saving. Animate again to include your changes.');
+        if (revision !== savedRevision) throw new Error('Your drawing changed while saving. Try again to include your changes.');
       }
       if (asset) {
         const started = performance.now();
@@ -2586,6 +3422,8 @@
       }
       const cast = (ids ? layers.filter(layer => ids.has(layer.id)) : castLayers()).filter(layer => inkBounds(layer.strokes));
       if (!cast.length) throw new Error('Nothing to move yet. Draw something, or place an asset.');
+      const tooMuch = fxFits({ base: layers }, fxIds);
+      if (tooMuch) throw new Error(tooMuch);
       const picks = cast.slice(0, prompt ? 4 : 8);
       // Subject ids are stack positions now; the canvas may change while the director thinks.
       const byIndex = new Map(picks.map(layer => [layers.indexOf(layer), layer]));
@@ -2610,11 +3448,13 @@
         .filter(track => track.keys?.length);
       if (!tracks.length) throw new Error('Those drawings changed while the director was working. Try again.');
       pipelineFinish(`\u2726 \u201c${result.idea.title}\u201d`);
-      previewMotion({ by: 'ai', director: !prompt, label: `\u2726 ${result.idea.title}`, note: result.motion.note || '', title: result.idea.title,
-        prompt: result.idea.prompt, seconds, strength: 1, base: layers, tracks });
+      const spec = { by: 'ai', director: !prompt, label: `\u2726 ${result.idea.title}`, take: `${result.idea.title}${fxList(fxIds).map(fx => ` ${fx.icon}`).join('')}`,
+        note: result.motion.note || '', title: result.idea.title, prompt: result.idea.prompt, seconds, strength: 1, base: layers, tracks, effects: fxIds };
+      const fxSaid = fxIds.length ? ` ${fxWords(fxList(fxIds), []).join(' ')}: drawn by code, no AI.` : '';
+      spec.change = `\u2726 Take ${takes.length + 1}, \u201c${result.idea.title}\u201d. Gemini chose the keyframes: ${summarizeMotion(spec)}.${fxSaid}`;
+      previewMotion(spec);
       $('scene-prompt').value = '';
       $('scene-prompt').placeholder = 'What would you change?';
-      markGuide('animate');
     } catch (error) {
       pipelineFail(error.message);
       flashTray(error.message, true);
@@ -2624,24 +3464,31 @@
     }
   }
 
-  async function reviseMotion(prompt) {
+  async function reviseMotion(prompt, read = readPrompt(prompt)) {
     if (directing || makingVariations || !motionDraft || prompt.length < 3) {
       if (prompt.length < 3) flashTray('Tell us what you want to change.', true);
       return;
     }
     const draft = motionDraft;
-    const picks = draft.spec.tracks.map(track => layers.find(layer => layer.id === track.layerId)).filter(Boolean);
-    if (!picks.length || picks.length !== draft.spec.tracks.length) {
+    const effects = withFx(draft.spec.effects, read.on, read.off);
+    const tooMuch = fxFits(draft.spec, effects);
+    if (tooMuch) { flashTray(tooMuch, true); return; }
+    const aimed = targetLayers();
+    const picks = (aimed || draft.spec.tracks.map(track => layers.find(layer => layer.id === track.layerId))).filter(Boolean);
+    if (!picks.length || (!aimed && picks.length !== draft.spec.tracks.length)) {
       flashTray('The drawing changed. Make a new scene to include your edits.', true);
       return;
     }
+    const kept = draft.spec.tracks.filter(track => !picks.some(layer => layer.id === track.layerId));
+    if (kept.length + picks.length > 4) { flashTray('Four moving things at most. Pick fewer layers.', true); return; }
     const subjects = picks.map(layer => {
       const b = inkBounds(layer.strokes);
       return subjectFor(layer, { x: b.x / W, y: b.y / H, w: b.w / W, h: b.h / H });
     });
-    const previous = { prompt: draft.spec.prompt || '', tracks: draft.spec.tracks.map(track => ({
+    const before = draft.spec.tracks.filter(track => picks.some(layer => layer.id === track.layerId));
+    const previous = before.length ? { prompt: draft.spec.prompt || '', tracks: before.map(track => ({
       subject: layers.findIndex(layer => layer.id === track.layerId), keys: track.keys
-    })) };
+    })) } : null;
     directing = true;
     setDockBusy(true);
     pipelineStart();
@@ -2650,21 +3497,27 @@
       await streamEvents('/api/animate', JSON.stringify({
         prompt, title: draft.spec.title || '', seconds: draft.spec.seconds, backdrop: backdropName(), subjects,
         asset_ids: [...new Set(layers.filter(layer => layer.asset).map(layer => layer.asset.asset_id))].slice(0, 8),
-        layers: docLayers(), previous
+        layers: docLayers(), ...(previous ? { previous } : {})
       }), event => {
         if (event.type === 'step') pipelineStep(event);
         else if (event.type === 'result') result = event;
         else if (event.type === 'error') throw new Error(event.detail);
       });
       if (!result) throw new Error('The director went quiet. Your previous preview is still here.');
-      if (motionDraft !== draft) throw new Error('Your preview changed. Try again on the current scene.');
       const keysFor = new Map(result.motion.tracks.map(track => [layers[track.subject]?.id, track.keys]));
-      const tracks = chosenTracks((box, layer) => keysFor.get(layer.id), new Set([...keysFor.keys()].filter(Boolean)))
+      const changed = chosenTracks((box, layer) => keysFor.get(layer.id), new Set([...keysFor.keys()].filter(Boolean)))
         .filter(track => track.keys?.length);
-      if (!tracks.length) throw new Error('Could not revise this scene. Your previous preview is still here.');
-      pipelineFinish('\u2726 Your new take');
+      if (!changed.length) throw new Error('Could not revise this scene. Your previous preview is still here.');
+      const tracks = [...draft.spec.tracks.map(track => changed.find(item => item.layerId === track.layerId) || track),
+        ...changed.filter(item => !draft.spec.tracks.some(track => track.layerId === item.layerId))];
+      pipelineFinish(`\u2726 Take ${takes.length + 1} is ready`);
       const direction = `${draft.spec.prompt || ''}; ${prompt}`.replace(/^; /, '').slice(-300);
-      previewMotion({ ...draft.spec, director: false, prompt: direction, note: result.motion.note || '', tracks });
+      const who = aimed ? `${aimed.map(layer => layer.name).join(' + ')}: ` : '+ ';
+      const spec = { ...draft.spec, director: false, prompt: direction, take: `${who}${prompt}`, note: result.motion.note || '', tracks, effects };
+      const fxSaid = read.on.length || read.off.length ? ` ${fxWords(read.on, read.off).join(' ')}: by code, no AI.` : '';
+      const still = kept.length ? ` ${kept.map(track => track.name).join(', ')} untouched.` : '';
+      spec.change = `\u2726 Take ${takes.length + 1}: Gemini changed only keyframes. ${diffMotion(draft.spec, spec)}.${still}${fxSaid}${spec.note ? ` Its note: \u201c${spec.note}\u201d` : ''}`;
+      previewMotion(spec);
       $('scene-prompt').value = '';
     } catch (error) {
       pipelineFail(error.message);
@@ -2675,16 +3528,17 @@
     }
   }
 
-  function showClip(clip) {
+  function showClip(clip, { keepTakes = false } = {}) {
+    if (motionDraft) skipMotion();
+    if (!keepTakes) clipTakes = clipTakes.some(item => item.id === clip.id) ? clipTakes : [clip];
     currentClip = clip;
-    document.querySelector('input[name="scene-style"][value="video"]').checked = true;
-    $('scene-style-note').textContent = 'AI reimagines your drawing as video. Each take uses paid Gemini video generation.';
     $('scene-video').src = clip.video_url;
     $('scene-video').muted = true;
     $('video-preview').hidden = false;
-    $('scene-video').play().catch(() => message('drawing-status', 'Your video is ready. Press play to watch it.'));
+    const seen = [{ label: '\u2726 What the AI saw', tip: 'No black box|The exact picture and words Gemini received.', run: () => openSeen(clip) }];
+    message('drawing-status', 'AI video, inspired by your drawing. Your drawing itself is untouched.', false, seen);
+    $('scene-video').play().catch(() => message('drawing-status', 'Your video is ready. Press play to watch it.', false, seen));
     $('scene-prompt').value = '';
-    $('scene-prompt').placeholder = 'What would you change?';
     setDockBusy(false);
     $('canvas-frame').scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
@@ -2694,27 +3548,23 @@
     $('scene-video').load();
     $('video-preview').hidden = true;
     currentClip = null;
-    $('scene-prompt').placeholder = 'A curious fox discovers a tiny planet...';
+    clipTakes = [];
     setDockBusy(false);
   }
   $('video-close').addEventListener('click', closeClip);
-  document.querySelectorAll('input[name="scene-style"]').forEach(input => input.addEventListener('change', () => {
-    if (sceneStyle() === 'art' && currentClip) closeClip();
-    $('scene-style-note').textContent = sceneStyle() === 'video'
-      ? 'AI reimagines your drawing as video. Each take uses paid Gemini video generation.'
-      : 'Moves your original strokes. No redraws.';
-    setDockBusy(false);
-  }));
   async function createClip(prompt) {
     if (directing || makingVariations || busy()) return;
     if (currentClip && prompt.length < 3) {
       message('drawing-status', 'Tell us what you want to change.', true);
       return;
     }
-    if (!currentClip && !hasInk()) {
-      flashTray('Draw something first, then make a scene.', true);
+    const star = currentClip ? null : chosenStar();
+    if (!currentClip && !star && !hasInk()) {
+      flashTray('Draw something, or pick a star from your assets.', true);
       return;
     }
+    if (star && revision !== savedRevision && hasInk()
+      && !confirm(`Bring ${star.name} to life in a fresh scene? Your unsaved canvas is replaced (Undo brings it back).`)) return;
     directing = true;
     const previousClip = currentClip;
     setDockBusy(true);
@@ -2723,9 +3573,9 @@
     try {
       if (!previousClip) {
         stopPlay();
-        const fresh = unsavedThing();
-        let asset = editing?.kind === 'asset' && revision === savedRevision && frames.length === 1
-          ? { id: editing.id, name: $('title').value.trim() } : null;
+        const fresh = !star && unsavedThing();
+        let asset = star || (editing?.kind === 'asset' && revision === savedRevision && frames.length === 1
+          ? { id: editing.id, name: $('title').value.trim() } : null);
         if (fresh) {
           asset = await saveAsAsset();
           if (revision !== savedRevision) throw new Error('Your drawing changed while saving. Try again.');
@@ -2736,10 +3586,13 @@
           throw new Error('Choose an asset for a new scene to use this backdrop.');
         }
       }
-      const body = previousClip ? { prompt, previous_id: previousClip.id } : { prompt, layers: docLayers() };
+      const starring = [...new Set(layers.filter(layer => layer.asset).map(layer => layer.name))].join(', ').slice(0, 80);
+      const body = previousClip ? { prompt, previous_id: previousClip.id }
+        : { prompt, layers: docLayers(), starring, backdrop: backdropName().slice(0, 40) };
       const clip = await postJSON('/api/clips', JSON.stringify(body));
       pipelineFinish('\u2726 Your scene is ready');
-      if (currentClip === previousClip) showClip(clip);
+      clipTakes = previousClip ? [...clipTakes, clip] : [clip];
+      if (currentClip === previousClip) showClip(clip, { keepTakes: true });
       else message('drawing-status', 'Your new scene is ready in your library.');
       loadGallery(currentQuery);
     } catch (error) {
@@ -2784,7 +3637,6 @@
         renderEverything({ assets: assets.items.filter(hit => hit.id !== self), frames: moments.items, clips: clips.items },
           { receipt: '\u25ce Similar art and scenes inspired by a similar drawing.' });
       }
-      markGuide('where');
     } catch (error) {
       if (error.name !== 'AbortError') message('library-status', error.message, true);
     }
@@ -2831,48 +3683,36 @@
     await openAsset(item.id);
     if (editing?.kind === 'asset' && editing.id === item.id) startRefineFlow();
   }
-  function animateAsset(item) {
-    if (revision !== savedRevision && hasInk() && !confirm(`Animate ${item.name} in a fresh scene? Your unsaved canvas is replaced (Undo brings it back).`)) return;
-    canvas.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    autoAnimate({ asset: item });
-  }
   let makingVariations = false;
-  async function varyCurrent() {
-    if (makingVariations || directing || busy()) return;
-    if (!hasInk()) { flashTray('Draw an asset or backdrop first.', true); return; }
-    if (!unsavedThing() && !(editing?.kind === 'asset' && frames.length === 1)) {
-      flashTray('Open an asset or backdrop to make variations.', true);
-      return;
-    }
-    makingVariations = true;
-    $('dock-vary').disabled = true;
-    try {
-      let item = currentAsset();
-      if (unsavedThing()) {
-        pipelineStart();
-        item = await saveAsAsset();
-        if (revision !== savedRevision) throw new Error('Your drawing changed while saving. Try variations again.');
-        $('pipeline').hidden = true;
-      }
-      openVariations(item);
-    } catch (error) {
-      pipelineFail(error.message);
-      flashTray(error.message, true);
-    } finally {
-      makingVariations = false;
-      $('dock-vary').disabled = false;
-    }
-  }
   $('scene-direct').addEventListener('submit', event => {
     event.preventDefault();
     const prompt = $('scene-prompt').value.trim();
-    if (sceneStyle() === 'video') createClip(prompt);
-    else if (motionDraft) reviseMotion(prompt);
-    else autoAnimate({ prompt });
+    // Enter (or Change it) follows the take on screen; otherwise the button you pressed is the choice.
+    const style = revisingMode() || event.submitter?.dataset.style || 'art';
+    if (style === 'video') {
+      if (motionDraft) skipMotion();
+      createClip(prompt);
+    } else if (motionDraft) {
+      const read = readPrompt(prompt);
+      if (prompt && !read.ai && (read.on.length || read.off.length || read.tweak)) applyLocal(read);
+      else reviseMotion(prompt, read);
+    } else {
+      const star = chosenStar();
+      if (star && revision !== savedRevision && hasInk()
+        && !confirm(`Bring ${star.name} to life in a fresh scene? Your unsaved canvas is replaced (Undo brings it back).`)) return;
+      const aimed = star ? null : targetLayers();
+      autoAnimate({ prompt, ...(star ? { asset: star } : {}), ...(aimed ? { ids: new Set(aimed.map(layer => layer.id)) } : {}) });
+    }
   });
-  $('dock-vary').addEventListener('click', varyCurrent);
-  $('dock-similar').addEventListener('click', () => findSimilar());
-  $('dock-refine').addEventListener('click', startRefineFlow);
+  // Words in the box search by meaning; an empty box searches with the drawing itself.
+  $('dock-similar').addEventListener('click', () => {
+    const words = $('scene-prompt').value.trim();
+    if (!words) { findSimilar(); return; }
+    showLibrary();
+    setLibraryTab('all', false);
+    $('query').value = words;
+    loadGallery(words);
+  });
 
   // Drag an asset card's picture onto the canvas: it lands where you drop it (desktop).
   $('canvas-frame').addEventListener('dragover', event => {
@@ -2909,18 +3749,22 @@
       tray.hidden = false;
       tray.classList.remove('error');
       tray.classList.add('motion');
-      const { spec, stacks } = motionDraft;
-      const note = el('span', 'tray-note', `${spec.label} \u00b7 Want a change? Tell us below.`);
+      const { spec } = motionDraft;
+      const note = el('span', 'tray-note');
+      note.append(el('b', '', takes.length > 1 ? `Take ${takeAt + 1} of ${takes.length}` : 'Preview'),
+        ` \u00b7 ${spec.take || spec.label}`, el('span', 'long', ' \u00b7 your drawing hasn\'t changed'));
       tray.replaceChildren(note,
-        trayButton('Keep <kbd>\u23ce</kbd>', 'Keep \u00b7 Enter|Keep this animation.', keepMotion),
-        trayButton('Start over <kbd>Esc</kbd>', 'Start over \u00b7 Esc', skipMotion));
+        trayButton('\u2713 Keep<span class="long"> this take</span> <kbd>\u23ce</kbd>', 'Keep \u00b7 Enter|Turns this take into editable frames. Undo brings your drawing back.', keepMotion));
       if (spec.by === 'ai') {
-        tray.append(trayButton('\u21bb Try again', 'Try again|Create another animation.', () => {
+        tray.append(trayButton('\u21bb Another<span class="long"> take</span>', 'Another take|A fresh attempt. The takes you have stay right here.', () => {
           const again = spec.director ? {} : { prompt: spec.prompt, title: spec.title, ids: new Set(spec.tracks.map(track => track.layerId)) };
-          skipMotion();
-          autoAnimate(again);
+          autoAnimate({ ...again, effects: spec.effects || [], another: true });
         }));
       }
+      tray.append(compareButton(), trayButton('Discard <kbd>Esc</kbd>', 'Discard \u00b7 Esc|Close the preview. Your drawing stays exactly as it was.', () => {
+        skipMotion();
+        message('drawing-status', 'Discarded. Your drawing is exactly as it was.');
+      }));
       return;
     }
     const ready = activeSpark();
@@ -2945,15 +3789,16 @@
     if (ready) {
       const note = document.createElement('span');
       note.className = 'tray-note';
-      note.textContent = `\u2726 ${ready.result.note || 'Spark ready'}`;
+      note.append(el('b', '', 'Preview'), ` \u00b7 ${ready.result.note || 'AI draft'} \u00b7 nothing changes until you keep it`);
       tray.append(
         note,
         trayButton(`${ready.kind === 'guide' ? 'Pin guide' : ready.kind === 'sketch' ? 'Use sketch' : ready.kind === 'refine' ? 'Keep it' : 'Use it'} <kbd>\u23ce</kbd>`,
           ready.kind === 'sketch' ? 'Use sketch \u00b7 Enter|Adds it as a faint layer under your ink.' : ready.kind === 'guide' ? 'Pin guide \u00b7 Enter'
             : ready.kind === 'refine' ? `Keep it \u00b7 Enter|Kept ${ready.result.kept} of your ${ready.result.source_strokes} strokes exactly, added ${ready.result.added}. Undo brings the old one back.`
             : `Use it \u00b7 Enter|Adds these lines to "${activeLayer().name}".`, acceptSpark),
-        trayButton('Skip <kbd>Esc</kbd>', 'Skip \u00b7 Esc', dismissSpark),
-        trayButton('\u21bb', 'Try again', retrySpark)
+        ...(ready.kind === 'refine' || ready.kind === 'strokes' ? [compareButton()] : []),
+        trayButton('\u21bb', 'Another try|Same request, a new attempt.', retrySpark),
+        trayButton('Skip <kbd>Esc</kbd>', 'Skip \u00b7 Esc|Your drawing stays exactly as it was.', dismissSpark)
       );
       const queued = sparks.filter(spark => spark.status === 'ready').length - 1;
       if (queued > 0 || pending) {
@@ -2973,6 +3818,222 @@
       tray.append(note);
     }
   }
+  // Hold to compare: while pressed, every preview steps aside and the untouched drawing shows.
+  function compareButton() {
+    const button = trayButton('\ud83d\udc41 <span class="long">Hold to compare</span><span class="short">Peek</span>', 'Hold to compare|Press and hold to see your drawing without this preview.', () => {});
+    const peek = on => { peeking = on; button.classList.toggle('held', on); renderOverlay(); };
+    button.addEventListener('pointerdown', event => { event.preventDefault(); button.setPointerCapture?.(event.pointerId); peek(true); });
+    for (const type of ['pointerup', 'pointercancel', 'lostpointercapture']) button.addEventListener(type, () => peek(false));
+    button.addEventListener('keydown', event => { if (event.key === ' ' && !event.repeat) { event.preventDefault(); peek(true); } });
+    button.addEventListener('keyup', event => { if (event.key === ' ') peek(false); });
+    return button;
+  }
+  function undoable(text) {
+    message('drawing-status', text, false, [{ label: '\u21b6 Undo', tip: 'Undo \u00b7 Cmd/Ctrl+Z', run: () => { undo(); message('drawing-status', 'Undone.'); } }]);
+  }
+  // Who the box talks to: everything that can move (the default), or the layers you pick. Words only reach those.
+  function targetable() {
+    if (currentClip || (!motionDraft && chosenStar())) return [];
+    const stack = motionDraft ? motionDraft.spec.base : layers;
+    return stack.filter(layer => layer.visible && !layer.fx && hasInk([layer]) && !isScenery(layer));
+  }
+  function targetLayers() {
+    if (!targets) return null;
+    const picked = targetable().filter(layer => targets.has(layer.id));
+    return picked.length ? picked : null;
+  }
+  function setTargets(next) {
+    targets = next && next.size ? next : null;
+    glowTargets();
+    renderWho();
+    renderReading();
+  }
+  function followSelection(id, add) {
+    if (targetable().length < 2) return;
+    setTargets(add && targets ? new Set([...targets, id].slice(-4)) : new Set([id]));
+  }
+  function glowTargets(ms = 1600) {
+    targetGlow = performance.now() + ms;
+    renderOverlay();
+    clearTimeout(glowTargets.timer);
+    glowTargets.timer = setTimeout(() => { if (!motionDraft) renderOverlay(); }, ms + 40);
+  }
+  function paintTargetGlow(stack, k) {
+    if (performance.now() > targetGlow) return;
+    const aimed = targetLayers() || targetable();
+    if (!aimed.length) return;
+    const names = new Set(aimed.map(layer => layer.name)), ids = new Set(aimed.map(layer => layer.id));
+    octx.save();
+    octx.font = `650 ${Math.round(12 * k)}px system-ui, sans-serif`;
+    for (const layer of stack) {
+      if (!layer.visible || !(ids.has(layer.id) || (motionDraft && names.has(layer.name) && !layer.fx))) continue;
+      const b = inkBounds(layer.strokes);
+      if (!b) continue;
+      const pad = 10 * k;
+      octx.strokeStyle = '#7c3aed';
+      octx.lineWidth = 2 * k;
+      octx.setLineDash([7 * k, 5 * k]);
+      octx.strokeRect(b.x - pad, b.y - pad, b.w + pad * 2, b.h + pad * 2);
+      const label = `\u2726 ${layer.name}`, w = octx.measureText(label).width + 12 * k;
+      octx.setLineDash([]);
+      octx.fillStyle = '#7c3aed';
+      octx.fillRect(b.x - pad, Math.max(0, b.y - pad - 20 * k), w, 20 * k);
+      octx.fillStyle = '#fff';
+      octx.fillText(label, b.x - pad + 6 * k, Math.max(0, b.y - pad - 20 * k) + 14 * k);
+    }
+    octx.restore();
+  }
+  function layerChipThumb(layer) {
+    const thumb = document.createElement('canvas');
+    const size = 26, dpr = Math.min(2, window.devicePixelRatio || 1);
+    thumb.width = thumb.height = size * dpr;
+    const b = inkBounds(layer.strokes);
+    const source = layerCanvas(layer.id), k = source.width / W, side = Math.max(b.w, b.h) + 16;
+    thumb.getContext('2d').drawImage(source, (b.x + b.w / 2 - side / 2) * k, (b.y + b.h / 2 - side / 2) * k, side * k, side * k, 0, 0, thumb.width, thumb.height);
+    return thumb;
+  }
+  function renderWho() {
+    const row = $('scene-who');
+    const can = targetable();
+    if (can.length < 2) { row.hidden = true; row.replaceChildren(); return; }
+    if (targets && !can.some(layer => targets.has(layer.id))) targets = null;
+    const busyNow = document.querySelector('.scene-maker').classList.contains('busy');
+    const chip = (pressed, tip, run, ...content) => {
+      const button = el('button', `who-chip${pressed ? ' on' : ''}`);
+      button.type = 'button';
+      button.setAttribute('aria-pressed', String(pressed));
+      button.dataset.tip = tip;
+      button.disabled = busyNow;
+      button.append(...content);
+      button.addEventListener('click', run);
+      button.addEventListener('pointerenter', () => glowTargets(900));
+      return button;
+    };
+    row.replaceChildren(el('small', '', 'Talk to'),
+      chip(!targets, 'Everything|Your words reach everything that can move.', () => setTargets(null), el('span', '', 'Everything')),
+      ...can.map(layer => chip(!!targets?.has(layer.id), `${layer.name}|Aim your words at this layer only. Pick up to four. Tip: grab it on the canvas (Shift adds).`,
+        () => {
+          const next = new Set(targets || []);
+          if (next.has(layer.id)) next.delete(layer.id);
+          else if (next.size < 4) next.add(layer.id);
+          setTargets(next);
+        }, layerChipThumb(layer), el('span', '', layer.name))));
+    row.hidden = false;
+  }
+  $('scene-prompt').addEventListener('focus', () => glowTargets(2200));
+  $('scene-star').addEventListener('change', () => { renderWho(); renderReading(); });
+
+  // Before anything runs, the box says how it reads your words: what is free code, and what goes to Gemini.
+  function renderReading() {
+    const box = $('scene-read');
+    const text = $('scene-prompt').value.trim();
+    const revising = revisingMode();
+    const busyNow = document.querySelector('.scene-maker').classList.contains('busy');
+    if (revising === 'art' && !busyNow) $('dock-animate').textContent = '\u2726 Change it';
+    if (revising === 'video' || text.length < 3 || busyNow) { box.hidden = true; return; }
+    const read = readPrompt(text);
+    if (!revising && read.tweak) { read.ai = true; read.tweak = null; } // nothing to tweak yet: it's direction
+    if (!revising) read.off = [];
+    const aimed = targetLayers();
+    const who = aimed ? aimed.map(layer => layer.name) : revising ? motionDraft.spec.tracks.map(track => track.name) : [chosenStar()?.name || 'your drawing'];
+    const names = who.length > 1 ? `${who.slice(0, -1).join(', ')} and ${who[who.length - 1]}` : who[0];
+    const part = (kind, label, detail) => { const span = el('span', `read-part ${kind}`); span.append(el('b', '', label), ` ${detail}`); return span; };
+    const parts = [
+      ...read.on.map(fx => part('free', `${fx.icon} ${fx.name}`, 'effect layer \u00b7 free \u00b7 no AI')),
+      ...read.off.map(fx => part('free', `\u2212 ${fx.icon} ${fx.name}`, 'removed \u00b7 free')),
+      ...(read.tweak ? [part('free', read.tweak.label, `${read.tweak.say}${read.tweak.clock ? ' (whole scene)' : ` for ${aimed ? 'NAMES' : 'everything'}`} \u00b7 free`)] : [])
+    ];
+    parts.forEach(item => { item.lastChild.textContent = item.lastChild.textContent.replace('NAMES', names); });
+    if (read.ai) parts.push(part('ai', '\u2726 Gemini', `new keyframes for ${names} only (move, turn, squash)`));
+    else if (!revising) parts.push(part('ai', '\u2726 Gemini', `picks a motion for ${names}`));
+    if (read.warn) parts.push(part('warn', '\u26a0', 'Flipbook only moves what\u2019s drawn. Draw the new thing first, or try \u2726 AI video.'));
+    box.replaceChildren(el('small', '', revising ? 'This will' : 'Flipbook reads'), ...parts);
+    box.hidden = false;
+    if (revising === 'art' && !read.ai) $('dock-animate').textContent = '\u26a1 Apply \u00b7 free';
+  }
+  $('scene-prompt').addEventListener('input', renderReading);
+  function renderFxChips() {
+    const row = $('scene-fx');
+    const spec = !currentClip && motionDraft ? motionDraft.spec : null;
+    row.hidden = !spec;
+    if (!spec) { row.replaceChildren(); return; }
+    const on = new Set(spec.effects || []);
+    const busyNow = document.querySelector('.scene-maker').classList.contains('busy');
+    const chip = (label, pressed, tip, run) => {
+      const button = el('button', `fx-chip${pressed ? ' on' : ''}`, label);
+      button.type = 'button';
+      if (pressed !== null) button.setAttribute('aria-pressed', String(pressed));
+      button.dataset.tip = tip;
+      button.disabled = busyNow;
+      button.addEventListener('click', run);
+      return button;
+    };
+    row.replaceChildren(el('small', '', 'Instant \u00b7 free \u00b7 no AI'),
+      ...FX.map(fx => chip(`${fx.icon} ${fx.name}`, on.has(fx.id), `${fx.name}|${fx.hint} A layer of tiny strokes drawn by code. Tap again to remove.`,
+        () => applyLocal(on.has(fx.id) ? { off: [fx] } : { on: [fx] }))),
+      el('i', 'fx-sep'),
+      ...TWEAKS.map(tweak => chip(tweak.label, null, `${tweak.label.replace(/^\W+/, '')}|${tweak.say[0].toUpperCase()}${tweak.say.slice(1)}.`, () => applyLocal({ tweak }))));
+  }
+  // Effects and tweaks: a new take in an instant, computed right here. Gemini isn't asked.
+  function applyLocal({ on = [], off = [], tweak = null }) {
+    if (!motionDraft || directing) return false;
+    const from = motionDraft.spec;
+    const effects = withFx(from.effects, on, off);
+    const tooMuch = fxFits(from, effects);
+    if (tooMuch) { flashTray(tooMuch, true); return false; }
+    let spec = { ...from, effects };
+    const aimed = targetLayers();
+    if (tweak) {
+      spec = tweak.apply(spec, aimed ? new Set(aimed.map(layer => layer.id)) : null);
+      if (spec.seconds === from.seconds && JSON.stringify(spec.tracks.map(t => t.keys)) === JSON.stringify(from.tracks.map(t => t.keys))) {
+        flashTray(`That's as ${tweak.label.replace(/^\W+/, '').toLowerCase()} as it goes.`, true);
+        return false;
+      }
+    }
+    const bits = [...fxWords(on, off), ...(tweak ? [`${tweak.label}${aimed && !tweak.clock ? ` ${aimed.map(layer => layer.name).join(' + ')}` : ''}`] : [])];
+    if (!bits.length) return false;
+    const timing = tweak && spec.seconds !== from.seconds ? ` (${from.seconds.toFixed(1)} s \u2192 ${spec.seconds.toFixed(1)} s)` : '';
+    spec.take = bits.join(' ');
+    spec.change = `\u26a1 Take ${takes.length + 1}: ${bits.join(' ')}, instantly, no AI. ${[
+      on.length ? 'An effect is a layer of tiny strokes drawn by code, the same every time.' : '',
+      tweak ? `${tweak.say[0].toUpperCase()}${tweak.say.slice(1)}${timing}.` : 'Your keyframes didn\u2019t change.'
+    ].filter(Boolean).join(' ')}`;
+    $('scene-prompt').value = '';
+    previewMotion(spec);
+    renderReading();
+    return true;
+  }
+  // The takes strip under the box: every attempt, side by side. Tap one to see it; changes build on the one you see.
+  function showTake(index) {
+    if (!takes[index] || index === takeAt) return;
+    takeAt = index;
+    previewMotion(takes[index], { take: false });
+    renderTakes();
+  }
+  function renderTakes() {
+    const strip = $('takes');
+    const video = !!currentClip;
+    const list = video ? clipTakes : motionDraft || directing ? takes : [];
+    const chips = list.map((item, i) => {
+      const active = video ? item.id === currentClip.id : i === takeAt;
+      const label = video ? (i ? `+ ${item.prompt}` : item.prompt || 'Surprise') : item.take || item.label;
+      const chip = el('button', `take${active ? ' active' : ''}`);
+      chip.type = 'button';
+      chip.setAttribute('aria-pressed', String(active));
+      chip.append(el('b', '', String(i + 1)), el('span', '', label.length > 30 ? `${label.slice(0, 29)}\u2026` : label));
+      chip.addEventListener('click', () => (video ? showClip(item, { keepTakes: true }) : showTake(i)));
+      return chip;
+    });
+    if (directing && (list.length || motionDraft)) chips.push(Object.assign(el('span', 'take pending'), { textContent: `Take ${list.length + 1}\u2026` }));
+    strip.replaceChildren(...(chips.length ? [el('small', '', video ? 'Takes (all saved)' : 'Takes'), ...chips] : []));
+    strip.hidden = !chips.length || (!video && list.length < 2 && !directing);
+    // Scroll only when the current take is out of view, so the strip's label stays put whenever it can.
+    const current = strip.querySelector('.take.active, .take.pending');
+    if (current && !strip.hidden) {
+      const left = current.offsetLeft - strip.offsetLeft, right = left + current.offsetWidth;
+      if (left < strip.scrollLeft || right > strip.scrollLeft + strip.clientWidth - 24) strip.scrollTo({ left: Math.max(0, right - strip.clientWidth + 32), behavior: 'smooth' });
+    }
+  }
   function flashTray(text, error = false) {
     clearTimeout(trayTimer);
     const tray = $('spark-tray');
@@ -2989,6 +4050,24 @@
     if (mod && key === 'z') {
       event.preventDefault();
       event.shiftKey ? redo() : undo();
+    } else if (mod && !event.shiftKey && key === 'c' && !getSelection()?.toString()) {
+      event.preventDefault();
+      copyLayer();
+    } else if (mod && key === 'v' && !busy()) {
+      event.preventDefault();
+      pasteClipboard();
+    } else if (mod && key === 'd' && !busy()) {
+      event.preventDefault();
+      duplicateLayer();
+    } else if (!mod && !event.altKey && /^[1-7]$/.test(event.key)) {
+      event.preventDefault();
+      document.querySelectorAll('.ink-dot')[Number(event.key) - 1]?.click();
+    } else if (event.key === '?') {
+      event.preventDefault();
+      $('help').showModal();
+    } else if (!mod && !event.altKey && key === 'w' && !busy()) {
+      event.preventDefault();
+      $('nudge').hidden ? openNudge() : closeNudge();
     } else if (!mod && !event.altKey && TOOL_KEYS[key] && !busy()) {
       event.preventDefault();
       closePopover();
@@ -3008,6 +4087,9 @@
     } else if (!mod && (event.key === '[' || event.key === ']')) {
       event.preventDefault();
       setWidth(Number($('width').value) + (event.key === ']' ? 2 : -2));
+    } else if (motionDraft && takes.length > 1 && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
+      event.preventDefault();
+      showTake(Math.max(0, Math.min(takes.length - 1, takeAt + (event.key === 'ArrowRight' ? 1 : -1))));
     } else if (motionDraft && (event.key === 'Enter' || event.key === 'Escape') && !event.target.closest?.('button, a, [role="button"]')) {
       event.preventDefault();
       event.key === 'Enter' ? keepMotion() : skipMotion();
@@ -3129,6 +4211,8 @@
     $('save-label').textContent = !updating ? text.save
       : saveKind === 'asset' ? `Save as v${editing.version + 1}` : `Update ${editing.code}`;
     $('save-new').hidden = !updating;
+    $('save-heading').textContent = !updating ? 'Save to your library'
+      : saveKind === 'asset' ? `Save ${$('title').value.trim() || 'it'} as v${editing.version + 1}` : `Save changes to ${editing.code}`;
     // An animated scene is one tap from a link: unsaved, the button saves first.
     const savedScene = editing && editing.kind === 'shot';
     $('share-open').hidden = !(saveKind === 'shot' && (savedScene || frames.length > 1));
@@ -3140,6 +4224,8 @@
       : 'Tip: open Assets below and tap \u25c6 Place to add one.';
   }
   document.querySelectorAll('.kind-switch button').forEach(b => b.addEventListener('click', () => setSaveKind(b.dataset.kind)));
+  // A field that needs attention can't hide inside a closed panel.
+  $('save-form').addEventListener('invalid', () => { $('save-card').open = true; }, true);
   $('save-new').addEventListener('click', () => {
     editing = null;
     renderSaveKind();
@@ -3263,21 +4349,19 @@
       if (kind === 'asset') {
         editing = { kind, id: saved.id, version: saved.version };
         loadSceneBackdrops();
-        markGuide('asset');
         if (pendingVary) {
           const goal = pendingVary;
           pendingVary = null;
           openVariations({ ...saved, type: saved.type || $('asset-type').value, tags: saved.tags || tags }, goal);
         }
         message('drawing-status', `Saved "${saved.name}" v${saved.version}.${note} Next:`, false, [
-          { label: '\u2726 Animate it', tip: 'Animate it|Turn your drawing into an editable scene.', run: () => autoAnimate({ asset: saved }) },
+          { label: '\ud83c\udf9e Flipbook it', tip: 'Flipbook|AI choreographs your own strokes, frame by frame.', run: () => autoAnimate({ asset: saved }) },
           { label: '\u25ce Find similar', tip: 'Find similar|Look-alikes, ranked by the vector Voyage just stored: no new embedding.', run: () => findSimilar(saved) },
           { label: '\u2726 Make variations', tip: 'Variations|Lookalikes for a crowd or a battle, made by editing your strokes.', run: () => openVariations(saved) },
           { label: 'Where is it used?', run: () => openWhereUsed(saved) }
         ]);
       } else if (kind === 'shot') {
         editing = { kind, id: saved.id, code: saved.code };
-        if (saved.assets?.length) markGuide('shot');
         if (wantShare) setTimeout(openShare);
         const first = saved.assets?.[0];
         message('drawing-status', `Saved ${saved.code}.${note} ${saved.assets?.length ? `Now findable from ${saved.assets.map(a => `"${a.name}"`).join(', ')}.` : 'Tip: place an asset in it, so the asset can find this scene.'}`, false,
@@ -3491,14 +4575,17 @@
     text.append(el('strong', '', item.name),
       el('small', '', `${typeLabel(item.type)} \u00b7 v${item.version} \u00b7 in ${item.uses ?? 0} scene${item.uses === 1 ? '' : 's'}`));
     const actions = el('div', 'card-actions');
-    const animateIt = actionButton('\u2726 Animate', 'primary-mini', 'Animate|Turn your drawing into an editable scene.', () => animateAsset(item));
-    const similar = actionButton('\u25ce Similar', '', 'Find similar|Look-alike assets and the frames they show up in, ranked by its stored vector: no new embedding.', () => findSimilar(item));
-    const refine = actionButton('\u2726 Refine', 'ai-mini', 'Refine with AI|Opens it with AI suggestions for what it could use next. You keep or skip.', () => refineAsset(item));
-    const more = el('div', 'card-more');
-    const place = el('button', 'link-button', '\u25c6 Place');
-    place.type = 'button';
-    place.dataset.tip = 'Place in a scene|Drops it onto the canvas, ready to drag (or drag its picture onto the canvas). It stays linked, so it always knows where it\'s used.';
-    place.addEventListener('click', () => startPlacing(item));
+    const backdrop = item.type === 'environment';
+    const animateIt = actionButton(backdrop ? '\u2726 Use as backdrop' : '\u2726 Bring to life', 'primary-mini',
+      backdrop ? 'Use as backdrop|Sets the scene for your next flipbook or AI video.' : 'Bring to life|Stars it in your next flipbook or AI video.',
+      () => castInScene(item));
+    const similar = actionButton('\u25ce Similar', '', 'Find similar|Look-alikes ranked by its stored Voyage AI vector in Atlas: no new embedding.', () => findSimilar(item));
+    const more = el('details', 'card-more');
+    more.append(el('summary', '', 'More'));
+    const refine = el('button', 'link-button', 'Refine');
+    refine.type = 'button';
+    refine.dataset.tip = 'Refine with AI|Opens it with AI suggestions for what it could use next. You keep or skip.';
+    refine.addEventListener('click', () => refineAsset(item));
     const where = el('button', 'link-button', 'Where used?');
     where.type = 'button';
     where.dataset.tip = 'Where is it used?|Every scene using it, which are outdated, and look-alikes.';
@@ -3523,8 +4610,16 @@
       }
       text.append(made);
     }
-    actions.append(animateIt, similar, refine);
-    more.append(place, where, vary, edit);
+    actions.append(animateIt, similar);
+    const copy = el('button', 'link-button', 'Copy');
+    copy.type = 'button';
+    copy.dataset.tip = 'Copy|Paste it into any scene (linked), or use it as a stamp brush.';
+    copy.addEventListener('click', () => copyAsset(item));
+    const brush = el('button', 'link-button', '\ud83d\udd8c Brush');
+    brush.type = 'button';
+    brush.dataset.tip = 'Use as brush|Your own art as a stamp brush. Tap to stamp, drag to scatter.';
+    brush.addEventListener('click', () => brushFromAsset(item));
+    more.append(edit, copy, brush, vary, refine, where);
     const thumb = thumbButton(item, `Edit asset ${item.name}`, () => openAsset(item.id));
     thumb.draggable = true;
     thumb.addEventListener('dragstart', event => {
@@ -3593,7 +4688,8 @@
     text.append(el('strong', '', item.name), el('small', '', 'AI-reimagined video \u00b7 based on your drawing'));
     if (item.prompt) text.append(el('small', '', item.prompt));
     const actions = el('div', 'card-actions');
-    actions.append(actionButton('\u25b6 Watch & change', 'primary-mini', null, () => showClip(item)));
+    actions.append(actionButton('\u25b6 Watch & change', 'primary-mini', null, () => showClip(item)),
+      actionButton('What the AI saw', '', 'No black box|The exact picture and words Gemini received.', () => openSeen(item)));
     card.append(thumbButton(item, `Watch ${item.name}`, () => showClip(item)), text, actions);
     return card;
   }
@@ -3643,12 +4739,11 @@
       cards.push(el('div', 'empty', query || sketch || filterText ? 'No matches. Try other words or another sketch, or give new saves a moment.'
         : tab === 'asset' || tab === 'backdrop' ? 'Nothing here yet. Draw something and save it to your library.'
         : tab === 'shot' ? 'No scenes yet. \u25c6 Place an asset, draw the rest, save as Scene.'
-        : tab === 'frame' ? 'No animated scenes yet. Draw something and make a scene.'
+        : tab === 'frame' ? 'No animated scenes yet. Doodle something and bring it to life.'
         : 'No ideas yet. Save loose sketches here and find them by describing them.'));
     }
     $('results').classList.remove('sectioned');
     $('results').replaceChildren(...cards);
-    if ((query || sketch) && items.length) markGuide('where');
     const sceneCount = tab === 'frame' ? groupFrames(items).length + clips.length : 0;
     const what = tab === 'frame' ? `${sceneCount} animated scene${sceneCount === 1 ? '' : 's'}` : null;
     const matches = what || `${items.length} match${items.length === 1 ? '' : 'es'}`;
@@ -3718,13 +4813,12 @@
           const data = await api(`/api/find?q=${encodeURIComponent(query)}`, { signal: controller.signal });
           if (controller.signal.aborted) return;
           renderEverything(data, { receipt: `Results for \u201c${query}\u201d, most similar first.` });
-          if (data.assets.length || data.scenes.length || data.frames.length) markGuide('where');
         } else {
           const [assets, scenes, clips] = await Promise.all([api('/api/assets', { signal: controller.signal }), api('/api/shots', { signal: controller.signal }), api('/api/clips', { signal: controller.signal })]);
           if (controller.signal.aborted) return;
           renderEverything({ assets: assets.items.slice(0, 10), scenes: scenes.items.slice(0, 6), clips: clips.items.slice(0, 6) }, {
             receipt: 'Your latest work. Search above by meaning, or tap \u25ce Find similar under the canvas.',
-            empty: 'Nothing here yet. Draw something above and make a scene.' });
+            empty: 'Nothing here yet. Doodle something above and bring it to life.' });
         }
       } catch (error) {
         if (error.name !== 'AbortError') {
@@ -3847,7 +4941,6 @@
     $('wu-vary').onclick = () => { $('where-used').close(); openVariations(whereAsset); };
     $('wu-breakdown').onclick = () => { $('where-used').close(); breakdownOfAsset(whereAsset.id); };
     if (!$('where-used').open) $('where-used').showModal();
-    markGuide('where');
     runWhereUsed();
   }
   function meter(score) {
@@ -4046,9 +5139,259 @@
   $('wu-filters').addEventListener('submit', event => { event.preventDefault(); runWhereUsed(); });
   $('wu-status').addEventListener('change', runWhereUsed);
   $('wu-close').addEventListener('click', () => $('where-used').close());
-  for (const id of ['where-used', 'help']) {
+  for (const id of ['where-used', 'help', 'seen']) {
     $(id).addEventListener('click', event => { if (event.target === $(id)) $(id).close(); });
   }
+  // No black box: the exact picture and words an AI video was made from.
+  function openSeen(clip) {
+    $('seen-image').src = clip.image_url;
+    $('seen-brief').textContent = clip.brief || clip.prompt || 'No words: a surprise, from the picture alone.';
+    $('seen-note').textContent = clip.revision
+      ? 'A change to an earlier take: Gemini got these words plus its own previous video. Your drawing on the canvas is untouched.'
+      : 'Model: Gemini Omni. The video is a new take inspired by your drawing; your drawing on the canvas is untouched.';
+    $('seen').showModal();
+  }
+  $('seen-close').addEventListener('click', () => $('seen').close());
+
+  // ---------------------------------------------------------------- the finder: search from anywhere (Cmd/Ctrl+K, /)
+  // One box, results by meaning as you type, and every result usable right here: place it, bring it to life,
+  // set the scene, open it, or find more like it.
+  const SEARCH_IDEAS = ['a cute animal', 'something that flies', 'a rocket', 'a sunny day', 'the moment it leaves the ground'];
+  let finderRequest = null;
+  let finderTimer = null;
+  let finderAt = -1;
+  const finderCache = new Map();
+  function finderItems() { return [...$('finder-body').querySelectorAll('.finder-item')]; }
+  function finderFocus(index) {
+    const items = finderItems();
+    if (!items.length) { finderAt = -1; return; }
+    finderAt = (index + items.length) % items.length;
+    items.forEach((item, i) => item.classList.toggle('active', i === finderAt));
+    items[finderAt].scrollIntoView({ block: 'nearest' });
+  }
+  function finderAct(run) {
+    return () => { $('finder').close(); run(); };
+  }
+  function finderCard({ image, title, meta, badge = '', actions }) {
+    const card = el('div', 'finder-item');
+    const thumb = el('span', 'finder-thumb');
+    if (image instanceof HTMLElement) thumb.append(image);
+    else if (image) { const img = el('img'); img.src = image; img.alt = ''; img.loading = 'lazy'; img.onerror = () => img.remove(); thumb.append(img); }
+    if (badge) thumb.append(el('span', 'finder-badge', badge));
+    const text = el('span', 'finder-text');
+    text.append(el('strong', '', title), el('small', '', meta));
+    const row = el('span', 'finder-actions');
+    actions.forEach(([label, run, primary], i) => {
+      const button = el('button', primary || i === 0 ? 'finder-go primary' : 'finder-go', label);
+      button.type = 'button';
+      button.addEventListener('click', event => { event.stopPropagation(); run(); });
+      row.append(button);
+    });
+    card.append(thumb, text, row);
+    card.addEventListener('click', () => actions[0][1]());
+    return card;
+  }
+  function assetResult(item) {
+    const backdrop = item.type === 'environment';
+    return finderCard({ image: item.image_url, title: item.name, meta: `${typeLabel(item.type)} \u00b7 v${item.version}${item.score != null ? ` \u00b7 ${Math.round(item.score * 100)}% match` : ''}`,
+      actions: backdrop
+        ? [['Use as backdrop', finderAct(() => castInScene(item))], ['Open', finderAct(() => openAsset(item.id))], ['\u25ce Similar', () => finderSimilar(item)]]
+        : [['Place', finderAct(() => { showTop(); startPlacing(item); })], ['\u2726 Bring to life', finderAct(() => castInScene(item))], ['\u25ce Similar', () => finderSimilar(item)]] });
+  }
+  function finderSection(title, cards) {
+    if (!cards.length) return [];
+    const head = el('h3', 'finder-head', title);
+    head.append(el('span', 'results-count', String(cards.length)));
+    const grid = el('div', 'finder-grid');
+    grid.append(...cards);
+    return [head, grid];
+  }
+  function renderFinderResults(data, note) {
+    const frames = groupFrames(data.frames || []).map(group => group[0]);
+    const parts = [
+      ...finderSection('Assets & backdrops', (data.assets || []).map(assetResult)),
+      ...finderSection('Scenes', (data.scenes || []).map(item => finderCard({ image: item.image_url, title: item.code,
+        meta: `${item.frames > 1 ? `\ud83c\udf9e ${item.frames} frames` : 'Scene'}${item.assets?.length ? ` \u00b7 ${item.assets.map(a => a.name).join(', ')}` : ''}`,
+        actions: [['Open', finderAct(() => openShot(item.id))]] }))),
+      ...finderSection('Moments', frames.map(item => finderCard({ image: item.image_url, title: item.code, badge: `${item.frame}/${item.frames}`,
+        meta: `Frame ${item.frame}${item.assets?.length ? ` \u00b7 ${item.assets.map(a => a.name).join(', ')}` : ''}`,
+        actions: [[`Open frame ${item.frame}`, finderAct(() => openShotAt(item.shot_id, item.frame))]] }))),
+      ...finderSection('AI videos', (data.clips || []).map(item => finderCard({ image: item.image_url, title: item.name, meta: item.prompt || 'AI video',
+        actions: [['\u25b6 Watch', finderAct(() => { showTop(); showClip(item); })], ['What the AI saw', () => openSeen(item)]] })))
+    ];
+    $('finder-body').replaceChildren(...(parts.length ? parts : [el('p', 'finder-empty', 'Nothing yet. Try other words, or search with your drawing.')]));
+    $('finder-status').textContent = note;
+    finderAt = -1;
+  }
+  function renderFinderHome() {
+    const ideas = el('div', 'finder-ideas');
+    ideas.append(el('small', '', 'Try'), ...SEARCH_IDEAS.map(idea => {
+      const chip = el('button', 'example', idea);
+      chip.type = 'button';
+      chip.addEventListener('click', () => { $('finder-q').value = idea; runFinder(idea); });
+      return chip;
+    }));
+    const blank = canvasIsBlank();
+    const backdrops = STARTERS.filter(item => item.kind === 'shot' && item.id !== 'bounce').map(item => {
+      if (!previewCache.has(item.id)) previewCache.set(item.id, starterPreview(item).toDataURL());
+      return finderCard({ image: previewCache.get(item.id), title: `${item.icon} ${item.name}`, meta: blank ? 'Draw on it' : 'Set the scene',
+        actions: blank ? [['Draw on it', finderAct(() => { showTop(); useStarter(item); })], ['Use as backdrop', finderAct(() => castStarter(item))]]
+          : [['Use as backdrop', finderAct(() => castStarter(item))], ['Draw on it', finderAct(() => { showTop(); useStarter(item); })]] });
+    });
+    const parts = [ideas, ...finderSection('Starter backdrops', backdrops)];
+    if (!account?.library?.assets) {
+      const pack = el('button', 'finder-pack', '\ud83c\udf81 Add the starter pack: Little Fox, Red Rocket & friends');
+      pack.type = 'button';
+      pack.addEventListener('click', () => addStarterPack(pack));
+      parts.push(pack);
+    }
+    $('finder-body').replaceChildren(...parts);
+    $('finder-status').textContent = '';
+    finderAt = -1;
+    api('/api/assets').then(data => {
+      if ($('finder-q').value.trim() || !$('finder').open) return;
+      $('finder-body').append(...finderSection('Your latest', data.items.slice(0, 8).map(assetResult)));
+    }).catch(() => {});
+  }
+  async function runFinder(query) {
+    clearTimeout(finderTimer);
+    finderRequest?.abort();
+    if (!query) { renderFinderHome(); return; }
+    if (finderCache.has(query)) { renderFinderResults(finderCache.get(query), `Results for \u201c${query}\u201d, closest in meaning first.`); return; }
+    const controller = new AbortController();
+    finderRequest = controller;
+    $('finder-status').textContent = 'Searching by meaning\u2026';
+    $('finder').classList.add('searching');
+    try {
+      const data = await api(`/api/find?q=${encodeURIComponent(query)}`, { signal: controller.signal });
+      if (controller.signal.aborted) return;
+      finderCache.set(query, data);
+      renderFinderResults(data, `Results for \u201c${query}\u201d, closest in meaning first.`);
+    } catch (error) {
+      if (error.name !== 'AbortError') $('finder-status').textContent = error.message;
+    } finally {
+      if (finderRequest === controller) $('finder').classList.remove('searching');
+    }
+  }
+  async function finderSimilar(item) {
+    finderRequest?.abort();
+    const controller = new AbortController();
+    finderRequest = controller;
+    $('finder-q').value = '';
+    $('finder-status').textContent = `Finding things like ${item.name}\u2026`;
+    try {
+      const data = await api(`/api/assets/${encodeURIComponent(item.id)}/similar`, { signal: controller.signal });
+      if (!controller.signal.aborted) renderFinderResults(data, `Like ${item.name}, by its stored vector (no new embedding).`);
+    } catch (error) {
+      if (error.name !== 'AbortError') $('finder-status').textContent = error.message;
+    }
+  }
+  async function finderSketch() {
+    if (!hasInk()) { $('finder-status').textContent = 'Draw something first: a quick doodle is enough. It becomes the search.'; return; }
+    finderRequest?.abort();
+    const controller = new AbortController();
+    finderRequest = controller;
+    $('finder-q').value = '';
+    $('finder-status').textContent = 'Voyage AI is embedding your drawing\u2026';
+    try {
+      const ask = scope => api('/api/search/sketch', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scope, layers: docLayers(), ...(scope === 'frame' ? { animated: true } : {}) }), signal: controller.signal });
+      const [assets, moments, clips] = await Promise.all([ask('asset'), ask('frame'), ask('clip')]);
+      if (!controller.signal.aborted) renderFinderResults({ assets: assets.items, frames: moments.items, clips: clips.items }, 'Things that look like your drawing.');
+    } catch (error) {
+      if (error.name !== 'AbortError') $('finder-status').textContent = error.message;
+    }
+  }
+  function castStarter(item) {
+    if (motionDraft) skipMotion();
+    if (currentClip) closeClip();
+    $('scene-backdrop').value = `starter:${item.id}`;
+    showTop();
+    flashTray(`${item.icon} ${item.name} is the backdrop for your next flipbook or AI video.`);
+  }
+  async function addStarterPack(button = null) {
+    if (button) { button.disabled = true; button.textContent = 'Adding\u2026'; }
+    try {
+      const result = await api('/api/library/starter', { method: 'POST' });
+      if (account) { account.library = result.library; renderAccount(); }
+      loadGallery(currentQuery);
+      loadSceneBackdrops();
+      if ($('finder').open && !$('finder-q').value.trim()) renderFinderHome();
+      return result.added.assets;
+    } catch (error) {
+      if (button) { button.disabled = false; button.textContent = error.message; }
+      return 0;
+    }
+  }
+  function openFinder(query = '') {
+    if ($('finder').open) { $('finder-q').focus(); return; }
+    closeNudge();
+    closeKit();
+    $('finder-q').value = query;
+    $('finder').showModal();
+    $('finder-q').focus();
+    runFinder(query);
+  }
+  $('finder-open').addEventListener('click', () => openFinder());
+  $('finder-close').addEventListener('click', () => $('finder').close());
+  $('finder-sketch').addEventListener('click', finderSketch);
+  $('finder').addEventListener('click', event => { if (event.target === $('finder')) $('finder').close(); });
+  $('finder-form').addEventListener('submit', event => { event.preventDefault(); runFinder($('finder-q').value.trim()); });
+  $('finder-q').addEventListener('input', () => {
+    clearTimeout(finderTimer);
+    const query = $('finder-q').value.trim();
+    // Each search is one embedding: wait for a pause in typing.
+    if (!query) renderFinderHome();
+    else if (query.length >= 2) finderTimer = setTimeout(() => runFinder(query), 450);
+  });
+  $('finder').addEventListener('keydown', event => {
+    if (event.key === 'Escape') { event.preventDefault(); $('finder').close(); }
+    else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); finderFocus(finderAt + (event.key === 'ArrowDown' ? 1 : -1)); }
+    else if (event.key === 'Enter' && finderAt >= 0 && event.target === $('finder-q')) {
+      event.preventDefault();
+      finderItems()[finderAt]?.click();
+    }
+  });
+  // Search from anywhere: Cmd/Ctrl+K even while typing elsewhere, and / when not typing.
+  document.addEventListener('keydown', event => {
+    const mod = event.metaKey || event.ctrlKey;
+    if (mod && event.key.toLowerCase() === 'k') { event.preventDefault(); openFinder(); }
+    else if (event.key === '/' && !mod && !isTyping(event.target) && !document.querySelector('dialog[open]')) { event.preventDefault(); openFinder(); }
+  });
+
+  // Under the hood: every moving part in plain words, with the artist's own canvas as the example.
+  function openHood() {
+    const strokes = allStrokes().filter(stroke => !stroke.erase);
+    const counts = madeBy([layers]);
+    const total = counts.hand + counts.placed + counts.ai + counts.kit;
+    const yours = total ? Math.round((counts.hand + counts.placed - counts.placedAi) / total * 100) : 100;
+    const stats = [['Strokes', strokes.length], ['Points', pointCount.toLocaleString()], ['Layers', layers.length], ['Your hand', `${yours}%`]];
+    $('hood-stats').replaceChildren(...stats.map(([label, value]) => {
+      const row = el('div');
+      row.append(el('dt', '', label), el('dd', '', String(value)));
+      return row;
+    }));
+    const last = strokes[strokes.length - 1];
+    const r = v => Math.round(v * 1000) / 1000;
+    $('hood-json').textContent = last
+      ? JSON.stringify({ color: last.color, width: last.width, ...(last.ai ? { ai: true } : {}),
+        points: [...last.points.slice(0, 3).map(p => ({ x: r(p.x), y: r(p.y), pressure: r(p.pressure ?? 0.5) })), `\u2026 ${Math.max(0, last.points.length - 3)} more`] }, null, 1)
+        .replace(/\n\s*/g, ' ')
+      : 'Draw a line, then open this again: your stroke shows up here as data.';
+    $('hood').showModal();
+  }
+  $('hood-close').addEventListener('click', () => $('hood').close());
+  // The hero's three rules open the hood at the rule you tapped.
+  document.querySelectorAll('.hero-rules [data-rule]').forEach(button => button.addEventListener('click', () => {
+    openHood();
+    const rule = $(`rule-${button.dataset.rule}`);
+    document.querySelectorAll('.hood-rules li').forEach(item => item.classList.toggle('lit', item === rule));
+    rule.scrollIntoView({ block: 'nearest' });
+  }));
+  $('hood').addEventListener('click', event => { if (event.target === $('hood')) $('hood').close(); });
+  $('help-hood').addEventListener('click', () => { $('help').close(); openHood(); });
+  document.querySelector('.connection').addEventListener('click', openHood);
+  document.querySelector('.fine-print').addEventListener('click', openHood);
 
   // ---------------------------------------------------------------- variations: one asset in, lookalikes out
   // The artist plans (editable briefs), AI edits the artist's own strokes per brief, the artist keeps and finishes.
@@ -4213,8 +5556,7 @@
         layers: [{ name: item.name.slice(0, 40), strokes: item.result.strokes }], origin: variationOrigin(item), history: []
       }));
       item.status = 'kept';
-      markGuide('vary');
-      if (varAsset.type === 'environment') loadSceneBackdrops();
+      loadSceneBackdrops();
       message('var-status', `Kept "${item.saved.name}". It's in your library, linked to ${varAsset.name}.`);
       if (libraryTab === 'asset' || libraryTab === 'all') loadGallery(currentQuery);
     } catch (error) {
@@ -4349,7 +5691,6 @@
       $('share-native').hidden = !navigator.share;
       $('share-ready').hidden = false;
       $('share-status').textContent = `Live: ${shared.frames} frames, ${(shared.bytes / 1024).toFixed(0)} KB.`;
-      markGuide('share');
       logEvent('artist', 'Shared', `a public link (${shared.frames} frames)`);
     } catch (error) {
       $('share-status').textContent = error.message;
@@ -4401,6 +5742,8 @@
     for (const layer of stacks.flat()) {
       // Hidden guides and backups don't count; nor do posed copies of frame 1 (moved, not drawn).
       if (!layer.visible || layer.xf) continue;
+      // Weather (snow, rain...) is code, like the paper: it isn't authorship either way.
+      if (FX_NAMES.has(layer.name) && layer.strokes.length && layer.strokes.every(stroke => stroke.kit)) continue;
       for (const stroke of layer.strokes) {
         if (stroke.erase || seen.has(stroke)) continue;
         seen.add(stroke);
@@ -5017,81 +6360,22 @@
   $('starters-sheet').addEventListener('click', event => { if (event.target === $('starters-sheet')) $('starters-sheet').close(); });
   $('starter-skip').addEventListener('click', () => { startersDismissed = true; renderStarters(); });
 
-  // ---------------------------------------------------------------- the natural flow: next steps, guide, help
+  // ---------------------------------------------------------------- the natural flow: next steps and help
   function goPlace() {
     setLibraryTab('asset');
     $('results').scrollIntoView({ behavior: 'smooth', block: 'start' });
     pulse('.asset-card .primary-mini');
   }
   function pulse(selector) {
-    // A gentle "look here" on the control the guide is talking about.
+    // A gentle "look here" on the control a message is talking about.
     setTimeout(() => document.querySelectorAll(selector).forEach(node => {
       node.classList.remove('pulse');
       void node.offsetWidth;
       node.classList.add('pulse');
     }), 450);
   }
-  const GUIDE_KEY = 'inkling.guide.v1';
-  const guide = (() => {
-    try { return { done: {}, hidden: false, ...JSON.parse(localStorage.getItem(GUIDE_KEY) || '{}') }; } catch { return { done: {}, hidden: false }; }
-  })();
-  const GUIDE_STEPS = [
-    { id: 'draw', title: 'Draw it', detail: 'Draw an asset or backdrop. Need a start? Try AI sparks.',
-      show: () => { $('ai-tools').open = true; canvas.scrollIntoView({ behavior: 'smooth', block: 'center' }); setAiMode('sketch'); pulse('#ai-bar .ai-input'); flashTray('Draw here, or type in Ask AI below for a blue-pencil start.'); } },
-    { id: 'animate', title: 'Make a scene', detail: 'Describe what happens, or let AI surprise you. Change the take with your words.',
-      show: () => { $('dock-animate').scrollIntoView({ behavior: 'smooth', block: 'center' }); pulse('#dock-animate'); } },
-    { id: 'where', title: 'Find your art', detail: 'Search your assets, backdrops, and animated scenes by words or a sketch.',
-      show: () => { showLibrary(); pulse('#query'); } }
-  ];
-  let prefsTimer = null;
-  function saveGuide() {
-    try { localStorage.setItem(GUIDE_KEY, JSON.stringify(guide)); } catch { /* private mode: the guide just won't persist */ }
-    // Progress follows the member across devices: a private m-stash record of theirs.
-    if (!account) return;
-    clearTimeout(prefsTimer);
-    prefsTimer = setTimeout(() => api('/api/prefs', { method: 'PUT', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ guide: Object.keys(guide.done).filter(id => guide.done[id]).slice(0, 12) }) }).catch(() => {}), 800);
-  }
-  function markGuide(id) {
-    if (guide.done[id]) return;
-    guide.done[id] = true;
-    saveGuide();
-    renderGuide();
-  }
-  function renderGuide() {
-    const next = GUIDE_STEPS.find(step => !guide.done[step.id]);
-    const count = GUIDE_STEPS.filter(step => guide.done[step.id]).length;
-    // Once every step is done the guide steps aside, so the canvas sits higher (Help brings it back).
-    $('guide').hidden = guide.hidden || (count === GUIDE_STEPS.length && !guide.reopened);
-    if ($('guide').hidden) return;
-    $('guide-count').textContent = count === GUIDE_STEPS.length ? 'You\'ve got it \u2728' : `${count} of ${GUIDE_STEPS.length}`;
-    $('guide-steps').replaceChildren(...GUIDE_STEPS.map((step, index) => {
-      const done = !!guide.done[step.id];
-      const item = el('li', `guide-step${done ? ' done' : ''}${step === next ? ' next' : ''}`);
-      item.append(el('span', 'guide-num', done ? '\u2714' : String(index + 1)));
-      const body = el('div', 'guide-body');
-      body.append(el('b', '', step.title), el('span', '', step.detail));
-      item.append(body);
-      if (!done) {
-        const show = el('button', step === next ? 'mini primary-mini' : 'mini', 'Show me');
-        show.type = 'button';
-        show.addEventListener('click', step.show);
-        item.append(show);
-      }
-      return item;
-    }));
-  }
-  $('guide-hide').addEventListener('click', () => { guide.hidden = true; saveGuide(); renderGuide(); });
   $('help-open').addEventListener('click', () => $('help').showModal());
   $('help-close').addEventListener('click', () => $('help').close());
-  $('help-guide').addEventListener('click', () => {
-    guide.hidden = false;
-    guide.reopened = true;
-    saveGuide();
-    renderGuide();
-    $('help').close();
-    $('guide').scrollIntoView({ behavior: 'smooth', block: 'center' });
-  });
   $('help-demo').addEventListener('click', async () => {
     try {
       const data = await api('/api/assets?q=Red%20Rocket');
@@ -5104,17 +6388,110 @@
       $('help-demo').textContent = 'No example yet';
     }
   });
-  async function syncGuideWithLibrary() {
-    // Returning artists shouldn't be told to do what they've already done.
-    try {
-      const assets = await api('/api/assets');
-      if (assets.items.length) { guide.done.draw = true; guide.done.asset = true; }
-      const frames = await api('/api/frames');
-      if (frames.items.some(frame => frame.frames > 1)) guide.done.animate = true;
-      saveGuide();
-    } catch { /* the guide still works from local progress */ }
-    renderGuide();
+
+  // ---------------------------------------------------------------- the menu: one tap to anywhere
+  const reduceMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const buzz = () => { try { navigator.vibrate?.(8); } catch { /* not every device can */ } };
+  function openMenu() {
+    $('menu-account').textContent = account ? (account.user.email || 'Local studio') : '';
+    $('menu-account').hidden = !account;
+    $('menu-status').textContent = [$('connection').textContent,
+      account ? $('account-counts').textContent : ''].filter(Boolean).join(' \u00b7 ');
+    $('menu-sign-out').hidden = !account || authConfig?.mode === 'off';
+    $('menu').classList.remove('closing');
+    $('menu').style.transform = '';
+    $('menu').showModal();
+    $('menu-open').setAttribute('aria-expanded', 'true');
+    buzz();
   }
+  function closeMenu(then) {
+    const menu = $('menu');
+    if (!menu.open) { then?.(); return; }
+    if (menu.classList.contains('closing')) return;
+    const done = () => {
+      menu.classList.remove('closing');
+      menu.style.transform = '';
+      menu.close();
+      then?.();
+    };
+    if (reduceMotion()) { done(); return; }
+    menu.classList.add('closing');
+    menu.addEventListener('animationend', done, { once: true });
+  }
+  const reveal = (node, block = 'start') => node.scrollIntoView({ behavior: reduceMotion() ? 'auto' : 'smooth', block });
+  const MENU_ACTIONS = {
+    draw: () => { setFocus(false); reveal($('canvas-frame'), 'center'); },
+    starters: () => $('starters-sheet').showModal(),
+    ai: () => { $('ai-tools').open = true; reveal($('ai-tools'), 'center'); },
+    tools: () => { $('advanced-tools').open = true; reveal($('advanced-tools'), 'center'); },
+    save: () => { $('save-card').open = true; reveal($('save-card'), 'center'); },
+    find: () => openFinder(),
+    help: () => $('help').showModal(),
+    hood: () => openHood()
+  };
+  $('menu-open').addEventListener('click', openMenu);
+  $('menu-close').addEventListener('click', () => closeMenu());
+  $('menu').addEventListener('cancel', event => { event.preventDefault(); closeMenu(); });
+  $('menu').addEventListener('keydown', event => { if (event.key === 'Escape') { event.preventDefault(); closeMenu(); } });
+  $('menu').addEventListener('close', () => { $('menu-open').setAttribute('aria-expanded', 'false'); $('menu-open').focus({ preventScroll: true }); });
+  $('menu').addEventListener('click', event => {
+    if (event.target === $('menu')) {
+      // A click on the dialog itself (not its contents) is the backdrop.
+      const r = $('menu').getBoundingClientRect();
+      if (event.clientX < r.left) closeMenu();
+      return;
+    }
+    const go = event.target.closest('[data-go]');
+    if (go) closeMenu(MENU_ACTIONS[go.dataset.go]);
+  });
+  $('menu-sign-out').addEventListener('click', () => closeMenu(() => $('sign-out').click()));
+  // Swipe it away: the drawer follows your finger, then springs shut or back.
+  let swipe = null;
+  $('menu').addEventListener('pointerdown', event => {
+    if (event.pointerType === 'mouse') return;
+    swipe = { x: event.clientX, y: event.clientY, dx: 0, locked: false };
+  });
+  $('menu').addEventListener('pointermove', event => {
+    if (!swipe) return;
+    const dx = event.clientX - swipe.x, dy = event.clientY - swipe.y;
+    if (!swipe.locked && Math.abs(dy) > Math.abs(dx)) { swipe = null; return; } // a scroll, not a swipe
+    if (Math.abs(dx) > 6) swipe.locked = true;
+    swipe.dx = Math.max(0, dx);
+    if (swipe.locked) $('menu').style.transform = `translateX(${swipe.dx}px)`;
+  });
+  const endSwipe = () => {
+    if (!swipe) return;
+    const far = swipe.dx > Math.min(110, $('menu').offsetWidth * 0.3);
+    $('menu').style.transition = 'transform .3s cubic-bezier(.2, .8, .2, 1)';
+    $('menu').style.transform = far ? 'translateX(105%)' : '';
+    setTimeout(() => {
+      $('menu').style.transition = '';
+      if (far) { $('menu').style.transform = ''; $('menu').close(); }
+    }, far ? 280 : 300);
+    swipe = null;
+  };
+  $('menu').addEventListener('pointerup', endSwipe);
+  $('menu').addEventListener('pointercancel', endSwipe);
+
+  // Ink-drop ripples and a tiny haptic tick: every important tap answers back.
+  const RIPPLES = '.scene-go, .tool, .starter, .primary-mini, .save-button, .next-action, .menu-list button';
+  document.addEventListener('pointerdown', event => {
+    const target = event.target.closest?.(RIPPLES);
+    if (!target || target.disabled || reduceMotion()) return;
+    const r = target.getBoundingClientRect();
+    const size = Math.max(r.width, r.height) * 2.2;
+    const ink = document.createElement('span');
+    ink.className = 'ripple';
+    ink.setAttribute('aria-hidden', 'true');
+    ink.style.cssText = `width:${size}px;height:${size}px;left:${event.clientX - r.left - size / 2}px;top:${event.clientY - r.top - size / 2}px`;
+    target.append(ink);
+    ink.addEventListener('animationend', () => ink.remove());
+  }, { passive: true });
+  document.querySelectorAll('.scene-go').forEach(button => button.addEventListener('click', buzz));
+
+  // The header lifts off the page once you scroll.
+  const topbar = document.querySelector('.topbar');
+  addEventListener('scroll', () => topbar.classList.toggle('scrolled', scrollY > 4), { passive: true });
 
   // ---------------------------------------------------------------- tooltips (hover and keyboard focus)
   const tooltip = $('tooltip');
@@ -5263,8 +6640,6 @@
   $('sign-out').addEventListener('click', async () => {
     if (revision !== savedRevision && !confirm('You have unsaved changes on the canvas. Sign out anyway?')) return;
     await fetch('/api/session', { method: 'DELETE' }).catch(() => {});
-    // Progress lives in the member's m-stash record; don't hand it to whoever signs in next on this device.
-    try { localStorage.removeItem(GUIDE_KEY); } catch { /* fine */ }
     savedRevision = revision; // the confirm above already asked
     location.reload();
   });
@@ -5275,22 +6650,23 @@
     loadGallery();
     loadTags();
     loadSceneBackdrops();
-    syncGuideWithLibrary();
-    api('/api/prefs').then(prefs => {
-      if (!Array.isArray(prefs.guide)) return;
-      let changed = false;
-      for (const id of prefs.guide) if (!guide.done[id]) { guide.done[id] = true; changed = true; }
-      if (changed) renderGuide();
-    }).catch(() => {});
     const empty = !me.library?.assets && !me.library?.scenes;
     if (empty && me.demo && (fresh || !localStorage.getItem(`inkling.welcomed.${me.user.id}`))) $('welcome').showModal();
+    else if (empty && me.demo) starterPackOnce();
+  }
+  // A blank library still has something to play with: the starter pack, once per member (not after a clean-out).
+  async function starterPackOnce() {
+    const key = `inkling.starter.${account?.user.id}`;
+    try { if (localStorage.getItem(key)) return; localStorage.setItem(key, '1'); } catch { /* fine */ }
+    const added = await addStarterPack();
+    if (added) message('library-status', `\ud83c\udf81 Your starter pack is in: ${plural(added, 'ready-made asset')}. Search them anytime (\u2318K).`);
   }
   function welcomed() {
     try { localStorage.setItem(`inkling.welcomed.${account?.user.id}`, '1'); } catch { /* fine */ }
     $('welcome').close();
   }
   $('welcome-close').addEventListener('click', welcomed);
-  $('welcome-fresh').addEventListener('click', () => { welcomed(); canvas.scrollIntoView({ behavior: 'smooth', block: 'center' }); });
+  $('welcome-fresh').addEventListener('click', () => { welcomed(); starterPackOnce(); canvas.scrollIntoView({ behavior: 'smooth', block: 'center' }); });
   $('welcome-demo').addEventListener('click', async () => {
     const button = $('welcome-demo');
     button.disabled = true;
@@ -5354,7 +6730,6 @@
   setAiMode('sketch');
   renderSaveKind();
   renderStatusFilters();
-  renderGuide();
   checkConnection();
   boot();
 })();

@@ -304,6 +304,17 @@ def ink_to_alpha(image: PILImage.Image) -> PILImage.Image:
     return rgba
 
 
+def clip_brief(prompt: str, starring: str = "", backdrop: str = "") -> str:
+    """The exact words sent with the drawing for a new AI video (shown to the artist afterwards)."""
+    story = prompt or ("Surprise me: a short, playful story with a fun beginning, a twist in the middle, "
+                       "and a satisfying ending.")
+    cast = f"The star is {starring}. " if starring else ""
+    place = f"The setting is {backdrop}. " if backdrop else ""
+    return ("This image is an artist's hand-drawn doodle. Bring it to life as an animated short. "
+            f"{cast}{place}Keep the hand-drawn look: the same characters, line style, and colors, "
+            f"so the artist recognizes their own drawing. Story: {story}")
+
+
 class Sparks:
     def __init__(self) -> None:
         key = os.environ.get("GEMINI_API_KEY")
@@ -335,17 +346,17 @@ class Sparks:
             raise AIError("Gemini returned no suggestion. Try a different area or wording.")
         return response.parsed
 
-    def clip(self, layers: list[Layer], prompt: str, previous: str | None = None) -> tuple[str, bytes]:
+    def clip(self, layers: list[Layer], prompt: str, previous: str | None = None, *,
+             starring: str = "", backdrop: str = "") -> tuple[str, bytes]:
         """Generate a video, or edit the owner's previous Gemini interaction."""
-        direction = prompt or (
-            "Create a delightful short animated scene inspired by this drawing. Give it a surprising beginning, "
-            "a playful development, and a satisfying ending. Keep the artist's visual character recognizable."
-        )
-        contents = direction if previous else [
-            {"type": "image", "data": base64.b64encode(png_bytes(render_image(layers))).decode("ascii"),
-             "mime_type": "image/png"},
-            {"type": "text", "text": direction},
-        ]
+        if previous:
+            contents = prompt
+        else:
+            contents = [
+                {"type": "image", "data": base64.b64encode(png_bytes(render_image(layers))).decode("ascii"),
+                 "mime_type": "image/png"},
+                {"type": "text", "text": clip_brief(prompt, starring, backdrop)},
+            ]
         try:
             result = self.client.interactions.create(
                 model=self.video_model, input=contents, previous_interaction_id=previous,

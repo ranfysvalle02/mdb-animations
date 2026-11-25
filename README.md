@@ -1,48 +1,118 @@
-# ✦ Inkling: draw it, watch it move
+# ✦ Inkling: AI that works for your pencil
 
 [![CI](https://github.com/ranfysvalle02/mdb-animations/actions/workflows/ci.yml/badge.svg)](https://github.com/ranfysvalle02/mdb-animations/actions/workflows/ci.yml)
 
 > **inkling** /ˈɪŋklɪŋ/ *n.* a slight hint or suggestion.
 
-**Draw once. Make more. Find it again.**
-*Your art leads. AI gives you creative superpowers.*
+**Keep the pencil. Hand AI the in-betweens.**
+*You draw the moments that matter. AI handles everything in between.*
 
-Inkling is a creative playground for fingers, pencils, and mice. Draw an asset or backdrop, or start with a prompt:
+Prompting isn't drawing. Directing is. Most AI art tools swap your hand for a prompt box; Inkling works the other way: your strokes are saved as
+live data (path, pressure, order, timing), so AI can act like a studio assistant (roughing blue-pencil poses,
+choosing keyframes, organizing your library) while every final line stays yours. Studio scaffolding, not a
+slot machine. Three rules you can check in the app (tap them under the headline):
 
-- **✦ Make a scene**: describe what happens or let AI surprise you. **My strokes** moves your original
-  drawing; **AI reimagines** makes a Gemini video inspired by it, which may change the artwork. Type or
-  speak a change to revise the preview. Choose a starter or saved backdrop before making a new scene.
-- **✦ Variations**: build a family of editable ideas from an asset or backdrop, and keep the ones you like.
-- **◎ Find similar**: your drawing is the query. Look-alike assets, and the frames of your animations where
-  they appear. A saved asset searches with the vector already in Atlas: **zero new embeddings**.
-- **✦ Refine with AI**: Gemini looks at the drawing and suggests what it could use next ("add flames under
-  the rocket"). Tap one or type your own; AI edits your strokes, keeps the rest verbatim, and you keep or skip.
+1. **Choreography, not replacement.** Gemini picks the poses; plain math moves your actual strokes. Your line
+   never goes through a filter, so it never flickers or drifts off-model.
+2. **Every stroke has an author.** AI drafts stay blue-pencil previews until you say yes, and stay marked after.
+   The **✍ your hand** meter on the canvas shows the split.
+3. **Your sketchbook, remembered.** Draw a rough shape to find matching work. Voyage AI maps meaning; MongoDB
+   Atlas searches only your library.
 
-AI suggests tags when you save; Voyage AI and MongoDB Atlas make the artwork and scenes searchable.
-Duplicate a layer to make a copy. Original-stroke animations can be kept as editable frames; AI-reimagined
-videos are separate takes, not editable stroke frames.
+Draw a character, prop, or backdrop, then:
 
-AI-reimagined videos use Gemini's video model and incur video-generation charges, including on revisions.
-Each successful take is saved privately in Atlas. Search matches its direction and **source drawing**, not
-individual generated video frames. Gemini video access depends on your account and the selected model;
-`GEMINI_VIDEO_MODEL` overrides the default.
+Under the canvas sits one box, like a search page: type or speak what happens (or leave it blank for a
+surprise), pick who's **Starring** (this drawing, or any saved asset) and where (a starter or a backdrop you
+drew), then press a button. The button you press is the choice:
 
-On supported browsers in a secure context (HTTPS or localhost), microphone buttons let you dictate AI
-prompts, animation directions, and searches. Your browser may send audio to its speech service; Inkling
-does not submit the resulting text until you do. On other browsers, type or use your device's dictation.
-A saved backdrop is added to a new scene as editable layer copies; later edits to the backdrop do not
-automatically update those copies.
+- **🎞 Flipbook** (or Enter): Gemini choreographs keyframes; math fills the in-betweens. Every frame is
+  **your own strokes**, never redrawn. **Keep** turns it into editable frames.
+- **✦ AI video**: Gemini Omni films your doodle in its backdrop as a short video. It may restyle the art.
+- **◎ Find similar**: your drawing is the search (or the words in the box). **Voyage AI** multimodal
+  embeddings in **MongoDB Atlas** Vector Search find look-alike assets, backdrops, and scenes. Gemini
+  auto-tags what you save, so you're never filing, just cooking.
 
-Built on **MongoDB Atlas** (artwork, frames, metadata, and vectors in one place), **Voyage AI** multimodal
-embeddings (one space for drawings and words), **Gemini** (drafts you accept or skip), and **m-stash**
-(accounts, one private library per member).
+**Talk to a layer.** With two or more things on the canvas, a **Talk to** row sits above the box: *Everything*,
+or the layers you pick (grab one on the canvas with Move, or click it in Layers; Shift adds). The canvas outlines
+exactly what your words will reach, and Gemini only gets those layers; everyone else keeps their keyframes.
+
+**No black box.** As you type, the box says how it reads you, before anything runs:
+*"make it snow and jump higher"* reads as **❄️ Snow** (an effect layer, free, no AI) plus **✦ Gemini** (new
+keyframes for the layer you picked). Words that ask for new things (*"add a dragon"*) get a heads-up: Flipbook only
+moves what's drawn. Effects (**❄️ Snow, 🌧️ Rain, ✨ Sparkles, 🎉 Confetti, 🫧 Bubbles**, up to two) are tiny
+strokes computed per frame from a fixed seed: instant, free, the same every time. **⤢ Bigger, Calmer, Faster,
+Slower** are plain arithmetic on the keyframes. Both are one-tap chips under a take, and they never call Gemini.
+After every take, a line says what changed, in numbers: *"Layer 1 rises higher (10% → 20%) · Layer 2 untouched."*
+
+With a take on screen, the same box revises it: *"jump higher"*, then **✦ Change it**. **Nothing is
+destructive**: every attempt lands as a numbered **take** in a strip under the box. Tap a take (or ←/→) to flip
+back, and a change builds on the take you're looking at, so you can branch. **👁 Hold to compare** shows your
+untouched drawing, **✓ Keep** turns a take into frames, and the **↶ Undo** that follows brings the takes back.
+AI drafts (refine, sketch, fix) work the same way: a preview first, hold to compare, and one Undo after you keep it.
+Everything else
+(sketch a start, fix a spot, refine, variations, layers, frames, saving by hand) waits behind quiet links:
+**AI helpers**, **Layers, frames & more**, and **Save to your library**.
+The **☰** menu reaches every one of them in a tap (swipe it away on a phone).
+
+**Search is always one keystroke away.** The **Search your art** box in the header (or **⌘/Ctrl+K**, or **/**)
+opens a finder over whatever you're doing. Results arrive by meaning as you type (one Voyage embedding per
+pause, not per keystroke): assets, backdrops, scenes, single frames, and AI videos, each usable right there
+(**Place**, **✦ Bring to life**, **Use as backdrop**, **Open**, **◎ Similar**). **✏️ My drawing** searches with
+the canvas. ↑↓ and Enter work too. Before you type, it offers starter backdrops and your latest work.
+
+**A starter pack.** An empty library gets ready-made assets (Little Fox, Pine Tree, Red Rocket, Rocket Ship),
+copied from the shared demo **with their search vectors**: findable right away, no new AI calls. It arrives
+once per member (not again after you clear them out); the finder offers it again anytime the library is empty.
+
+**Your art, multiplied (no AI involved).** Plain computer mechanics multiply your own lines:
+
+- **⌘/Ctrl+C, V, D**: copy, paste, and duplicate a layer (or copy an asset card and paste it, linked).
+- **✦ Shapes & brushes** (the stamp tool, or **K**): a built-in kit to build on. Brushes (star, heart, leaf,
+  cloud, grass, sparkle, flower, drop, bubbles, wave) and figures (a stick figure, house, tree, mountain, sun,
+  face), drawn in your ink color at your brush size. Plain geometry, no AI; kit strokes are labeled *kit*.
+- **🖌 Stamp brush**: any layer or asset becomes a brush. Tap to stamp it, drag to scatter a trail. The size
+  slider (or `[` `]`) sets its size. Stamped strokes keep their provenance, so AI-made strokes stay marked.
+- **1–7** pick ink colors, **K** picks the stamp brush, **?** shows every shortcut.
+
+**Drawing that feels right.** The canvas renders at your screen's full sharpness (retina included). Every
+line goes through a light stabilizer and is drawn as smooth curves; finger and mouse strokes get a brush-pen
+lead-in and lift-off, and a pencil's pressure is smoothed. A ring under the mouse or pencil shows the exact
+size and color of the next line. On touch screens, **two-finger tap undoes** and **three-finger tap redoes**.
+What's saved is still plain points, so the server renders every stroke exactly as you saw it.
+
+**🪄 The magic wand** (on the paper, or **W**) is for blank pages and stuck moments. It deals a playful prompt
+(*"a whale in a teacup, in the middle of a storm"*) and a creative rule (*"twelve strokes or fewer"*), or a
+*"what if…"* for a drawing in progress. **Go** opens full screen with a gentle 1, 2, or 5-minute flow timer;
+when time's up it offers **Flipbook it** or another nudge. It's free and instant; **✦ Sketch a start** (a
+blue-pencil draft to trace) and **✦ Ask AI for ideas** are there when you want them.
+
+**Full screen** (**Focus**, or **F**) uses the device's real full screen where allowed, sizes the page as large
+as it fits, floats the toolbar, and fades every control while your pen is down. Phones held sideways get a
+one-row toolbar and the whole page; held upright, a hint suggests turning sideways.
+
+**No black box.** A live meter on the canvas (*✍ 100% your hand*) shows how much is yours and how much is AI
+drafts you accepted; tap it for the full breakdown. Every AI video has **What the AI saw**: the exact
+picture and words Gemini received, and nothing else from your library. **☰ › Under the hood** explains Voyage AI,
+MongoDB Atlas, and Gemini in plain words, using your own canvas as the example.
 
 | | You | Inkling |
 | --- | --- | --- |
-| **1. Draw it** | Draw a character, prop, or backdrop in layers (try **Focus** or a **starter**) | Pressure, palm rejection, layers. Save it as a **◆ asset**; other AI drawing tools are available when you want them |
-| **2. Make a scene** | Write a direction or let AI surprise you. Change it with words or voice | Choose original-stroke motion or a Gemini-generated video inspired by your art |
-| **3. Find it** | Search with words or a drawing | Voyage and Atlas find similar assets, backdrops, and scenes. Videos match their source art and direction |
-| **4. Share it** | **🔗 Save & share** an original-stroke scene | A public link with a looping GIF and a plain-language "how it moves". Your library stays private |
+| **1. Doodle it** | Draw in layers (try **Focus** or a **starter**) | Pressure, palm rejection, auto-tags on save |
+| **2. Bring it to life** | Say what happens, then **🎞 Flipbook** or **✦ AI video**. Revise by talking | Gemini keyframes your strokes, or Gemini Omni films your doodle |
+| **3. Find similar** | Your drawing, words, or voice | Voyage AI + Atlas Vector Search across assets, backdrops, and scenes |
+| **4. Share it** | **🔗 Save & share** a flipbook | A public link with a looping GIF. Your library stays private |
+
+Good to know:
+- **AI video costs money.** Each take (including revisions) is a paid Gemini video generation, budgeted per
+  member (`INKLING_VIDEO_PER_HOUR`, default 5). Takes save automatically and privately; a revision makes a
+  new take. Video search matches the **source drawing and direction**, not generated frames.
+  `GEMINI_VIDEO_MODEL` overrides the default (`gemini-omni-1.2-flash`).
+- **Voice** uses your browser's speech service (HTTPS or localhost; audio may go to its provider). Inkling
+  never submits the words until you do.
+- A saved backdrop joins a new scene as editable layer copies; later edits to the backdrop don't flow in.
+
+Built on **MongoDB Atlas** (art, frames, metadata, and vectors in one place), **Voyage AI** (one embedding
+space for drawings and words), **Gemini** (drafts you accept or skip), and **m-stash** (private accounts).
 
 **Start here:**
 - **Use it:** [the guided tour](docs/TUTORIALS.md): short tutorials with screenshots.
@@ -79,7 +149,6 @@ How it's locked down:
   Sign-in attempts are throttled per address.
 - **m-stash decides who you are.** Tokens are checked with m-stash's `GET /v1/auth/verify` (cached for
   5 minutes); the member id comes from its answer, and tokens for a different app are refused.
-- **Preferences follow you.** Guide progress is a private m-stash `item` record (`inkling-prefs`).
 - **Copies, not shares.** The demo library is copied into your space under fresh ids (vectors included,
   nothing re-embedded), with every link, lineage, element, and frame id remapped.
 - **Hourly budgets per member** for billable calls: 60 Gemini drafts (`INKLING_AI_PER_HOUR`), 5 Gemini videos
@@ -159,10 +228,10 @@ can't be drawn on. **Clear** resets to one empty layer and is undoable. All
 layers (including hidden ones) are saved and restored; the saved preview,
 embedding, sparks, and PNG export use what's visible, exactly as composed.
 
-### ✦ More AI tools: sketch, fix, refine, or grow variations
+### ✦ AI helpers: sketch, fix, refine, or grow variations
 
-The canvas keeps **Animate**, **Find similar**, and **Refine with AI** up front. Open **More AI tools** for
-the other drawing workflows; each has examples you can tap.
+The canvas keeps **Bring it to life** and **Find similar** up front. Open **AI helpers** for the drawing
+workflows; each has examples you can tap.
 
 - **Sketch a layer**: "a dragon curled up asleep". In 5-10 seconds a blue-pencil draft (up
   to 40 strokes) draws itself in. **Use sketch** (Enter) adds it as its own layer at 60%
@@ -217,14 +286,13 @@ or scene apart:
   versions, variations with their briefs, one-tap updates, confirmed look-alikes, status
   changes). Capped at the last 300 per asset or scene.
 
-### ✦ Animate with AI
+### 🎞 Flipbooks, under the hood
 
-**✦ Animate with AI** (or **A**) saves and tags a new or changed drawing, then Gemini imagines a scene
-and chooses key poses. The studio calculates the in-between frames from your own strokes. **Keep** makes
-the frames editable; **Try again** creates another preview. Save the scene to find it in your library.
-Writing your own direction in **🎬 Direct…** skips the pitch.
+**🎞 Flipbook** (Enter in the box, or **A**) saves and tags a new or changed drawing, then Gemini
+imagines a scene and chooses key poses. The studio calculates the in-between frames from your own strokes.
+**Keep** makes the frames editable; **Try again** creates another preview. Save the scene to find it later.
 
-**🎬 Direct…** (under the canvas) is the hands-on version, in three steps:
+**🎬 Direct…** (in **Layers, frames & more**) is the hands-on version, in three steps:
 
 1. **The cast.** What moves: placed assets by default, or any drawing on the canvas. **+ Add** drops in a
    backdrop (Beach, Mountains, Forest, City at night, Outer space) and your assets. With a backdrop set,
@@ -326,8 +394,7 @@ Status, project, and sequence filters are applied inside the Atlas vector search
 ranking. Look-alikes below `WHERE_USED_MIN_SCORE` (default 0.75) are hidden; 0.82 and up
 reads "Very similar".
 
-Built to be self-explanatory: a 4-step **getting-started guide** (with *Show me* buttons;
-it ticks itself off and remembers progress), **tooltips** on every control (hover or
+Built to be self-explanatory: one box with three buttons up front, **tooltips** on every control (hover or
 keyboard focus), a **? Help** page with an analogy for every concept, and *what's next?*
 buttons after each save (e.g. save an asset, then **Use it in a scene** or **✦ Make variations**).
 

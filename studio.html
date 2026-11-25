@@ -3,22 +3,22 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#0b2422">
-  <meta name="description" content="Draw once. Make variations and animated scenes with AI. Find your art again by words or sketch.">
-  <title>Inkling: draw it, watch it move</title>
+  <meta name="theme-color" content="#f6f7f1">
+  <meta name="description" content="Keep the pencil. Hand AI the in-betweens. Inkling poses your own strokes into flipbooks, finds your art by sketch, and shows who made every line.">
+  <title>Inkling: AI that works for your pencil</title>
   <link rel="canonical" href="__ORIGIN__/">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="Inkling">
   <meta property="og:url" content="__ORIGIN__/">
-  <meta property="og:title" content="Inkling: draw it, watch it move">
-  <meta property="og:description" content="Your art leads. Make variations and animated scenes with AI, then find them again by words or sketch.">
+  <meta property="og:title" content="Inkling: AI that works for your pencil">
+  <meta property="og:description" content="You draw the moments that matter. AI handles everything in between: flipbooks of your exact strokes, never redrawn; search by sketch; every stroke has an author.">
   <meta property="og:image" content="__ORIGIN__/og.png">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
   <meta property="og:image:alt" content="Inkling on a phone: the drawing studio, and Little Fox replayed stroke by stroke at 89% your hand">
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:title" content="Inkling: draw it, watch it move">
-  <meta name="twitter:description" content="Your art leads. Make variations and animated scenes with AI, then find them again.">
+  <meta name="twitter:title" content="Inkling: AI that works for your pencil">
+  <meta name="twitter:description" content="Keep the pencil. Hand AI the in-betweens. AI that choreographs your strokes instead of redrawing them.">
   <meta name="twitter:image" content="__ORIGIN__/og.png">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M14 4C14 4 6 14 6 19.5a8 8 0 0 0 16 0C22 14 14 4 14 4z' fill='%23123b38'/%3E%3Cpath d='M25 3l1.3 3.2 3.2 1.3-3.2 1.3-1.3 3.2-1.3-3.2-3.2-1.3 3.2-1.3z' fill='%237c3aed'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="/studio.css">
@@ -30,8 +30,9 @@
       <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><path d="M14 4C14 4 6 14 6 19.5a8 8 0 0 0 16 0C22 14 14 4 14 4z"/><path class="brand-spark" d="M25 3l1.3 3.2 3.2 1.3-3.2 1.3-1.3 3.2-1.3-3.2-3.2-1.3 3.2-1.3z"/></svg>
       <span class="wordmark">inkling</span>
     </a>
+    <button type="button" id="finder-open" class="finder-trigger" aria-label="Search your art" aria-keyshortcuts="Meta+K Control+K /" aria-haspopup="dialog"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg><span>Search your art</span><kbd>&#8984;K</kbd></button>
     <span class="connection" data-tip="Your library|Saved in MongoDB Atlas. Searched by meaning with Voyage AI. AI drafts by Gemini."><span id="connection-dot" class="dot"></span><span id="connection">Connecting...</span></span>
-    <button type="button" id="help-open" class="help-button" aria-label="How Inkling works">?</button>
+    <button type="button" id="help-open" class="help-button" aria-label="How Inkling keeps you in control">?</button>
     <button type="button" id="account-button" class="account-button" aria-label="Your account" aria-haspopup="menu" aria-expanded="false" hidden><span id="account-initial">?</span></button>
     <div id="account-menu" class="account-menu" role="menu" hidden>
       <p class="account-email" id="account-email"></p>
@@ -40,17 +41,40 @@
       <p class="account-note">Your library is private to you.</p>
       <button type="button" id="sign-out" class="pill" role="menuitem">Sign out</button>
     </div>
+    <button type="button" id="menu-open" class="menu-button" aria-label="Open menu" aria-haspopup="dialog" aria-controls="menu"><span></span><span></span><span></span></button>
   </header>
+
+  <dialog id="menu" class="menu" aria-label="Menu">
+    <div class="menu-head">
+      <span class="wordmark">inkling</span>
+      <button type="button" id="menu-close" class="menu-close" aria-label="Close menu">&times;</button>
+    </div>
+    <nav class="menu-list" aria-label="Go to">
+      <button type="button" data-go="draw" style="--i:0"><span class="menu-icon">&#9999;&#65039;</span><span><b>Draw</b><small>Back to your canvas</small></span></button>
+      <button type="button" data-go="starters" style="--i:1"><span class="menu-icon">&#10024;</span><span><b>Starters</b><small>A beach, outer space, a character sheet</small></span></button>
+      <button type="button" data-go="ai" style="--i:2"><span class="menu-icon">&#10022;</span><span><b>AI helpers</b><small>Sketch a start, refine, fix a spot, variations</small></span></button>
+      <button type="button" data-go="tools" style="--i:3"><span class="menu-icon">&#9636;</span><span><b>Layers &amp; frames</b><small>Layers, flipbook frames, download</small></span></button>
+      <button type="button" data-go="save" style="--i:4"><span class="menu-icon">&#8595;</span><span><b>Save to your library</b><small>Name it, tag it, share it</small></span></button>
+      <button type="button" data-go="find" style="--i:5"><span class="menu-icon">&#9678;</span><span><b>Find your art</b><small>Search by words, voice, or a sketch</small></span></button>
+      <button type="button" data-go="help" style="--i:6"><span class="menu-icon">?</span><span><b>How it works</b><small>You draw. AI assists. You decide.</small></span></button>
+      <button type="button" data-go="hood" style="--i:7"><span class="menu-icon">&#9881;</span><span><b>Under the hood</b><small>Voyage AI, MongoDB Atlas, Gemini, in plain words</small></span></button>
+    </nav>
+    <div class="menu-foot" style="--i:8">
+      <p id="menu-account" class="menu-account"></p>
+      <p id="menu-status" class="menu-status"></p>
+      <button type="button" id="menu-sign-out" class="pill" hidden>Sign out</button>
+    </div>
+  </dialog>
 
   <main>
     <section class="hero">
-      <h1>Your art. <span>Its next adventure.</span></h1>
-      <p class="lede">Draw once. Make variations and scenes with AI. Find them again by words or sketch.</p>
-    </section>
-
-    <section id="guide" class="guide" aria-label="How it works" hidden>
-      <ol id="guide-steps" class="guide-steps"></ol>
-      <div class="guide-foot"><span id="guide-count">0 of 3</span><button type="button" id="guide-hide" class="link-button">Hide</button></div>
+      <h1>Keep the pencil. <span>Hand AI the <i class="nb">in-betweens.</i></span></h1>
+      <p class="hero-sub">You draw the moments that matter. AI handles everything in between.</p>
+      <ul class="hero-rules" aria-label="The three rules">
+        <li><button type="button" data-rule="motion" data-tip="Choreography, not replacement|Gemini picks the poses; plain math moves your actual strokes. Your line never goes through a filter.">&#127902; Choreography, not replacement</button></li>
+        <li><button type="button" data-rule="author" data-tip="Every stroke has an author|AI drafts stay blue-pencil until you keep them, and the meter on the canvas shows the split.">&#9997; Every stroke has an author</button></li>
+        <li><button type="button" data-rule="memory" data-tip="Your sketchbook, remembered|Draw a rough shape to find matching work in your private library. No tagging, no folders.">&#9678; Your sketchbook, remembered</button></li>
+      </ul>
     </section>
 
     <section class="studio" aria-labelledby="canvas-heading">
@@ -64,8 +88,10 @@
             <button type="button" class="tool" data-tool="rect" aria-pressed="false" aria-label="Rectangle" data-tip="Rectangle &middot; R|Shift for a square."><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="6" width="16" height="12" rx="1"/></svg></button>
             <button type="button" class="tool" data-tool="ellipse" aria-pressed="false" aria-label="Ellipse" data-tip="Ellipse &middot; O|Shift for a circle."><svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="12" rx="8" ry="6"/></svg></button>
             <button type="button" class="tool" data-tool="move" aria-pressed="false" aria-label="Select and move" data-tip="Select &amp; move &middot; V|Tap anything you drew or placed to grab it. Drag to move; pull the corner to resize."><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18M12 3l-3 3M12 3l3 3M12 21l-3-3M12 21l3-3M3 12l3-3M3 12l3 3M21 12l-3-3M21 12l-3 3"/></svg></button>
+            <button type="button" class="tool stamp-tool" data-tool="stamp" aria-pressed="false" aria-expanded="false" aria-controls="kit" aria-label="Shapes and brushes" data-tip="Shapes &amp; brushes &middot; K|Stars, leaves, clouds, figures, and your own art as a brush. Tap to stamp, drag to scatter."><canvas id="stamp-icon" width="48" height="48" aria-hidden="true"></canvas></button>
             <button type="button" class="tool spark-tool" data-tool="spark" aria-pressed="false" aria-label="Fix a spot with AI" data-tip="Fix a spot &middot; S|Box a stuck spot (an eye, a hand). AI suggests a few strokes. You accept or skip.">&#10022;</button>
           </div>
+          <div class="history" role="group" aria-label="History"><button type="button" id="undo" class="icon-button" disabled aria-label="Undo" data-tip="Undo &middot; Cmd/Ctrl+Z">&#8630;</button><button type="button" id="redo" class="icon-button" disabled aria-label="Redo" data-tip="Redo &middot; Shift+Cmd/Ctrl+Z">&#8631;</button></div>
           <button type="button" id="focus-toggle" class="focus-button" aria-label="Focus mode" aria-pressed="false" data-tip="Focus &middot; F|Full-screen canvas for finger and pencil. Esc to leave."><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg><span>Focus</span></button>
           <div class="toolbar-row">
             <div class="swatches" id="swatches" role="group" aria-label="Ink colors">
@@ -82,8 +108,6 @@
             <label class="size-control" data-tip="Size &middot; [ ]"><input id="width" type="range" min="1" max="40" value="6" aria-label="Brush size"><output id="width-value" for="width">6</output></label>
             <span class="toolbar-spacer"></span>
             <span id="guide-controls" class="guide-controls" hidden><button type="button" id="guides-toggle" class="icon-button" aria-pressed="true">Guides (0)</button><button type="button" id="guides-clear" class="icon-button" aria-label="Remove trace guides">&times;</button></span>
-            <button type="button" id="undo" class="icon-button" disabled aria-label="Undo" data-tip="Undo &middot; Cmd/Ctrl+Z">&#8630;</button>
-            <button type="button" id="redo" class="icon-button" disabled aria-label="Redo" data-tip="Redo &middot; Shift+Cmd/Ctrl+Z">&#8631;</button>
             <button type="button" id="clear" class="icon-button" aria-label="Clear canvas" data-tip="Clear|Fresh canvas. Undo brings it back.">&#10005;</button>
             <button type="button" id="layers-toggle" class="icon-button layers-toggle" aria-expanded="false" aria-controls="layers-panel" data-tip="Layers|Like sheets of tracing paper.">&#9636; <span id="layers-count">1</span></button>
           </div>
@@ -93,10 +117,15 @@
           <div class="canvas-frame" id="canvas-frame">
             <canvas id="drawing" width="1000" height="650" aria-label="Drawing canvas. Draw with a pen, finger, or mouse.">Your browser needs canvas support to draw.</canvas>
             <canvas id="overlay" width="1000" height="650" aria-hidden="true"></canvas>
+            <div id="brush-cursor" class="brush-cursor" aria-hidden="true" hidden></div>
+            <button type="button" id="wand" class="wand-fab" aria-label="Magic wand: a nudge to get going" data-tip="Magic wand &middot; W|Stuck, or just starting? A playful prompt, a creative rule, a timer. Your hand does the rest.">&#129668;</button>
+            <div id="flow-banner" class="flow-banner" role="status" hidden><span id="flow-text"></span><b id="flow-clock"></b><span id="flow-actions" class="flow-actions"></span><button type="button" id="flow-stop" aria-label="Stop the flow timer">&times;</button><i id="flow-bar" aria-hidden="true"></i></div>
+            <p class="rotate-hint" aria-hidden="true">&#10227; Turn your phone sideways for a bigger page</p>
             <div id="video-preview" class="video-preview" hidden>
               <video id="scene-video" controls playsinline loop></video>
               <button type="button" id="video-close">Back to drawing</button>
             </div>
+            <button type="button" id="authorship" class="authorship" hidden data-tip="Who made this|Strokes by your hand vs. AI drafts you accepted. Tap for the full breakdown."></button>
             <button type="button" id="layer-hud" class="layer-hud" data-tip="You're on this layer|New ink lands here. Tap to see every layer." hidden></button>
             <form id="spark-popover" class="popover" hidden>
               <label class="sr-only" for="spark-prompt">What should AI fix here?</label>
@@ -123,52 +152,66 @@
               <div class="layer-actions">
                 <button type="button" id="layer-up" aria-label="Move layer up" data-tip="Move up">&#8593;</button>
                 <button type="button" id="layer-down" aria-label="Move layer down" data-tip="Move down">&#8595;</button>
-                <button type="button" id="layer-copy" data-tip="Duplicate|Make an editable copy of this layer.">Duplicate</button>
+                <button type="button" id="layer-copy" data-tip="Duplicate &middot; Cmd/Ctrl+D|Make an editable copy of this layer.">Duplicate</button>
+                <button type="button" id="layer-brush" data-tip="Use as brush|Turn this layer into a stamp brush: your own art, as many times as you like.">&#128396; Brush</button>
                 <button type="button" id="layer-delete" data-tip="Delete layer|Undo brings it back.">Delete</button>
               </div>
             </div>
           </aside>
         </div>
-        <section class="scene-maker" aria-labelledby="scene-maker-heading">
-          <div class="scene-maker-head">
-            <div><h3 id="scene-maker-heading">Make a little magic</h3><p>What happens next? Tell us, or let AI surprise you.</p></div>
+        <div id="kit" class="nudge kit" role="dialog" aria-labelledby="kit-title" hidden>
+          <div class="nudge-head"><p id="kit-title" class="eyebrow">&#10022; Shapes &amp; brushes</p><button type="button" id="kit-close" class="close" aria-label="Close">&times;</button></div>
+          <div id="kit-body" class="kit-body"></div>
+          <p class="nudge-fine">Tap to stamp, drag to scatter. Your ink color, your size. Plain geometry, no AI.</p>
+        </div>
+        <div id="nudge" class="nudge" role="dialog" aria-labelledby="nudge-title" hidden>
+          <div class="nudge-head"><p id="nudge-kicker" class="eyebrow">&#129668; A little nudge</p><button type="button" id="nudge-close" class="close" aria-label="Close">&times;</button></div>
+          <h3 id="nudge-title" class="nudge-prompt"></h3>
+          <p id="nudge-rule" class="nudge-rule"></p>
+          <div class="nudge-time" role="radiogroup" aria-label="Flow timer">
+            <button type="button" role="radio" data-seconds="60" aria-checked="false">1 min</button>
+            <button type="button" role="radio" data-seconds="120" aria-checked="true">2 min</button>
+            <button type="button" role="radio" data-seconds="300" aria-checked="false">5 min</button>
+            <button type="button" role="radio" data-seconds="0" aria-checked="false">No timer</button>
           </div>
+          <div class="nudge-actions">
+            <button type="button" id="nudge-go" class="scene-go primary">&#9999;&#65039; Go</button>
+            <button type="button" id="nudge-again" class="scene-go">&#8635; Another</button>
+            <button type="button" id="nudge-ai" class="scene-go"></button>
+          </div>
+          <p class="nudge-fine">Just a nudge. Your hand does the rest.</p>
+        </div>
+        <section class="scene-maker" aria-labelledby="scene-maker-heading">
+          <h3 id="scene-maker-heading" class="sr-only">Bring it to life</h3>
           <form id="scene-direct" autocomplete="off">
-            <label class="sr-only" for="scene-prompt">Describe your scene</label>
-            <div class="scene-input">
-              <input id="scene-prompt" maxlength="300" placeholder="A curious fox discovers a tiny planet...">
-              <button type="button" class="voice-button" data-voice-for="scene-prompt" aria-label="Speak your scene" hidden>&#127908;</button>
-              <button type="submit" id="dock-animate" class="scene-go">&#10022; Make a scene</button>
+            <label class="sr-only" for="scene-prompt">What happens?</label>
+            <div id="scene-who" class="scene-who" role="group" aria-label="Who your words reach" hidden></div>
+            <div class="scene-pill">
+              <span class="scene-spark" aria-hidden="true">&#10022;</span>
+              <input id="scene-prompt" maxlength="300" enterkeyhint="go" placeholder="What happens? Or leave it blank for a surprise">
+              <button type="button" class="voice-button" data-voice-for="scene-prompt" aria-label="Speak it" hidden>&#127908;</button>
             </div>
-            <div class="scene-options">
-              <fieldset class="scene-style">
-                <legend class="sr-only">How should your scene be made?</legend>
-                <label><input type="radio" name="scene-style" value="art" checked> <span>My strokes</span></label>
-                <label><input type="radio" name="scene-style" value="video"> <span>AI reimagines</span></label>
-              </fieldset>
-              <details class="backdrop-options">
-                <summary>Choose a backdrop</summary>
-                <label for="scene-backdrop">Backdrop for a new scene</label>
-                <select id="scene-backdrop" aria-describedby="backdrop-status"><option value="">None</option></select>
-                <span id="backdrop-status" class="status" role="status" aria-live="polite"></span>
-              </details>
+            <p id="scene-read" class="scene-read" aria-live="polite" hidden></p>
+            <div id="takes" class="takes" role="group" aria-label="Takes" hidden></div>
+            <div id="scene-fx" class="scene-fx" role="group" aria-label="Instant changes, no AI" hidden></div>
+            <div id="scene-picks" class="scene-picks">
+              <label><span>Starring</span><select id="scene-star"><option value="">This drawing</option></select></label>
+              <label><span>in</span><select id="scene-backdrop" aria-label="Backdrop" aria-describedby="backdrop-status"><option value="">No backdrop</option></select></label>
             </div>
-            <p id="scene-style-note" class="scene-style-note">Moves your original strokes. No redraws.</p>
+            <div class="scene-actions">
+              <button type="submit" id="dock-animate" class="scene-go primary" hidden>&#10022; Change it</button>
+              <button type="submit" id="go-flipbook" class="scene-go" data-style="art" data-tip="Flipbook|In-betweening without redrawing: your exact strokes, posed in motion. Enter does this.">&#127902; Flipbook</button>
+              <button type="submit" id="go-video" class="scene-go" data-style="video" data-tip="AI video|Gemini films your doodle in its backdrop. It may restyle the art. Paid per take.">&#10022; AI video</button>
+              <button type="button" id="dock-similar" class="scene-go" data-tip="Find similar|Your drawing is the search, or type words above. Voyage AI embeddings in MongoDB Atlas.">&#9678; Find similar</button>
+            </div>
+            <p id="scene-style-note" class="scene-style-note">Flipbook moves your own strokes. AI video is filmed by Gemini.</p>
+            <p id="pipeline" class="pipeline" role="status" aria-live="polite" hidden><span id="pipeline-title"></span> <button type="button" id="pipeline-close" class="link-button" aria-label="Hide status">&times;</button></p>
+            <p id="drawing-status" class="status" role="status" aria-live="polite"></p>
+            <span id="backdrop-status" class="status" role="status" aria-live="polite"></span>
           </form>
         </section>
-        <div class="action-dock" role="group" aria-label="What next?">
-          <button type="button" id="dock-vary" class="dock-button" data-tip="Make variations|Create new versions from your drawing. You choose what to keep."><span class="dock-icon" aria-hidden="true">&#10024;</span><span class="dock-text"><b>Variations</b><small>One drawing, many ideas</small></span></button>
-          <button type="button" id="dock-similar" class="dock-button" data-tip="Find similar|Find similar art and scenes inspired by similar drawings."><span class="dock-icon" aria-hidden="true">&#9678;</span><span class="dock-text"><b>Find similar</b><small>your drawing is the query</small></span></button>
-          <button type="button" id="dock-refine" class="dock-button" data-tip="Refine with AI|AI looks at your drawing and suggests what it could use. Pick one or write your own; it edits your strokes and you keep or skip."><span class="dock-icon" aria-hidden="true">&#9998;</span><span class="dock-text"><b>Refine with AI</b><small>AI suggests, you decide</small></span></button>
-        </div>
-        <section id="pipeline" class="pipeline" aria-labelledby="pipeline-title" hidden>
-          <div class="pipeline-head">
-            <h3 id="pipeline-title" role="status" aria-live="polite">&#10022; Creating your animation&hellip;</h3>
-            <button type="button" id="pipeline-close" class="link-button" aria-label="Hide animation status">Hide</button>
-          </div>
-        </section>
         <details id="ai-tools" class="ai-tools">
-          <summary>&#10022; AI sparks <small>Start with words, or fix your art</small></summary>
+          <summary>&#10022; AI helpers</summary>
           <form id="ai-bar" class="ai-bar" autocomplete="off">
             <div class="ai-modes" role="radiogroup" aria-label="What should AI do?">
               <button type="button" role="radio" data-mode="refine" aria-checked="false">&#10022; Refine</button>
@@ -188,7 +231,7 @@
           </form>
         </details>
         <details class="advanced-tools" id="advanced-tools">
-        <summary>More tools &amp; frames</summary>
+        <summary>Layers, frames &amp; more</summary>
         <div class="frames" id="frames">
           <button type="button" id="frame-play" class="frame-play" aria-label="Play" data-tip="Play &middot; Space|Flip through your frames. Tap the canvas to stop." hidden>&#9654;</button>
           <ol id="frame-list" class="frame-list" aria-label="Frames"></ol>
@@ -205,8 +248,8 @@
         </details>
       </div>
 
-      <aside class="save-card" aria-labelledby="save-heading">
-        <h2 id="save-heading">Save your art</h2>
+      <details id="save-card" class="save-card">
+        <summary id="save-heading">Save to your library</summary>
         <div class="kind-switch" role="radiogroup" aria-label="Save as">
           <button type="button" role="radio" data-kind="asset" aria-checked="true">&#9670; Asset</button>
           <button type="button" role="radio" data-kind="shot" aria-checked="false">&#9635; Scene</button>
@@ -243,9 +286,8 @@
           <button type="button" id="save-new" class="link-button save-new" hidden>Save as new instead</button>
           <button type="button" id="share-open" class="pill share-open" hidden data-tip="Share|A public link anyone can watch: your scene as a looping GIF, with how it moves explained.">&#128279; Share this scene</button>
         </form>
-        <p id="drawing-status" class="status" role="status" aria-live="polite"></p>
         <p class="fine-print" data-tip="Where your art goes|Saves go to MongoDB Atlas and Voyage AI (for search). AI sketches, fixes, and tags use Google Gemini. Only save what you're OK sharing with them.">Saved to MongoDB Atlas &middot; searched with Voyage AI &middot; drafts by Gemini</p>
-      </aside>
+      </details>
     </section>
 
     <section class="library" aria-labelledby="library-heading">
@@ -477,12 +519,12 @@
       <div class="gate-layout">
         <section class="gate-story" aria-labelledby="gate-title">
           <div class="gate-brand"><svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><path d="M14 4C14 4 6 14 6 19.5a8 8 0 0 0 16 0C22 14 14 4 14 4z"/><path class="brand-spark" d="M25 3l1.3 3.2 3.2 1.3-3.2 1.3-1.3 3.2-1.3-3.2-3.2-1.3 3.2-1.3z"/></svg><span class="wordmark">inkling</span></div>
-        <h2 id="gate-title">Draw it. <span>Watch it move.</span></h2>
-        <p class="gate-promise">Your art leads. AI helps you take it further.</p>
+        <h2 id="gate-title">Keep the pencil. <span>Hand AI the <i class="nb">in-betweens.</i></span></h2>
+        <p class="gate-promise">Prompting isn&rsquo;t drawing. Directing is.</p>
         <ul class="gate-perks">
-          <li><b>&#10022;</b><span>Turn <b>your art</b> into variations and animated scenes</span></li>
-          <li><b>&#9678;</b><span>Find art and scenes by <b>words or sketch</b></span></li>
-          <li><b>&#9998;</b><span>Shape what happens with words or voice</span></li>
+          <li><b>&#127902;</b><span>Flipbooks of <b>your exact strokes</b>, posed, never redrawn</span></li>
+          <li><b>&#9997;</b><span><b>Every stroke has an author.</b> Nothing lands without your yes</span></li>
+          <li><b>&#9678;</b><span>Find your art by <b>sketch, words, or voice</b>, in your private library</span></li>
         </ul>
         <p class="gate-fine">Accounts by m-stash &middot; drawings in MongoDB Atlas &middot; search by Voyage AI</p>
         </section>
@@ -524,24 +566,42 @@
     </dialog>
 
     <dialog id="help" class="sheet" aria-labelledby="help-title">
-      <div class="sheet-head"><div><p class="eyebrow">How Inkling works</p><h2 id="help-title">Draw it. Watch it move.</h2><p class="muted">Your creativity leads. AI helps you explore.</p></div><button type="button" id="help-close" class="close" aria-label="Close">&times;</button></div>
+      <div class="sheet-head"><div><p class="eyebrow">How Inkling keeps you in control</p><h2 id="help-title">You draw. AI assists. You decide.</h2><p class="muted">Every AI step is a draft: compare it, keep it, or toss it. Your lines are never the price of admission.</p></div><button type="button" id="help-close" class="close" aria-label="Close">&times;</button></div>
       <ol class="help-flow">
-        <li><b>&#9999;&#65039; Draw it</b><span>Make an asset or backdrop. Need a start? Try AI sparks.</span><i>&ldquo;Red Rocket&rdquo;</i></li>
-        <li><b>&#10022; Make a scene</b><span>Move your strokes or reimagine your art as video. Revise it with words.</span><i>Your art leads the way</i></li>
-        <li><b>&#9678; Find your art</b><span>Search your library with words or a sketch. Find similar art with one tap.</span><i>&ldquo;a rocket in the sky&rdquo;</i></li>
+        <li><b>&#9999;&#65039; Draw it once</b><span>A character, prop, or backdrop. It&rsquo;s saved as strokes, not pixels, and tagged so you can find it later.</span><i>&ldquo;Red Rocket&rdquo;</i></li>
+        <li><b>&#127902; Direct it</b><span>Aim at a layer and say what happens. Gemini picks the poses; math fills the frames. Effects like snow are free code.</span><i>&ldquo;make it snow&rdquo;</i></li>
+        <li><b>&#9678; Find it again</b><span>Your drawing is the search. Voyage AI and MongoDB Atlas find look-alikes in your private library.</span><i>&ldquo;a rocket in the sky&rdquo;</i></li>
       </ol>
+      <h3 class="help-sub flow-keys">Stay in flow</h3>
+      <dl class="shortcuts">
+        <div><dt><kbd>B</kbd> <kbd>E</kbd> <kbd>V</kbd> <kbd>K</kbd></dt><dd>Pen, eraser, move, stamp brush</dd></div>
+        <div><dt><kbd>1</kbd>&ndash;<kbd>7</kbd></dt><dd>Ink colors</dd></div>
+        <div><dt><kbd>[</kbd> <kbd>]</kbd></dt><dd>Brush (and stamp) size</dd></div>
+        <div><dt><kbd>&#8984;C</kbd> <kbd>&#8984;V</kbd> <kbd>&#8984;D</kbd></dt><dd>Copy, paste, duplicate a layer</dd></div>
+        <div><dt><kbd>&#8984;Z</kbd> <kbd>&#8679;&#8984;Z</kbd></dt><dd>Undo, redo</dd></div>
+        <div><dt><kbd>F</kbd></dt><dd>Focus: full-screen paper</dd></div>
+        <div><dt><kbd>W</kbd></dt><dd>Magic wand: a nudge to get going</dd></div>
+        <div><dt><kbd>A</kbd></dt><dd>Flipbook it</dd></div>
+        <div><dt><kbd>&larr;</kbd> <kbd>&rarr;</kbd> <kbd>&#9166;</kbd> <kbd>Esc</kbd></dt><dd>Flip takes, keep one, discard</dd></div>
+        <div><dt><kbd>?</kbd></dt><dd>This page</dd></div>
+      </dl>
       <details class="more-fields">
       <summary>More studio tools</summary>
       <dl class="glossary">
         <div><dt>&#9670; Asset</dt><dd>A rubber stamp. Draw once, use anywhere.</dd></div>
+        <div><dt>&#128396; Stamp brush</dt><dd>Any layer or asset becomes a brush. Your art, multiplied. No AI involved.</dd></div>
+        <div><dt>&#9997; Your hand</dt><dd>The meter on the canvas: how much is yours vs. AI drafts you accepted.</dd></div>
         <div><dt>&#9635; Scene</dt><dd>One shot of your film, with a status and an artist.</dd></div>
         <div><dt>&#9636; Layer</dt><dd>Tracing paper. Draw on one without touching the rest.</dd></div>
-        <div><dt>&#10022; AI sketch</dt><dd>A blue-pencil draft. Scaffolding, not the art.</dd></div>
+        <div><dt>&#10022; AI sketch</dt><dd>Blue-pencil roughs. Trace them, tweak them, or toss them.</dd></div>
         <div><dt>&#128279; Used in</dt><dd>A shortcut to the original. Updates in one tap.</dd></div>
         <div><dt>&#128064; Looks like it</dt><dd>Reverse image search across scenes.</dd></div>
         <div><dt>&#129516; Similar assets</dt><dd>Near-duplicates in your library.</dd></div>
-        <div><dt>&#127916; My strokes</dt><dd>AI choreographs your original drawing without redrawing it.</dd></div>
-        <div><dt>&#10022; AI reimagines</dt><dd>A generated video inspired by your art. It may change the artwork.</dd></div>
+        <div><dt>&#127902; Flipbook</dt><dd>In-betweening without redrawing: your exact strokes, posed in motion.</dd></div>
+        <div><dt>&#10022; Talk to</dt><dd>Aim your words at one layer or a few. Everyone else keeps their motion.</dd></div>
+        <div><dt>&#10052;&#65039; Effects</dt><dd>Snow, rain, sparkles, confetti, bubbles: tiny strokes drawn by code. Free, instant, no AI.</dd></div>
+        <div><dt>&#9312; Takes</dt><dd>Every AI attempt, side by side. Flip back, branch, hold to compare. Nothing is final until you keep it, and Undo brings the takes back.</dd></div>
+        <div><dt>&#10022; AI video</dt><dd>Gemini films your doodle in its backdrop. It may restyle the art.</dd></div>
         <div><dt>&#10022; Variations</dt><dd>One asset in, lookalikes out. AI edits your strokes; you keep and finish.</dd></div>
         <div><dt>&#9998; Process</dt><dd>Every stroke keeps its order and time. Replay any drawing, or save the replay as a video.</dd></div>
         <div><dt>&#128221; Audit trail</dt><dd>Every AI step you took or skipped, saved with the asset. Nothing is a black box.</dd></div>
@@ -550,11 +610,113 @@
         <div><dt>&#128269; Breakdown</dt><dd>Take a scene apart: frames, layers, assets, and who made what.</dd></div>
       </dl>
       </details>
-      <div class="help-foot"><button type="button" id="help-demo" class="pill primary">See an example</button><button type="button" id="help-guide" class="pill">Show the steps again</button></div>
+      <div class="help-foot"><button type="button" id="help-hood" class="pill primary">&#9881; Under the hood</button><button type="button" id="help-demo" class="pill">See an example</button></div>
+    </dialog>
+
+    <dialog id="finder" class="finder" aria-label="Search your art">
+      <form id="finder-form" class="finder-bar" role="search" autocomplete="off">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg>
+        <label class="sr-only" for="finder-q">Search your art</label>
+        <input id="finder-q" type="search" enterkeyhint="search" placeholder="Search by meaning: &ldquo;a cute animal&rdquo;, &ldquo;something flying&rdquo;&hellip;">
+        <button type="button" class="voice-button" data-voice-for="finder-q" aria-label="Speak a search" hidden>&#127908;</button>
+        <button type="button" id="finder-sketch" class="finder-sketch" data-tip="Search with my drawing|What's on the canvas becomes the search.">&#9999;&#65039;<span> My drawing</span></button>
+        <button type="button" id="finder-close" class="finder-close" aria-label="Close search">Esc</button>
+      </form>
+      <p id="finder-status" class="finder-status" role="status" aria-live="polite"></p>
+      <div id="finder-body" class="finder-body"></div>
+      <p class="finder-foot"><span>&#8593;&#8595; to move &middot; Enter to use &middot; Esc to close</span><span>Voyage AI maps words and drawings to meaning; MongoDB Atlas finds the nearest.</span></p>
+    </dialog>
+
+    <dialog id="hood" class="sheet hood" aria-labelledby="hood-title">
+      <div class="sheet-head"><div><p class="eyebrow">Under the hood</p><h2 id="hood-title">Every stroke has an author.</h2><p class="muted">AI as studio scaffolding, not a slot machine. Here is every moving part, in plain words.</p></div><button type="button" id="hood-close" class="close" aria-label="Close">&times;</button></div>
+
+      <ol class="hood-flow" aria-label="How a drawing travels">
+        <li style="--i:0"><span>&#9999;&#65039;</span><b>You draw</b><small>pressure, order, timing</small></li>
+        <li style="--i:1"><span>&#123;&#125;</span><b>Strokes</b><small>lines, not pixels</small></li>
+        <li style="--i:2"><span>&#129517;</span><b>Voyage AI</b><small>a map of meaning</small></li>
+        <li style="--i:3"><span>&#127811;</span><b>MongoDB Atlas</b><small>your private shelf</small></li>
+        <li style="--i:4"><span>&#9678;</span><b>Find similar</b><small>in milliseconds</small></li>
+      </ol>
+
+      <ol class="hood-rules">
+        <li id="rule-motion"><b>&#127902; Choreography, not replacement</b><span>Gemini picks a few poses. Plain math moves your actual strokes between them. Your line never goes through a filter, so it never flickers or drifts off-model.</span></li>
+        <li id="rule-author"><b>&#9997; Every stroke has an author</b><span>AI drafts stay blue-pencil previews until you say yes, and stay marked after. The meter on the canvas shows how much is your hand.</span></li>
+        <li id="rule-memory"><b>&#9678; Your sketchbook, remembered</b><span>Draw a rough shape to find matching work. Voyage AI maps meaning; Atlas searches only your library. No folders called final_v3_REAL.</span></li>
+      </ol>
+
+      <section class="hood-card hood-strokes">
+        <div>
+          <h3>&#9999;&#65039; Your drawing is data, not a photo</h3>
+          <p>Every line is saved as the path your hand took: where it went, how hard you pressed, and in what order. That is why Inkling can replay your process, copy and paste, turn art into a brush, and pose your own strokes into a flipbook. It is all math on <b>your</b> lines.</p>
+        </div>
+        <div class="hood-live">
+          <p class="hood-live-head">Your canvas, right now</p>
+          <dl id="hood-stats" class="hood-stats"></dl>
+          <pre id="hood-json" class="hood-json"></pre>
+        </div>
+      </section>
+
+      <section class="hood-card">
+        <div>
+          <h3>&#129517; Voyage AI: a map of meaning</h3>
+          <p>Voyage&rsquo;s multimodal model (<code>voyage-multimodal-3.5</code>) turns a picture <i>or</i> a sentence into a list of numbers: coordinates on one shared map. Things that look or mean alike land close together, so your fox doodle and the words &ldquo;a cute animal&rdquo; are neighbors. That is how <b>Find similar</b> works without you ever tagging anything.</p>
+          <p class="hood-fine">Saving or searching sends that drawing or text to Voyage to compute its coordinates.</p>
+        </div>
+        <svg class="hood-map" viewBox="0 0 260 170" role="img" aria-label="An illustration: a fox doodle, the words a cute animal, and a cat sketch sit close together; a rocket sits far away.">
+          <circle class="ring" cx="92" cy="78" r="52"/>
+          <g class="dot" style="--i:0"><circle cx="78" cy="64" r="7"/><text x="90" y="60">your fox doodle</text></g>
+          <g class="dot" style="--i:1"><circle cx="70" cy="98" r="7"/><text x="82" y="102">&ldquo;a cute animal&rdquo;</text></g>
+          <g class="dot" style="--i:2"><circle cx="112" cy="84" r="7"/><text x="124" y="88">cat sketch</text></g>
+          <g class="dot far" style="--i:3"><circle cx="214" cy="144" r="7"/><text x="160" y="132">rocket</text></g>
+        </svg>
+      </section>
+
+      <section class="hood-card">
+        <div>
+          <h3>&#127811; MongoDB Atlas: your private shelf</h3>
+          <p>Every drawing, version, flipbook frame, video, and its coordinates live together in one database. <b>Atlas Vector Search</b> finds the nearest neighbors on the map, filtered to <b>your</b> library only, so one artist&rsquo;s search can never see another&rsquo;s art. Ask &ldquo;the moment the rocket leaves the ground&rdquo; and it can land on the exact frame.</p>
+        </div>
+        <ul class="hood-points">
+          <li>&#128274; Private to your account</li>
+          <li>&#9201; Versions and history kept</li>
+          <li>&#127902; Search single frames, not just files</li>
+        </ul>
+      </section>
+
+      <section class="hood-card">
+        <div>
+          <h3>&#10022; Gemini: an assistant you call on</h3>
+          <p>Google&rsquo;s Gemini helps when you call on it, and every job is visible:</p>
+          <ul class="hood-jobs">
+            <li><b>Tags</b> your saves so search just works (skip it by adding your own).</li>
+            <li><b>Sparks</b>: a blue-pencil sketch to trace, a fix for a stuck spot, a refinement. Drafts you keep or skip, marked as AI forever.</li>
+            <li><b>Flipbooks</b>: picks a few key poses for the layers you aim at. Plain math fills the frames in between. Your strokes are never redrawn, and effects like snow or rain are code, not AI.</li>
+            <li><b>AI video</b> (Gemini Omni): a new take inspired by your art. It may restyle it, it is paid, and <b>What the AI saw</b> shows the exact picture and words it got.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="hood-card hood-yours">
+        <h3>&#9997; What always stays yours</h3>
+        <ul class="hood-points">
+          <li>Nothing AI draws lands on your canvas without your yes.</li>
+          <li>Every stroke remembers who made it; the meter on the canvas shows the split.</li>
+          <li><b>Breakdown</b> replays any drawing, stroke by stroke.</li>
+          <li>Stamping and copy-paste reuse your own lines with no AI at all; flipbooks pose your own lines too.</li>
+        </ul>
+      </section>
+    </dialog>
+
+    <dialog id="seen" class="sheet seen" aria-labelledby="seen-title">
+      <div class="sheet-head"><div><p class="eyebrow">No black box</p><h2 id="seen-title">What the AI saw</h2><p class="muted">Gemini received exactly this picture and these words. Nothing else from your library.</p></div><button type="button" id="seen-close" class="close" aria-label="Close">&times;</button></div>
+      <div class="seen-body">
+        <img id="seen-image" alt="The drawing that was sent">
+        <div><h3 class="help-sub">The words</h3><blockquote id="seen-brief"></blockquote><p id="seen-note" class="muted"></p></div>
+      </div>
     </dialog>
 
     <div id="tooltip" class="tooltip" role="tooltip" hidden><strong></strong><span></span></div>
   </main>
-  <footer><span><b>inkling</b> /&#712;&#618;&#331;kl&#618;&#331;/ a slight hint.</span></footer>
+  <footer><span><b>inkling</b> /&#712;&#618;&#331;kl&#618;&#331;/ a slight hint. The rest is yours.</span></footer>
 </body>
 </html>

@@ -209,6 +209,27 @@ def test_copying_a_library_remaps_every_id_so_the_copy_is_independent():
     assert len(stores["assets"].find({"owner": "demo"})) == 1  # the source is untouched
 
 
+def test_the_starter_pack_copies_assets_once_with_vectors_and_lineage():
+    fox, rocket, twin = "f" * 8, "r" * 8, "t" * 8
+    assets = Store("assets", [
+        {"id": fox, "_key": fox, "owner": "demo", "name": "Little Fox", "embedding": [0.1, 0.2]},
+        {"id": rocket, "_key": rocket, "owner": "demo", "name": "Red Rocket"},
+        {"id": twin, "_key": twin, "owner": "demo", "name": "Rocket Ship", "origin": {"asset_id": rocket, "version": 1}}])
+    versions = Store("asset_versions", [{"asset_id": fox, "owner": "demo", "version": 1}])
+    production = Production.__new__(Production)
+    production.owner = "u1"
+    production.assets, production.versions = Mock(mongo=assets), versions
+
+    assert production.add_starter("demo") == {"assets": 3, "asset_versions": 1}
+    mine = {doc["name"]: doc for doc in assets.find({"owner": "u1"})}
+    assert mine["Little Fox"]["embedding"] == [0.1, 0.2] and mine["Little Fox"]["id"] != fox
+    assert mine["Little Fox"]["starter"] == fox and mine["Little Fox"]["_key"] == mine["Little Fox"]["id"]
+    assert mine["Rocket Ship"]["origin"]["asset_id"] == mine["Red Rocket"]["id"]
+    assert versions.find({"owner": "u1"})[0]["asset_id"] == mine["Little Fox"]["id"]
+    assert production.add_starter("demo") == {"assets": 0, "asset_versions": 0}  # never twice
+    assert len(assets.find({"owner": "demo"})) == 3  # the source is untouched
+
+
 def test_behind_a_tls_proxy_the_session_cookie_is_secure(signed, monkeypatch):
     import backend.main as main
 
