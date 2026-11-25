@@ -936,6 +936,21 @@ def shared_poster(request: Request, token: str) -> Response:
     return Response(public_share(request, token, "poster")["poster"], media_type="image/png", headers=PUBLIC_CACHE)
 
 
+@app.get("/robots.txt", include_in_schema=False)
+def robots(request: Request) -> Response:
+    """Crawl the front door; the API and private share links stay out of search results."""
+    body = f"User-agent: *\nAllow: /$\nDisallow: /api/\nDisallow: /s/\nSitemap: {public_origin(request)}/sitemap.xml\n"
+    return Response(body, media_type="text/plain", headers={"Cache-Control": "public, max-age=86400"})
+
+
+@app.get("/sitemap.xml", include_in_schema=False)
+def sitemap(request: Request) -> Response:
+    origin = html.escape(public_origin(request), quote=True)
+    body = ('<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+            f'<url><loc>{origin}/</loc><changefreq>weekly</changefreq></url></urlset>\n')
+    return Response(body, media_type="application/xml", headers={"Cache-Control": "public, max-age=86400"})
+
+
 @app.get("/og.png", include_in_schema=False)
 def social_card() -> FileResponse:
     return FileResponse(ROOT / "og.png", media_type="image/png", headers={"Cache-Control": "public, max-age=86400"})

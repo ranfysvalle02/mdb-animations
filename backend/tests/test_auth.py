@@ -305,6 +305,16 @@ def test_link_previews_use_absolute_urls_and_escape_the_host(signed, monkeypatch
     assert image.status_code == 200 and image.headers["content-type"] == "image/png"
 
 
+def test_crawlers_get_a_sitemap_and_stay_out_of_the_api_and_shares(client, monkeypatch):
+    monkeypatch.setenv("PUBLIC_URL", "https://inkling.example")
+    client, _ = client  # signed out, like a crawler
+    robots = client.get("/robots.txt")
+    assert robots.status_code == 200 and "Disallow: /api/" in robots.text and "Disallow: /s/" in robots.text
+    assert "Sitemap: https://inkling.example/sitemap.xml" in robots.text
+    sitemap = client.get("/sitemap.xml")
+    assert sitemap.status_code == 200 and "<loc>https://inkling.example/</loc>" in sitemap.text
+
+
 def test_hosts_can_probe_with_head(signed):
     assert signed.head("/").status_code == 200 and signed.head("/health").status_code == 200
 
