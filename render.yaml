@@ -29,6 +29,8 @@ services:
         value: "1"
       - key: INKLING_SEED_DEMO        # seed the shared demo library once (default on; Voyage calls on first boot only)
         value: "1"
+      - key: PUBLIC_URL               # the custom domain: canonical URL, link previews, sitemap (else *.onrender.com)
+        value: https://inkling.oblivio-company.com
       - key: TRUST_PROXY              # Render terminates TLS: honor X-Forwarded-Proto/For
         value: "1"
       - key: INKLING_SERVICE_KEY      # internal scripts' key (loopback only)
