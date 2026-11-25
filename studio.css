@@ -1445,3 +1445,6 @@ body.lab-open { overflow: hidden; }
   .scene-picks select { max-width: 44vw; }
   #go-flipbook { flex: 1 1 100%; }
 }
+
+/* Library header: "Show all" stays on one line on phones. */
+#browse { white-space: nowrap; }

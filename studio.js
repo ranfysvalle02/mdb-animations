@@ -2329,8 +2329,8 @@
     rebuildAll();
     renderSaveKind();
     if (!directing) {
-      flashTray(`\u25c6 ${name} is in. Drag it anywhere, pull the corner to resize, then bring it to life.`);
-      message('drawing-status', `Placed "${name}" as a linked layer (it always knows where it's used). Drag to position it, then bring it to life.`);
+      flashTray(`\u25c6 ${name} is in. Drag it anywhere, pull the corner to resize, then animate it.`);
+      message('drawing-status', `Placed "${name}" as a linked layer (it always knows where it's used). Drag to position it, then animate it.`);
     }
     logEvent('artist', 'Placed', `${name} v${layer.asset.version}${frames.length > 1 ? ` on frame ${frameIndex + 1}` : ''}`);
   }
@@ -3426,7 +3426,7 @@
     renderTagChips();
     renderSaveKind();
     pipelineStep({ id: 'save', detail: updating ? `\u25c6 ${saved.name} v${saved.version} saved; scenes using older versions get flagged`
-      : `\u25c6 ${saved.name} v${saved.version} is in your library, findable by words or by sketch`, ms: performance.now() - started });
+      : `\u25c6 ${saved.name} v${saved.version} is in your library, embedded by Voyage AI: findable by words or a sketch`, ms: performance.now() - started });
     loadGallery(currentQuery);
     loadSceneBackdrops();
     return { id: saved.id, name: saved.name, type: saved.type || $('asset-type').value, tags: saved.tags || assetTags,
@@ -3484,7 +3484,7 @@
     if (motionDraft && !another) skipMotion();
     if ($('animate-sheet').open) $('animate-sheet').close();
     if (!asset && !ids && !hasInk()) {
-      flashTray('Draw something first (or pick a star), then bring it to life.', true);
+      flashTray('Draw something first (or pick a star), then animate it.', true);
       canvas.scrollIntoView({ behavior: 'smooth', block: 'center' });
       return;
     }
@@ -3647,11 +3647,11 @@
         message('library-status', 'Voyage AI is embedding your drawing\u2026');
         const ask = scope => api('/api/search/sketch', { method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ scope, layers: docLayers(), ...(scope === 'frame' ? { animated: true } : {}) }), signal: controller.signal });
-        const [assets, moments, clips] = await Promise.all([ask('asset'), ask('frame'), ask('clip')]);
+        const [assets, moments] = await Promise.all([ask('asset'), ask('frame')]);
         if (controller.signal.aborted) return;
         const self = editing?.kind === 'asset' ? editing.id : null;
-        renderEverything({ assets: assets.items.filter(hit => hit.id !== self), frames: moments.items, clips: clips.items },
-          { receipt: '\u25ce Similar art and scenes inspired by a similar drawing.' });
+        renderEverything({ assets: assets.items.filter(hit => hit.id !== self), frames: moments.items },
+          { receipt: '\u25ce Your drawing was the search: art and scenes that look like it.' });
       }
     } catch (error) {
       if (error.name !== 'AbortError') message('library-status', error.message, true);
@@ -4387,8 +4387,12 @@
         editing = { kind, id: saved.id, code: saved.code };
         if (wantShare) setTimeout(openShare);
         const first = saved.assets?.[0];
-        message('drawing-status', `Saved ${saved.code}.${note} ${saved.assets?.length ? `Now findable from ${saved.assets.map(a => `"${a.name}"`).join(', ')}.` : 'Tip: place an asset in it, so the asset can find this scene.'}`, false,
-          frames.length > 1 ? [{ label: '\ud83d\udd17 Share it', tip: 'Share|A public link: your scene as a looping GIF, with how it moves explained.', run: () => openShare() }]
+        // The magic moment, said plainly: saving is embedding. Picture, story, and code are now searchable by meaning.
+        const hasCode = !!sceneSketch && frames.length > 1;
+        const embedded = `Voyage AI embedded its picture, story${hasCode ? ', and code' : ''}`;
+        message('drawing-status', `\u2713 Saved ${saved.code || 'your scene'}. ${embedded}: find it by words, a sketch${hasCode ? ', or code' : ''}.${note}${saved.assets?.length ? ` Linked to ${saved.assets.map(a => `"${a.name}"`).join(', ')}.` : ''}`, false,
+          frames.length > 1 ? [{ label: '\ud83d\udd17 Share it', tip: 'Share|A public link: your scene as a looping GIF, with how it moves explained.', run: () => openShare() },
+            ...(hasCode && !offline ? [{ label: '\u25ce Similar code', tip: 'Similar code|Scenes in your library whose code moves alike.', run: () => { openLab(); setTimeout(() => $('lab-similar').click(), 700); } }] : [])]
             : first ? [{ label: `Where else is "${first.name}" used?`, run: () => openWhereUsed({ id: first.id, name: first.name }) }]
             : [{ label: '\u25c6 Place an asset', tip: 'Place an asset|Opens Assets. Tap Place, then drag a box on the canvas.', run: () => goPlace() }]);
       } else {
@@ -4486,12 +4490,12 @@
 
   // ---------------------------------------------------------------- library tabs
   const TAB_TEXT = {
-    all: { placeholder: 'Describe anything, e.g. "a spaceship"', noun: 'results' },
-    asset: { placeholder: 'Describe it, e.g. "the red rocket"', noun: 'assets' },
-    backdrop: { placeholder: 'Describe a backdrop, e.g. "a forest at night"', noun: 'backdrops' },
-    frame: { placeholder: 'Describe a scene, e.g. "a rocket taking off"', noun: 'animated scenes' },
-    shot: { placeholder: 'Describe it, e.g. "a rocket over the city"', noun: 'scenes' },
-    idea: { placeholder: 'Describe it, e.g. "a friendly green character"', noun: 'ideas' }
+    all: { placeholder: 'Describe anything\u2026', noun: 'results' },
+    asset: { placeholder: 'Describe an asset\u2026', noun: 'assets' },
+    backdrop: { placeholder: 'Describe a backdrop\u2026', noun: 'backdrops' },
+    frame: { placeholder: 'Describe how it moves\u2026', noun: 'animated scenes' },
+    shot: { placeholder: 'Describe a scene\u2026', noun: 'scenes' },
+    idea: { placeholder: 'Describe an idea\u2026', noun: 'ideas' }
   };
   let libraryTab = 'all';
   let shotStatus = '';
@@ -4751,7 +4755,7 @@
       cards.push(el('div', 'empty', query || sketch || filterText ? 'No matches. Try other words or another sketch, or give new saves a moment.'
         : tab === 'asset' || tab === 'backdrop' ? 'Nothing here yet. Draw something and save it to your library.'
         : tab === 'shot' ? 'No scenes yet. \u25c6 Place an asset, draw the rest, save as Scene.'
-        : tab === 'frame' ? 'No animated scenes yet. Doodle something and bring it to life.'
+        : tab === 'frame' ? 'No animated scenes yet. Draw something and press \ud83c\udf9e Animate.'
         : 'No ideas yet. Save loose sketches here and find them by describing them.'));
     }
     $('results').classList.remove('sectioned');
@@ -4829,7 +4833,7 @@
           if (controller.signal.aborted) return;
           renderEverything({ assets: assets.items.slice(0, 10), scenes: scenes.items.slice(0, 6) }, {
             receipt: 'Your latest work. Search above by meaning, or tap \u25ce Find similar under the canvas.',
-            empty: 'Nothing here yet. Doodle something above and bring it to life.' });
+            empty: 'Nothing here yet. Draw something above, press \ud83c\udf9e Animate, and save it: it\u2019s embedded the moment it lands.' });
         }
       } catch (error) {
         if (error.name !== 'AbortError') {
@@ -4894,10 +4898,7 @@
         body: JSON.stringify({ scope: tab === 'backdrop' ? 'asset' : tab, layers: docLayers(),
           ...(tab === 'backdrop' ? { asset_type: 'environment' } : {}), ...(tab === 'frame' ? { animated: true } : {}) }), signal: controller.signal });
       if (controller.signal.aborted) return;
-      const clips = tab === 'frame' ? await api('/api/search/sketch', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ scope: 'clip', layers: docLayers() }), signal: controller.signal }) : { items: [] };
-      if (controller.signal.aborted) return;
-      renderResults(tab, data.items, { sketch: true, clips: clips.items });
+      renderResults(tab, data.items, { sketch: true });
     } catch (error) {
       if (error.name !== 'AbortError') message('library-status', error.message, true);
     }
@@ -5293,8 +5294,8 @@
     try {
       const ask = scope => api('/api/search/sketch', { method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ scope, layers: docLayers(), ...(scope === 'frame' ? { animated: true } : {}) }), signal: controller.signal });
-      const [assets, moments, clips] = await Promise.all([ask('asset'), ask('frame'), ask('clip')]);
-      if (!controller.signal.aborted) renderFinderResults({ assets: assets.items, frames: moments.items, clips: clips.items }, 'Things that look like your drawing.');
+      const [assets, moments] = await Promise.all([ask('asset'), ask('frame')]);
+      if (!controller.signal.aborted) renderFinderResults({ assets: assets.items, frames: moments.items }, 'Things that look like your drawing.');
     } catch (error) {
       if (error.name !== 'AbortError') $('finder-status').textContent = error.message;
     }
@@ -7545,7 +7546,7 @@ function draw() {
     const read = readPrompt(prompt);
     const move = offlineMove(prompt);
     const cast = (targetLayers() || castLayers()).filter(layer => inkBounds(layer.strokes)).slice(0, 4);
-    if (!cast.length) { flashTray('Draw something first, then bring it to life.', true); canvas.scrollIntoView({ behavior: 'smooth', block: 'center' }); return; }
+    if (!cast.length) { flashTray('Draw something first, then animate it.', true); canvas.scrollIntoView({ behavior: 'smooth', block: 'center' }); return; }
     const effects = withFx([], read.on, []);
     const tooMuch = fxFits({ base: layers }, effects);
     if (tooMuch) { flashTray(tooMuch, true); return; }

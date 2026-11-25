@@ -64,7 +64,7 @@
       <button type="button" data-go="lab" style="--i:3"><span class="menu-icon">&#10216;/&#10217;</span><span><b>Lab</b><small>Your strokes as code: 3D, Processing, AI-written sketches</small></span></button>
       <button type="button" data-go="tools" style="--i:3"><span class="menu-icon">&#9636;</span><span><b>Layers &amp; frames</b><small>Layers, flipbook frames, download</small></span></button>
       <button type="button" data-go="save" data-online style="--i:4"><span class="menu-icon">&#8595;</span><span><b>Save to your library</b><small>Name it, tag it, share it</small></span></button>
-      <button type="button" data-go="find" data-online style="--i:5"><span class="menu-icon">&#9678;</span><span><b>Find your art</b><small>Search by words, voice, or a sketch</small></span></button>
+      <button type="button" data-go="find" data-online style="--i:5"><span class="menu-icon">&#9678;</span><span><b>Find your art</b><small>By words, voice, a sketch, or code</small></span></button>
       <button type="button" data-go="help" style="--i:6"><span class="menu-icon">?</span><span><b>How it works</b><small>You draw. AI assists. You decide.</small></span></button>
       <button type="button" data-go="hood" style="--i:7"><span class="menu-icon">&#9881;</span><span><b>Under the hood</b><small>Voyage AI, MongoDB Atlas, Gemini, in plain words</small></span></button>
       <button type="button" data-go="install" id="menu-install" style="--i:8" hidden><span class="menu-icon">&#128242;</span><span><b>Install Inkling</b><small>On your home screen. Draws even in airplane mode</small></span></button>
@@ -83,7 +83,7 @@
       <ul class="hero-rules" aria-label="The three rules">
         <li><button type="button" data-rule="motion" data-tip="Choreography, not replacement|Gemini picks the poses; plain math moves your actual strokes. Your line never goes through a filter.">&#127902; Choreography, not replacement</button></li>
         <li><button type="button" data-rule="author" data-tip="Every stroke has an author|AI drafts stay blue-pencil until you keep them. Lines moved by code are yours only when you sign them. The meter shows the split.">&#9997; Every stroke has an author</button></li>
-        <li><button type="button" data-rule="memory" data-tip="Your sketchbook, remembered|Draw a rough shape to find matching work in your private library. No tagging, no folders.">&#9678; Your sketchbook, remembered</button></li>
+        <li><button type="button" data-rule="memory" data-tip="Your sketchbook, remembered|Every save is embedded automatically (Voyage AI) and stored in your private Atlas library. Find it by words, a rough sketch, or code. No tagging, no folders.">&#9678; Your sketchbook, remembered</button></li>
       </ul>
     </section>
 
@@ -189,7 +189,7 @@
           <p class="nudge-fine">Just a nudge. Your hand does the rest.</p>
         </div>
         <section class="scene-maker" aria-labelledby="scene-maker-heading">
-          <h3 id="scene-maker-heading" class="sr-only">Bring it to life</h3>
+          <h3 id="scene-maker-heading" class="sr-only">Animate</h3>
           <form id="scene-direct" autocomplete="off">
             <label class="sr-only" for="scene-prompt">What happens?</label>
             <ol id="rhythm" class="rhythm" aria-label="Draw, animate, find">
@@ -304,7 +304,7 @@
 
     <section class="library" data-online aria-labelledby="library-heading">
       <div class="library-head">
-        <div><h2 id="library-heading">Find your art</h2><p class="library-sub">Search by words or a sketch.</p></div>
+        <div><h2 id="library-heading">Find your art</h2><p class="library-sub">Every save is embedded automatically. Search by words, a sketch, or code.</p></div>
         <button type="button" id="browse" class="link-button">Show all</button>
       </div>
       <div class="library-tabs" role="tablist" aria-label="Library">
@@ -315,7 +315,7 @@
         <button type="button" role="tab" id="tab-shot" data-tab="shot" aria-selected="false" hidden>&#9635; Scenes</button>
         <button type="button" role="tab" id="tab-idea" data-tab="idea" aria-selected="false" hidden>&#9998; Ideas</button>
       </div>
-      <form id="search-form" class="search-bar" role="search"><label class="sr-only" for="query">Search by describing it</label><input id="query" type="search" maxlength="500" required placeholder="Describe anything, e.g. &ldquo;a spaceship&rdquo;"><button type="button" class="voice-button" data-voice-for="query" aria-label="Speak a search" hidden>&#127908;</button><button type="button" id="search-sketch" class="search-sketch" aria-label="Search with my drawing" data-tip="Search with my drawing|What's on the canvas becomes the query. Doodle a rocket up high, find the frames where it's up high."><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20l4-1L19 8l-3-3L5 16z"/><path d="M14 7l3 3"/></svg></button><button class="search-go" type="submit" aria-label="Search">&#8594;</button></form>
+      <form id="search-form" class="search-bar" role="search"><label class="sr-only" for="query">Search by describing it</label><input id="query" type="search" maxlength="500" required placeholder="Describe anything&hellip;"><button type="button" class="voice-button" data-voice-for="query" aria-label="Speak a search" hidden>&#127908;</button><button type="button" id="search-sketch" class="search-sketch" aria-label="Search with my drawing" data-tip="Search with my drawing|What's on the canvas becomes the query. Doodle a rocket up high, find the frames where it's up high."><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20l4-1L19 8l-3-3L5 16z"/><path d="M14 7l3 3"/></svg></button><button class="search-go" type="submit" aria-label="Search">&#8594;</button></form>
       <div id="search-hints" class="search-hints" role="group" aria-label="Try a search"></div>
       <div id="asset-filters" class="filters asset-filters" role="group" aria-label="Filter assets by how they were made" hidden></div>
       <div id="frame-filters" class="filters frame-filters" hidden><label for="frame-asset">With</label><select id="frame-asset" aria-label="Only frames with this asset"><option value="">any asset</option></select></div>

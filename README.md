@@ -167,6 +167,7 @@ space for drawings and words), **Gemini** (drafts you accept or skip), and **m-s
   `docker compose exec -T studio python -m backend.seed_demo`. Open <http://localhost:8000>.
 - **Deploy it:** [Render + hosted Atlas, step by step](docs/deploy-render.md) (one Blueprint: [`render.yaml`](render.yaml)).
 - **Why it exists:** [The Calculator Didn't Kill Math](hlog.md) (a 5-minute read).
+- **How search works:** [Saving Is Searching](blog2.md): autoembed with Voyage AI, Atlas Vector Search, and animations as code (a 6-minute read).
 - **What's next:** [NEXT-STEPS.md](NEXT-STEPS.md). **Notes on m-stash:** [m-stash-newbie.md](m-stash-newbie.md).
 
 > Brand note: "Inkling" has been used by other products (e.g. a discontinued Wacom pen). Do a trademark
