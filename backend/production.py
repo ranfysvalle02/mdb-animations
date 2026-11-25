@@ -20,6 +20,7 @@ shot's status or assignee only updates metadata: nothing is re-embedded.
 import base64
 import hashlib
 import json
+import secrets
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -38,6 +39,15 @@ MAX_TRAIL = 300  # stored audit-trail events per asset or shot (oldest dropped f
 # Search keeps hits close to the best one: measured relevant frames ~0.78 vs unrelated <= 0.69 for words,
 # so a fixed top-k would pad results with noise.
 SEARCH_SPREAD = 0.06
+# A 10-second shot has 80 frames; neighbours look alike, so a sample keeps frame search sharp and cheap.
+FRAME_VECTORS = 16
+
+
+def sampled_frames(count: int) -> list[int]:
+    """Which frames (0-based) get a vector: all of a short flipbook, an even spread of a long shot."""
+    if count <= FRAME_VECTORS:
+        return list(range(count))
+    return sorted({round(i * (count - 1) / (FRAME_VECTORS - 1)) for i in range(FRAME_VECTORS)})
 
 
 def close_to_best(hits: list, spread: float = SEARCH_SPREAD) -> list:
@@ -104,6 +114,23 @@ def metadata_filter(project: str | None, sequence: str | None, status: str | Non
     elif status:
         where["status"] = status
     return where
+
+
+def shot_story(shot: Shot, cast: list[str]) -> str:
+    """What happens in a scene, in words: its direction, its beats, its cast, and its layers."""
+    parts = []
+    if shot.motion:
+        parts.append(shot.motion.prompt or shot.motion.note)
+        beats = dict.fromkeys(key.label for track in shot.motion.tracks for key in track.keys if key.label and key.label != "start")
+        if beats:
+            parts.append("Beats: " + ", ".join(beats))
+        parts.append(f"{len(shot.frames) + 1} frames, {(len(shot.frames) + 1) / shot.fps:.0f} seconds of animation")
+    if cast:
+        parts.append("Cast: " + ", ".join(cast))
+    names = dict.fromkeys(layer.name for layer in shot.layers if layer.visible and layer.strokes)
+    if names:
+        parts.append("Layers: " + ", ".join(names))
+    return ". ".join(part.strip().rstrip(".") for part in parts if part and part.strip())
 
 
 def frame_hash(layers: list[Layer]) -> str:
@@ -226,7 +253,9 @@ class Production(Scoped):
         self.versions = self.assets.mongo.database["asset_versions"]
         self.shots = atlas.collection(
             "shots",
-            embed=Text("code") + Text("description") + Text("tags", label="Tags") + Image("image"),
+            # "Story" is what happens in it (the direction, the beats, the cast), so scenes are found by
+            # what they're about as well as by how they look: "the fox hops on the beach".
+            embed=Text("code") + Text("description") + Text("tags", label="Tags") + Text("story", label="Story") + Image("image"),
             key="id", filters=["owner", "project", "sequence", "status", "asset_ids"],
         )
         self.elements = atlas.collection(
@@ -237,6 +266,8 @@ class Production(Scoped):
             "shot_frames", embed=Image("image"), key="id",
             filters=["owner", "project", "sequence", "status", "shot_id", "asset_ids"],
         )
+        # Public snapshots of scenes (a GIF and its explanation), found only by their unguessable token.
+        self.shares = self.assets.mongo.database["shares"]
 
     def scoped(self, owner: str) -> "Production":
         view = super().scoped(owner)
@@ -400,6 +431,7 @@ class Production(Scoped):
                        for asset_id, version in placed.items()],
             "created_at": previous["created_at"] if previous else stamp, "updated_at": stamp,
             "image": image, "png": base64.b64encode(image).decode("ascii"),
+            "story": shot_story(shot, [links[asset_id]["name"] for asset_id in placed]),
         }
         elements = [{**element, "owner": record["owner"]} for element in element_records(new_id, shot, links)]
         self._add(self.shots, [record], "Shot")
@@ -423,7 +455,8 @@ class Production(Scoped):
         stored = {row["id"]: row.get("hash") for row in self.frames.mongo.find(
             self.q({"shot_id": shot_id}), {"_id": 0, "id": 1, "hash": 1})}
         fresh, keep = [], []
-        for number, layers in enumerate(stacks, start=1):
+        for index in sampled_frames(len(stacks)):
+            number, layers = index + 1, stacks[index]
             frame_id, digest = f"{shot_id}:f{number}", frame_hash(layers)
             placed = list(dict.fromkeys(layer.asset.asset_id for layer in layers if layer.asset))
             meta = {
@@ -472,7 +505,7 @@ class Production(Scoped):
         record = self.get_shot(shot_id)
         if record is None:
             raise ProductionError("Shot not found.")
-        fields = ("code", "project", "sequence", "status", "assignee", "description", "tags", "layers", "frames", "fps")
+        fields = ("code", "project", "sequence", "status", "assignee", "description", "tags", "layers", "frames", "fps", "motion")
         return Shot.model_validate({field: record[field] for field in fields if field in record})
 
     def sync_asset(self, shot_id: str, asset_id: str) -> dict:
@@ -488,31 +521,51 @@ class Production(Scoped):
         latest = [stroke for layer in (Layer.model_validate(raw) for raw in asset["layers"]) if layer.visible
                   for stroke in layer.strokes]
 
-        def swap(frame: list[Layer], keep_backups: bool) -> tuple[list[Layer], int, int]:
-            layers, updated, backups = [], 0, 0
+        def swap(frame: list[Layer], keep_backups: bool, moved: dict[int, int] | None = None, bumped: frozenset = frozenset()):
+            """Older placements get the latest art in the same spot (a hidden backup keeps the old art).
+
+            Layers that reference frame 1 need no new art (they pose frame 1's, which was just updated):
+            they're re-pointed past any inserted backups and re-versioned. Returns the new layers, counts,
+            where each input layer landed, and which inputs were updated.
+            """
+            layers, updated, backups, positions, swapped = [], 0, 0, {}, set()
             room = MAX_LAYERS - len(frame) if keep_backups else 0
-            for layer in frame:
+            for index, layer in enumerate(frame):
                 link = layer.asset
-                target = stroke_bounds(layer.strokes) if link and link.asset_id == asset_id and link.version < asset["version"] else None
+                outdated = bool(link and link.asset_id == asset_id and link.version < asset["version"])
+                if layer.ref is not None:
+                    follows = outdated and layer.ref in bumped
+                    layers.append(layer.model_copy(update={"ref": moved[layer.ref], **(
+                        {"asset": AssetLink(asset_id=asset_id, version=asset["version"])} if follows else {})}))
+                    updated += follows
+                    continue
+                target = stroke_bounds(layer.strokes) if outdated else None
                 if target is None:
+                    positions[index] = len(layers)
                     layers.append(layer)
                     continue
                 if backups < room:
                     layers.append(layer.model_copy(update={
                         "name": f"{layer.name[:28]} (v{link.version} backup)", "visible": False, "asset": None}))
                     backups += 1
+                positions[index] = len(layers)
+                swapped.add(index)
                 layers.append(layer.model_copy(update={
                     "strokes": fit_strokes(latest, target), "asset": AssetLink(asset_id=asset_id, version=asset["version"])}))
                 updated += 1
-            return layers, updated, backups
+            return layers, updated, backups, positions, frozenset(swapped)
 
         def rebuild(keep_backups: bool) -> tuple[Shot, int, int]:
-            swapped = [swap(frame, keep_backups) for frame in shot.all_frames()]
-            first, *rest = [layers for layers, _, _ in swapped]
+            first, updated, backups, moved, bumped = swap(shot.layers, keep_backups)
+            rest = []
+            for frame in shot.frames:
+                layers, u, b, _, _ = swap(frame.layers, keep_backups, moved, bumped)
+                rest.append(layers)
+                updated, backups = updated + u, backups + b
             new_shot = Shot.model_validate({
                 **shot.model_dump(), "history": [], "layers": [layer.model_dump() for layer in first],
                 "frames": [Frame(layers=layers).model_dump() for layers in rest]})
-            return new_shot, sum(u for _, u, _ in swapped), sum(b for _, _, b in swapped)
+            return new_shot, updated, backups
 
         try:
             new_shot, updated, backups = rebuild(True)
@@ -563,6 +616,40 @@ class Production(Scoped):
             raise ProductionError("Shot not found.")
         self.elements.mongo.delete_many(self.q({"shot_id": shot_id}))
         self.frames.mongo.delete_many(self.q({"shot_id": shot_id}))
+        self.shares.delete_many(self.q({"shot_id": shot_id}))
+
+    # ------------------------------------------------------------------ sharing
+    def share_shot(self, shot_id: str) -> dict:
+        """Snapshot a scene for a public link: a looping GIF plus what's needed to explain it. Re-sharing
+        refreshes the snapshot and keeps the link."""
+        from backend.share import render_clip
+
+        record = self.get_shot(shot_id)
+        if record is None:
+            raise ProductionError("Shot not found.")
+        shot = self._shot_model(shot_id)
+        stacks = shot.all_frames()
+        clip, poster = render_clip(stacks, shot.fps)
+        existing = self.shares.find_one(self.q({"shot_id": shot_id}), {"token": 1})
+        token = existing["token"] if existing else secrets.token_urlsafe(12)
+        stamp = now()
+        self.shares.update_one(self.q({"shot_id": shot_id}), {"$set": {
+            "token": token, "code": shot.code, "description": shot.description[:200], "fps": shot.fps, "frames": len(stacks),
+            "motion": shot.motion.model_dump() if shot.motion else None, "cast": [a["name"] for a in record.get("assets", [])],
+            "gif": clip, "poster": poster, "updated_at": stamp}, "$setOnInsert": {"created_at": stamp}}, upsert=True)
+        return {"token": token, "frames": len(stacks), "bytes": len(clip)}
+
+    def share_of(self, shot_id: str) -> str | None:
+        found = self.shares.find_one(self.q({"shot_id": shot_id}), {"token": 1})
+        return found["token"] if found else None
+
+    def unshare(self, shot_id: str) -> None:
+        self.shares.delete_many(self.q({"shot_id": shot_id}))
+
+    def shared(self, token: str, *fields: str) -> dict | None:
+        """A public snapshot by its token. Deliberately not owner-scoped: the token is the permission."""
+        projection = {"_id": 0, **{field: 1 for field in fields}} if fields else {"_id": 0, "owner": 0}
+        return self.shares.find_one({"token": token}, projection)
 
     def delete_asset(self, asset_id: str) -> None:
         uses = self.usage_counts([asset_id]).get(asset_id, 0)

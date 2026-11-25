@@ -2,7 +2,7 @@
 
     pip install playwright && python -m playwright install chromium
     python docs/capture_screenshots.py                     # against http://127.0.0.1:8000
-    python docs/capture_screenshots.py --with-ai           # also the Ask AI shot (one billable Gemini call)
+    python docs/capture_screenshots.py --with-ai           # also the Ask AI and director shots (billable Gemini calls)
 
 It signs up a fresh m-stash member, copies the demo library (run the demo seed first), and walks the
 product like a person would: desktop at 1280x800, phone at 390x844, both at 2x.
@@ -83,7 +83,7 @@ def open_breakdown(page: Page, asset: str) -> None:
     card(page, asset).get_by_role("button", name="Where used?").click()
     page.wait_for_selector("dialog[open] >> text=Breakdown")
     page.locator("dialog[open] button", has_text="Breakdown").first.click()
-    page.wait_for_selector("#bd-replay")
+    page.wait_for_selector("#breakdown[open]")
     page.wait_for_timeout(1200)
 
 
@@ -179,7 +179,8 @@ def main() -> None:
         top(page, "#library-heading", 70)
         shot(page, "08-search-by-drawing.png")
 
-        # Animate: drop an asset onto a backdrop, pick a move, keep it, then grab and tweak a frame.
+        # Animate: drop an asset onto a backdrop (Voyage casts from the library), let the director pitch,
+        # preview with the keyframes drawn on, see how it works, keep it, then share it.
         page.click("#clear")
         page.wait_for_timeout(500)
         page.click("#tab-asset")
@@ -190,28 +191,43 @@ def main() -> None:
         page.wait_for_selector("#animate-sheet[open]")
         page.locator("#anim-add summary").click()
         page.locator("#anim-backdrops button", has_text="Beach").click()
+        page.wait_for_selector("#anim-assets .anim-asset.fits", timeout=30_000)
         page.wait_for_timeout(900)
         shot(page, "09a-animate-sheet.png")
-        page.locator("#anim-presets button", has_text="Hop across").click()
-        page.wait_for_timeout(1100)
-        studio_shot(page, "09b-motion-preview.png")
         if args.with_ai:
-            page.keyboard.press("Escape")
-            page.keyboard.press("a")
-            page.wait_for_selector("#animate-sheet[open]")
-            page.fill("#anim-prompt", "wobbles nervously, then blasts off to the top right")
-            page.click("#anim-go")
-            page.wait_for_function("!document.getElementById('animate-sheet').open", timeout=90_000)
-            page.wait_for_timeout(1500)
-            studio_shot(page, "09c-ai-motion.png")
-        page.keyboard.press("Enter")
+            page.locator("#anim-add summary").click()
+            page.wait_for_selector("#anim-ideas .idea-card.ai", timeout=90_000)
+            page.locator("#anim-ideas").scroll_into_view_if_needed()
+            page.wait_for_timeout(900)
+            shot(page, "09b-director.png")
+            page.locator("#anim-ideas .idea-card.ai .idea-go").first.click()
+        else:
+            page.locator(".anim-quick summary").click()
+            page.locator("#anim-presets button", has_text="Hop across").click()
+        page.wait_for_function("!document.getElementById('animate-sheet').open", timeout=90_000)
+        page.wait_for_timeout(1700)
+        studio_shot(page, "09c-motion-preview.png")
+        page.locator("#spark-tray button", has_text="How it works").click()
+        page.wait_for_selector("#explain-sheet[open]")
+        page.wait_for_timeout(900)
+        shot(page, "09d-how-it-moves.png")
+        page.click("#explain-close")
+        page.wait_for_timeout(300)
+        page.locator("#spark-tray button", has_text="Keep").click()
         page.wait_for_timeout(1200)
-        page.keyboard.press("Space")  # stop the auto-play on frame 1
-        page.locator('#frame-list [data-frame="5"]').click()
+        page.click("#frame-play")  # stop the auto-play on frame 1
+        page.locator('#frame-list [data-frame="12"]').click()
         page.wait_for_timeout(800)
         studio_shot(page, "09-flipbook.png")
+        page.click("#share-open")
+        page.wait_for_selector("#share-ready:not([hidden])", timeout=180_000)
+        page.wait_for_timeout(1500)
+        shot(page, "09e-share.png")
+        shared_url = page.input_value("#share-url")
+        page.click("#share-close")
 
         open_breakdown(page, "Little Fox")
+        page.click(".bd-behind summary")
         page.click("#bd-replay")
         page.wait_for_timeout(800)  # mid-replay (a 19-stroke replay runs 2.5 s)
         shot(page, "10-watch-it-being-made.png")
@@ -231,11 +247,16 @@ def main() -> None:
         page.wait_for_selector(".card", timeout=30_000)
         page.wait_for_timeout(1500)
         shot(page, "12-studio-phone.png")
-        open_breakdown(page, "Little Fox")
-        page.click("#bd-replay")
-        page.wait_for_timeout(800)
-        shot(page, "13-replay-phone.png")
         phone.close()
+
+        print("Phone, anyone with the link:", flush=True)
+        guest = browser.new_context(**PHONE)
+        page = guest.new_page()
+        page.goto(shared_url)
+        page.wait_for_timeout(2500)
+        page.screenshot(path=str(OUT / "13-shared-scene-phone.png"), full_page=True, animations="disabled")
+        print("  13-shared-scene-phone.png", flush=True)
+        guest.close()
         browser.close()
     print(f"Done: {OUT} (account {email})", flush=True)
 

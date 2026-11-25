@@ -33,11 +33,14 @@ def ensure(collection) -> None:
 def main() -> None:
     library = Library()
     try:
-        for collection in [library.drawings, *Production(library).collections]:
+        production = Production(library)
+        for collection in [library.drawings, *production.collections]:
             ensure(collection)
+        production.shares.create_index("token", unique=True)
+        production.shares.create_index([("owner", 1), ("shot_id", 1)])
         # Work saved before accounts existed becomes the shared demo library members can copy;
         # loose ideas from that era are kept, but out of everyone's way.
-        moved = Production(library).claim_unowned(DEMO_OWNER, ideas_owner="legacy")
+        moved = production.claim_unowned(DEMO_OWNER, ideas_owner="legacy")
         if any(moved.values()):
             print(f"Accounts: assigned pre-account work an owner {moved}.", flush=True)
     finally:

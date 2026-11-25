@@ -4,34 +4,36 @@
 
 > **inkling** /ˈɪŋklɪŋ/ *n.* a slight hint or suggestion.
 
-**Draw it once. Animate it anywhere. Find any frame.**
-*AI drafts. You decide. Every stroke is remembered.*
+**Draw it. Find it. Animate it. Share it.**
+*AI drafts. You decide.*
 
-Inkling is a 2D asset studio for fingers, pencils, and mice. Draw an asset once, drop it into scenes and tweak
-them frame by frame, then find any asset, scene, or single frame by describing it or by doodling it. AI helps
-in small, reviewable steps on **your own strokes**, and every stroke keeps its order, its time, and its author,
-so you can replay exactly how anything was made.
+Inkling is a 2D studio for fingers, pencils, and mice. Draw characters, props, and backdrops in layers.
+Find any of them again by describing it or by doodling it. Then tap **🎬 Animate**: an AI director looks at
+your scene, pitches three 10-second shots, and choreographs the one you pick as **keyframes that move your
+own drawing** (never redraw it). Before you keep it, Inkling shows you exactly how it works: the poses that
+matter, the in-betweens, and why the spacing makes it feel alive. Every one of the 80 frames stays yours to
+edit. Then send a link: a looping GIF and a page that explains how it moves.
 
-Built on **MongoDB Atlas** (operational data and vectors side by side), **Voyage AI** multimodal embeddings
-(one space for drawings and words), **Gemini** (drafts you accept or skip), and **m-stash** (accounts, one
-private library per member).
+Built on **MongoDB Atlas** (artwork, frames, metadata, and vectors in one place), **Voyage AI** multimodal
+embeddings (one space for drawings and words), **Gemini** (drafts you accept or skip), and **m-stash**
+(accounts, one private library per member).
 
 <p align="center">
   <img src="docs/screenshots/01-sign-in-phone.png" width="24%" alt="Sign-in screen on a phone">
   <img src="docs/screenshots/12-studio-phone.png" width="24%" alt="The studio on a phone, with starter scenes over a blank canvas">
-  <img src="docs/screenshots/13-replay-phone.png" width="24%" alt="Breakdown replaying Little Fox stroke by stroke">
+  <img src="docs/screenshots/13-shared-scene-phone.png" width="24%" alt="A shared scene on a phone: the clip, its direction, and its keyframes explained">
 </p>
-<p align="center"><img src="docs/screenshots/08-search-by-drawing.png" width="80%" alt="Doodle a tree low and a rocket high; Inkling finds the liftoff's frame 6"></p>
+<p align="center"><img src="docs/screenshots/09c-motion-preview.png" width="80%" alt="An AI-directed 10-second shot previewing on the canvas, with its keyframes, spacing, and timeline drawn on"></p>
 
 | | You | Inkling |
 | --- | --- | --- |
-| **1. Draw it once** | Draw (try **Focus**), start from a **starter**, or **Ask AI** to sketch a layer / fix a spot | Pressure, palm rejection, layers. Voyage checks for duplicates before you save. **Grow variations** turns one asset into a cast by editing your strokes |
-| **2. Animate it** | Drop the asset in, drag it, tap **🎬 Animate**: a free preset or *"wobbles, then blasts off"* | One AI call returns keyframes that move **your** strokes (never redraws them). Preview, keep, then tweak any frame. Short by design: 1-3 s |
-| **3. Find anything** | Words, **✏️ a doodle**, or "with ◆ asset" | One vector per asset, scene, layer, and **frame**; filters (status, project, hand share, color) run inside Atlas Vector Search |
-| **4. Always know** | **Where used?** and **🔍 Breakdown** | Usage, outdated versions, look-alikes, family, who made what, and **how it was made**: replay, evolution v1 → vN, art math, **⬇ Save replay** as a video |
+| **1. Draw it** | Draw a character, prop, or backdrop in layers (try **Focus** or a **starter**), or **Ask AI** to sketch a layer / fix a spot | Pressure, palm rejection, layers. Save it as a **◆ asset**: Voyage checks for look-alikes first. **Grow variations** turns one asset into a cast |
+| **2. Find it** | Words, **✏️ a doodle**, or "with ◆ asset" | Voyage puts drawings and words in one vector space: search assets, scenes, and single **frames**, filtered inside Atlas Vector Search. Scenes are also found by **what happens** in them |
+| **3. Animate it** | Tap **🎬 Animate**, pick a backdrop (Voyage **casts** your library for it), then a pitch from the **AI director** | One AI call returns keyframes for your layers; the in-betweens are math. **◆ How it works** explains keyframes, in-betweens, and spacing on your own shot. Keep it, then tweak any of the 80 frames |
+| **4. Share it** | **🔗 Save & share** | A public link with a looping GIF and a plain-language "how it moves". Your library stays private |
 
 **Start here:**
-- **Use it:** [the guided tour](docs/TUTORIALS.md): six short tutorials with screenshots.
+- **Use it:** [the guided tour](docs/TUTORIALS.md): short tutorials with screenshots.
 - **Run it locally:** `cp .env.example .env` (add `VOYAGE_API_KEY` and `GEMINI_API_KEY`), then
   `docker compose up --build -d --wait --wait-timeout 900` and
   `docker compose exec -T studio python -m backend.seed_demo`. Open <http://localhost:8000>.
@@ -201,13 +203,41 @@ or scene apart:
   versions, variations with their briefs, one-tap updates, confirmed look-alikes, status
   changes). Capped at the last 300 per asset or scene.
 
-### 🎞 Animate it: scenes, frame by frame
+### 🎬 Animate it: an AI director, 10-second shots, explained
 
-**🎞 Animate it** (after saving an asset, or **◆ Place** from the library) opens a scene with the asset
-placed as a linked layer. **🎞 Animate it: add frame 2** copies the frame. Change only what moves:
-slide a layer with **Move** (M), redraw, or erase. A red onion skin shows the previous frame. **Space**
-plays (4-24 fps), `,` and `.` step through frames, and **N** adds one. Up to 24 frames per scene. Links,
-one-tap asset updates, and Breakdown cover every frame, and undo covers frame changes too.
+**🎬 Animate** (or **A**) opens three steps:
+
+1. **The cast.** What moves: placed assets by default, or any drawing on the canvas. **+ Add** drops in a
+   backdrop (Beach, Mountains, Forest, City at night, Outer space) and your assets. With a backdrop set,
+   **Voyage casts** your library for it: the words *"characters and props that belong in a Beach scene"*
+   are ranked against your drawings' pictures in one vector space (✦ = fits).
+2. **Direct it.** An AI director looks at the frame and pitches three shots (title, logline, who moves, and
+   a plain-language direction anyone can edit). Instant ideas from your layer names show while it thinks;
+   pitches are cached per composition. **✦ Animate this** (or write your own) makes one AI call that
+   returns **labelled keyframes** for your layers: *anticipation, takeoff, apex, squash, settle*.
+3. **How long.** 3, 5, or **10 seconds** (80 frames at 8 fps). **⚡ Quick moves** (Lift off, Hop across,
+   Float, Walk, Spin, Bounce, Push in, Shake) are free, instant, and need no AI.
+
+The preview plays on the canvas with the motion drawn on: one dot per frame along the path, ◆ keyframes
+with their labels, and a timeline with a playhead. **◆ How it works** opens *Animation, demystified*, on
+your own shot: the keyframe poses, the in-betweens (80 frames, 10 keys, 70 computed), *spacing is speed*,
+the numbers behind each pose (move, squash and stretch, turn), and the animation principles used. Keep it
+(**Enter**), skip it (**Esc**), or make it **Softer** / **Bigger** without another AI call.
+
+Every frame is your own strokes, posed by numbers, never redrawn. Saved, frames 2..N store *"frame 1's
+layer, posed by this transform"* (`ref` + `xf`), so a 10-second shot is ~60 KB, and a new asset version
+flows into every frame automatically. Drag anything in any frame with **Move** (M); a frame you change is
+stored as drawn. **Space** plays, `,` and `.` step, **N** adds a frame by hand. Up to 80 frames per scene.
+The direction (who, prompt, keyframes) is saved with the scene, shown in **Breakdown → 🎬 How it moves**,
+and embedded with it, so the scene is findable by what happens in it.
+
+### 🔗 Share it: a link anyone can watch
+
+**🔗 Save & share** (on an animated scene) saves it, renders every frame into a looping GIF on the server,
+and gives you a link: `/s/<token>`. The page shows the clip, the direction, the cast, the keyframe beats,
+and the animation principles in plain words, with **Download GIF** and **Make one like it**. It's a
+snapshot: share again after editing and the same link updates. **Stop sharing** turns the link off.
+The token (unguessable, 16 characters) is the only permission; nothing else in your library is public.
 
 ### 🔍 Find anything: words, a sketch, or an asset
 
@@ -220,11 +250,13 @@ The library (**Find anything**) searches four things with one bar: **◆ Assets*
   the liftoff's last frame first.
 - **With ◆ asset** (Frames tab): only frames that place that asset (exact links), optionally combined
   with words. Status chips filter by scene status.
+- **By what happens**: scenes embed a *story* (their direction, beats, cast, and layer names) next to
+  their picture, so *"the fox hops across the beach"* finds the shot even if its first frame doesn't show it.
 
 Frame hits are grouped by scene (neighboring frames of a flipbook look alike): the best frame leads,
 and the other matches are one-tap chips. **Open frame N** loads the scene *at that frame*. Results stay
 close to the best match instead of padding to a fixed count. Every frame is its own Voyage vector
-(`shot_frames`). Frames are hashed, so a save re-embeds only frames that changed. For scenes saved
+(`shot_frames`); long shots embed a sample of 16 frames. Frames are hashed, so a save re-embeds only frames that changed. For scenes saved
 before frames were indexed, run `docker compose exec -T studio python -m backend.backfill`. It also adds art math and
 version snapshots to existing assets, and the demo seed runs it.
 
@@ -489,8 +521,16 @@ draw), `ai`, and `kit`.
 `code`, ..., `assets`, `image_url`, `score` when searching) by words, by placed asset, or latest first;
 `GET /api/shots/{uuid}/frames/{n}/image` returns a frame PNG. `POST /api/search/sketch` (`scope`:
 asset/shot/frame/idea, `layers`) searches with a drawing.
-Shots accept `frames` (frames 2-24, each `{layers}`; `layers` stays frame 1, which is the
-thumbnail, the vectors, and the elements) and `fps` (4/6/8/12/24). Shot requests may be up to 8 MiB.
+Shots accept `frames` (frames 2-80, each `{layers}`; `layers` stays frame 1, which is the
+thumbnail, the vectors, and the elements) and `fps` (4/6/8/12/24). A frame layer may be a reference,
+`{name, ref, xf?}`: frame 1's layer `ref`, posed by `xf` (`x`, `y`, `sx`, `sy`, `r`, pivot `px`, `py`), so
+the strokes are stored once. Shots may carry `motion` (`by` ai/preset, `prompt`, `note`, `seconds`, `fps`,
+`strength`, `tracks` of labelled keyframes). Shot requests may be up to 8 MiB.
+`POST /api/sparks/direct` (`seconds`, `backdrop`, `subjects`: `{id, name, box}`, `layers`) returns up to three
+`ideas` (`title`, `logline`, `prompt`, `movers`). `POST /api/sparks/motion` (`prompt`, `seconds` 0.5-10,
+`subjects`, `layers`) returns `tracks` of labelled keyframes; nothing is applied.
+`POST /api/shots/{uuid}/share` renders a GIF snapshot and returns `url`, `gif_url`, `token`; `DELETE` stops
+sharing. `GET /s/{token}` (public) is the shared page; `/s/{token}/clip.gif` and `/poster.png` its media.
 `POST /api/sparks/sketch` takes `prompt` (3-200 chars), optional `title`, and the current
 `layers` (may be empty) and returns up to 40 blue-pencil `strokes` for a new layer.
 `POST /api/sparks/strokes` and `POST /api/sparks/guide` take a normalized

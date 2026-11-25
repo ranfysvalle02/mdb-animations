@@ -32,8 +32,8 @@ None of that is the art. All of that is the arithmetic.
 
 That's the whole idea behind **Inkling**:
 
-> **Draw it once. Animate it anywhere. Find any frame.**
-> **AI drafts. You decide. Every stroke is remembered.**
+> **Draw it. Find it. Animate it. Share it.**
+> **AI drafts. You decide.**
 
 ---
 
@@ -55,21 +55,24 @@ own strokes**. It doesn't repaint from scratch. In our tests, additive briefs li
 stroke is marked as AI, permanently. Keep the ones you like, finish them by hand, and tap **Build a
 scene**.
 
-**The scene.** Drop the rocket onto a beach, tap **Animate**, and say *"wobbles, then blasts off to the top
-right."* One AI call returns keyframes, not pixels: anticipation, squash, stretch, an arc. It moves **your**
-drawing; it never redraws it. Preview it, keep it, then grab the rocket on frame 8 and fix the arc yourself.
-Redraw the rocket as v2 later, and every scene using v1 can update in one tap.
+**The scene.** Drop the rocket onto a beach and tap **Animate**. Voyage has already pulled the rest of
+your cast that fits a beach. An AI director looks at the frame and pitches three shots: *"Blast Off From
+Beach: the rocket shakes on the sand, then rockets past the sun."* Tap one. One AI call returns
+**keyframes, not pixels**: ten poses for ten seconds, each with a name (*rumble, anticipation, takeoff,
+settle*). The computer fills in the other seventy frames. It moves **your** drawing; it never redraws it.
+Then grab the rocket on frame 13 and fix the arc yourself. Every one of the 80 frames is yours.
 
 **The search.** Now the fun part. Describe it: *"the rocket high above the pine tree."* Or just
 doodle it. Inkling searches every asset, every scene, **every single frame**, and opens the hit at
 that exact frame, ready to tweak. Someone redrew the rocket in blue, by hand, and never linked it?
 It still finds it (similarity **0.86**, against 0.66-0.73 for unrelated drawings).
 
-**The receipt.** This is my favorite. Every stroke remembers its order and how long it took. Open
-**Little Fox** in the demo library and press *Watch it being made*: a 4-stroke doodle with honestly low
-potential becomes clean line art, then a finished fox, with two whiskers AI suggested and the artist
-accepted. The art math sits right there: **89% your hand**, **23 seconds of pencil down**. Tap **Save
-replay** for a video of it being drawn. Portfolio proof. Client proof. *Human* proof.
+**The lesson.** This is my favorite. Before you keep the shot, tap **How it works**. The dots along the
+path are the frames: close together, slow; far apart, fast. The diamonds are the keyframes, the poses that
+matter. *Anticipation* is the little dip before the jump that makes the jump read. That's the secret
+Disney's animators wrote down in the 1930s, explained on **your** rocket, in plain words a ten-year-old
+can follow. Then tap **Share**: a link, a looping GIF, and the same lesson on the page. The AI didn't
+hide the craft. It handed it to you.
 
 ---
 

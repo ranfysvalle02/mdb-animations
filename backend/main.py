@@ -24,11 +24,12 @@ from backend.ai import AIError, AIUnavailable, Sparks
 from backend.auth import DEMO_OWNER, SESSION_COOKIE, AuthError, AuthUnavailable, Budget, MStash, OpenAuth, Throttle, jwt_claims, service_owner
 from backend.library import Library, LibraryError, ink_crop, render_image
 from backend.models import (
-    ASSET_TYPES, CODE_PATTERN, MAX_LAYERS, SHOT_STATUSES, Asset, Drawing, LayersRequest, MotionRequest, Shot, ShotUpdate, SketchRequest, SparkRequest, TagRequest,
+    ASSET_TYPES, CODE_PATTERN, MAX_LAYERS, SHOT_STATUSES, Asset, DirectRequest, Drawing, LayersRequest, MotionRequest, Shot, ShotUpdate, SketchRequest, SparkRequest, TagRequest,
     SketchSearch, VariationPlanRequest, VariationRequest,
     normalize_tag,
 )
 from backend.production import Production, ProductionError
+from backend.share import page as share_page
 
 ROOT = Path(__file__).resolve().parent.parent
 MAX_BODY = 2 * 1024 * 1024
@@ -106,8 +107,8 @@ AI_BUDGET = Budget("ai", "AI drafts", int(os.environ.get("INKLING_AI_PER_HOUR", 
 EMBED_BUDGET = Budget("embeds", "saves and searches", int(os.environ.get("INKLING_EMBEDS_PER_HOUR", "600")))
 _ID = r"[0-9a-fA-F-]{36}"
 METERED = [
-    (AI_BUDGET, "POST", re.compile(r"/api/(sparks/(strokes|sketch|guide|motion)|tags/suggest|assets/" + _ID + r"/variations(/plan)?)")),
-    (EMBED_BUDGET, "POST", re.compile(r"/api/(drawings|assets|assets/similar|shots|search/sketch|shots/" + _ID + r"/(sync/" + _ID + r"|link))")),
+    (AI_BUDGET, "POST", re.compile(r"/api/(sparks/(strokes|sketch|guide|motion|direct)|tags/suggest|assets/" + _ID + r"/variations(/plan)?)")),
+    (EMBED_BUDGET, "POST", re.compile(r"/api/(drawings|assets|assets/similar|shots|search/sketch|shots/" + _ID + r"/(sync/" + _ID + r"|link|share))")),
     (EMBED_BUDGET, "PUT", re.compile(r"/api/(assets|shots)/" + _ID)),
     (EMBED_BUDGET, "GET", re.compile(r"/api/(search|assets/" + _ID + r"/where-used)")),
 ]
@@ -441,6 +442,13 @@ async def spark_sketch(request: Request) -> dict:
     return await run_in_threadpool(request.app.state.ai.sketch, sketch)
 
 
+@app.post("/api/sparks/direct")
+async def spark_direct(request: Request) -> dict:
+    """AI pitches a few short shots for what's on the canvas: who moves, where, and what they do."""
+    direct = await read_json(request, DirectRequest)
+    return await run_in_threadpool(request.app.state.ai.direct, direct)
+
+
 @app.post("/api/sparks/motion")
 async def spark_motion(request: Request) -> dict:
     """AI choreographs a short clip as keyframes for the artist's own layers. A preview; nothing is applied."""
@@ -708,7 +716,22 @@ def find_shot(request: Request, shot_id: UUID) -> dict:
 def get_shot(request: Request, shot_id: UUID) -> dict:
     record = find_shot(request, shot_id)
     return {**editable(record, "code", "project", "sequence", "status", "assignee", "description", "tags", "assets"),
-            "frames": record.get("frames", []), "fps": record.get("fps", 12)}
+            "frames": record.get("frames", []), "fps": record.get("fps", 12), "motion": record.get("motion"),
+            "share": prod(request).share_of(str(shot_id))}
+
+
+@app.post("/api/shots/{shot_id}/share")
+async def share_shot(request: Request, shot_id: UUID) -> dict:
+    """A public link to this scene: a looping GIF and a page that explains how it moves."""
+    result = await run_in_threadpool(prod(request).share_shot, str(shot_id))
+    origin = public_origin(request)
+    return {**result, "url": f"{origin}/s/{result['token']}", "gif_url": f"{origin}/s/{result['token']}/clip.gif"}
+
+
+@app.delete("/api/shots/{shot_id}/share", status_code=204)
+def unshare_shot(request: Request, shot_id: UUID) -> Response:
+    prod(request).unshare(str(shot_id))
+    return Response(status_code=204)
 
 
 @app.get("/api/shots/{shot_id}/frames/{frame}/image")
@@ -754,6 +777,35 @@ def public_origin(request: Request) -> str:
 def studio(request: Request) -> HTMLResponse:
     page = (ROOT / "studio.html").read_text(encoding="utf-8")
     return HTMLResponse(page.replace("__ORIGIN__", html.escape(public_origin(request), quote=True)), headers=REVALIDATE)
+
+
+SHARE_TOKEN = re.compile(r"[A-Za-z0-9_-]{12,32}")
+PUBLIC_CACHE = {"Cache-Control": "public, max-age=300"}
+
+
+def public_share(request: Request, token: str, *fields: str) -> dict:
+    """Shared scenes are the one public read: only by unguessable token, only the snapshot."""
+    production = getattr(request.app.state, "production", None)
+    found = production.shared(token, *fields) if production and SHARE_TOKEN.fullmatch(token) else None
+    if found is None:
+        raise HTTPException(404, "This share link doesn't exist (or was turned off).")
+    return found
+
+
+@app.api_route("/s/{token}", methods=["GET", "HEAD"], include_in_schema=False)
+def shared_page(request: Request, token: str) -> HTMLResponse:
+    share = public_share(request, token, "token", "code", "description", "fps", "frames", "motion", "cast")
+    return HTMLResponse(share_page(share, public_origin(request)), headers=PUBLIC_CACHE)
+
+
+@app.api_route("/s/{token}/clip.gif", methods=["GET", "HEAD"], include_in_schema=False)
+def shared_clip(request: Request, token: str) -> Response:
+    return Response(public_share(request, token, "gif")["gif"], media_type="image/gif", headers=PUBLIC_CACHE)
+
+
+@app.api_route("/s/{token}/poster.png", methods=["GET", "HEAD"], include_in_schema=False)
+def shared_poster(request: Request, token: str) -> Response:
+    return Response(public_share(request, token, "poster")["poster"], media_type="image/png", headers=PUBLIC_CACHE)
 
 
 @app.get("/og.png", include_in_schema=False)

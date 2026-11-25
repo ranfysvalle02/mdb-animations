@@ -45,7 +45,7 @@
   <main>
     <section class="hero">
       <h1>Draw it once. <span>Animate it anywhere.</span></h1>
-      <p class="lede">Draw an asset with your finger or pencil. Drop it into scenes and tweak them frame by frame. Find any asset or frame by describing or sketching it. <b>AI drafts. You decide. Every stroke is remembered.</b></p>
+      <p class="lede">Draw characters, props, and backdrops in layers, with a finger or a pencil. Find any of them again by describing or sketching it. Then tap <b>&#127916; Animate</b>: an AI director pitches a 10-second scene, and shows you exactly how animation works. <b>AI drafts. You decide.</b></p>
     </section>
 
     <section id="guide" class="guide" aria-label="How it works" hidden>
@@ -142,7 +142,8 @@
         <div class="frames" id="frames">
           <button type="button" id="frame-play" class="frame-play" aria-label="Play" data-tip="Play &middot; Space|Flip through your frames. Tap the canvas to stop." hidden>&#9654;</button>
           <ol id="frame-list" class="frame-list" aria-label="Frames"></ol>
-          <button type="button" id="animate-open" class="animate-open" data-tip="Animate &middot; A|Pick what moves and how: a free preset, or describe it and AI choreographs your own layers. Every frame stays editable.">&#127916; Animate</button>
+          <button type="button" id="animate-open" class="animate-open" data-tip="Animate &middot; A|An AI director pitches a 10-second scene for your drawings, and shows how it works. Every frame stays editable.">&#127916; Animate</button>
+          <button type="button" id="explain-open" class="frame-add explain-open" hidden data-tip="How it moves|Keyframes, in-betweens, and spacing: how this shot works, on your own drawing.">&#9670; How</button>
           <button type="button" id="frame-add" class="frame-add" data-tip="New frame &middot; N|Copies this frame, like tracing on a lightbox. Change what moves. , and . step through frames.">+ Frame</button>
           <span id="frame-tools" class="frame-tools" hidden>
             <label class="onion" data-tip="Onion skin|The previous frame shows as a faint red ghost, so you can see the motion."><input type="checkbox" id="onion" checked> Onion</label>
@@ -186,6 +187,7 @@
           </details>
           <button class="save-button" id="save" type="submit"><span id="save-label">Save asset</span></button>
           <button type="button" id="save-new" class="link-button save-new" hidden>Save as new instead</button>
+          <button type="button" id="share-open" class="pill share-open" hidden data-tip="Share|A public link anyone can watch: your scene as a looping GIF, with how it moves explained.">&#128279; Share this scene</button>
         </form>
         <p id="drawing-status" class="status" role="status" aria-live="polite"></p>
         <p class="fine-print" data-tip="Where your art goes|Saves go to MongoDB Atlas and Voyage AI (for search). AI sketches, fixes, and tags use Google Gemini. Only save what you're OK sharing with them.">Saved to MongoDB Atlas &middot; searched with Voyage AI &middot; drafts by Gemini</p>
@@ -257,38 +259,65 @@
     </dialog>
 
     <dialog id="animate-sheet" class="sheet animate-sheet" aria-labelledby="animate-title">
-      <div class="sheet-head"><div><p class="eyebrow">&#127916; Animate</p><h2 id="animate-title">Make it move</h2><p class="muted">Short on purpose: a few seconds at 8 frames a second. AI moves <b>your</b> drawing; it never redraws it. Every frame stays editable.</p></div><button type="button" id="animate-close" class="close" aria-label="Close">&times;</button></div>
+      <div class="sheet-head"><div><p class="eyebrow">&#127916; Animate</p><h2 id="animate-title">Make it move</h2><p class="muted">Up to 10 seconds, 8 frames a second. AI picks the poses (keyframes); the in-betweens are math. It moves <b>your</b> drawing and never redraws it. Every frame stays editable.</p></div><button type="button" id="animate-close" class="close" aria-label="Close">&times;</button></div>
       <section class="anim-step">
-        <h3><span class="anim-num">1</span> What moves?</h3>
+        <h3><span class="anim-num">1</span> The cast</h3>
         <div id="anim-subjects" class="anim-chips" role="group" aria-label="Layers that move"></div>
         <details class="anim-add" id="anim-add">
           <summary>+ Add an asset or a backdrop</summary>
-          <p class="anim-label">&#9670; Asset <small>tap to drop it in</small></p>
-          <div id="anim-assets" class="anim-assets"></div>
-          <p class="anim-label">Backdrop</p>
+          <p class="anim-label">Backdrop <small>where it happens</small></p>
           <div id="anim-backdrops" class="anim-chips"></div>
+          <p class="anim-label">&#9670; Your assets <small>tap to drop one in</small></p>
+          <p id="anim-cast-note" class="anim-cast-note"></p>
+          <div id="anim-assets" class="anim-assets"></div>
         </details>
       </section>
       <section class="anim-step">
-        <h3><span class="anim-num">2</span> How? <small>presets are free</small></h3>
-        <div id="anim-presets" class="anim-presets"></div>
+        <h3><span class="anim-num">2</span> Direct it <small>the director looks at your scene and pitches shots</small></h3>
+        <div id="anim-ideas" class="anim-ideas" aria-live="polite"></div>
+        <button type="button" id="anim-more" class="link-button anim-more" data-tip="New ideas|Another pitch from the director (one AI call).">&#8635; New ideas</button>
         <form id="anim-ai" class="anim-ai" autocomplete="off">
           <span class="ai-spark" aria-hidden="true">&#10022;</span>
           <label class="sr-only" for="anim-prompt">Describe the motion</label>
-          <input id="anim-prompt" maxlength="200" placeholder="Or describe it: &ldquo;wobbles, then blasts off to the top right&rdquo;">
+          <input id="anim-prompt" maxlength="300" placeholder="Or write your own: who moves, where, and what they do">
           <button type="submit" id="anim-go" class="ai-go" aria-label="Choreograph with AI">&#8594;</button>
         </form>
-        <div id="anim-examples" class="examples ai-examples"></div>
       </section>
       <section class="anim-step anim-length">
         <h3><span class="anim-num">3</span> How long?</h3>
         <div class="segmented" role="radiogroup" aria-label="Length">
-          <button type="button" role="radio" data-seconds="1" aria-checked="false">1 s</button>
-          <button type="button" role="radio" data-seconds="2" aria-checked="true">2 s</button>
           <button type="button" role="radio" data-seconds="3" aria-checked="false">3 s</button>
+          <button type="button" role="radio" data-seconds="5" aria-checked="false">5 s</button>
+          <button type="button" role="radio" data-seconds="10" aria-checked="true">10 s &middot; 80 frames</button>
         </div>
       </section>
+      <details class="anim-step anim-quick">
+        <summary><h3>&#9889; Quick moves <small>free, instant, 2&ndash;3 s, no AI</small></h3></summary>
+        <div id="anim-presets" class="anim-presets"></div>
+      </details>
       <p id="anim-status" class="muted" role="status" aria-live="polite"></p>
+    </dialog>
+
+    <dialog id="share-sheet" class="sheet share-sheet" aria-labelledby="share-title">
+      <div class="sheet-head"><div><p class="eyebrow">&#128279; Share</p><h2 id="share-title">Show it off</h2><p class="muted">Anyone with the link can watch it and see how it moves. They can't edit it, or see the rest of your library.</p></div><button type="button" id="share-close" class="close" aria-label="Close">&times;</button></div>
+      <img id="share-gif" class="share-gif" alt="Your scene, animated" hidden>
+      <p id="share-status" class="muted" role="status" aria-live="polite"></p>
+      <div id="share-ready" class="share-ready" hidden>
+        <div class="share-link"><input id="share-url" readonly aria-label="Share link"><button type="button" id="share-copy" class="pill primary">Copy</button></div>
+        <div class="share-actions">
+          <button type="button" id="share-native" class="pill" hidden>&#8599; Share&hellip;</button>
+          <a id="share-download" class="pill" download>&#11015; GIF</a>
+          <a id="share-visit" class="pill" target="_blank" rel="noopener">Open page</a>
+          <button type="button" id="share-stop" class="link-button">Stop sharing</button>
+        </div>
+        <p class="fine-print">A snapshot of the saved scene. Edit and share again to update it; the link stays the same.</p>
+      </div>
+    </dialog>
+
+    <dialog id="explain-sheet" class="sheet explain-sheet" aria-labelledby="explain-title">
+      <div class="sheet-head"><div><p class="eyebrow">&#9670; How it moves</p><h2 id="explain-title">Animation, demystified</h2><p class="muted">No magic: a few poses, and the frames in between.</p></div><button type="button" id="explain-close" class="close" aria-label="Close">&times;</button></div>
+      <div id="explain-body" class="explain-body"></div>
+      <label class="explain-toggle"><input type="checkbox" id="explain-math" checked> Show keyframes and spacing on the canvas during previews</label>
     </dialog>
 
     <dialog id="starters-sheet" class="sheet" aria-labelledby="starters-title">
@@ -342,17 +371,25 @@
         <div class="bd-player">
           <canvas id="bd-canvas" width="1000" height="650" aria-label="Frame preview"></canvas>
           <div class="bd-player-bar"><button type="button" id="bd-play" class="pill" aria-label="Play frames">&#9654;</button><input type="range" id="bd-scrub" min="1" max="1" value="1" aria-label="Frame"><output id="bd-frame">1 / 1</output></div>
-          <div class="bd-replay-bar"><button type="button" id="bd-replay" class="pill primary" data-tip="Watch it being made|Replays this frame stroke by stroke, in the order it was drawn. AI strokes are called out.">&#9998; Watch it being made</button><button type="button" id="bd-export" class="pill" data-tip="Save replay|A short video of this drawing being made, stroke by stroke, with your hand share at the end. Proof of the hand, ready for a portfolio.">&#11015; Save replay</button><span id="bd-caption" class="bd-caption" aria-live="polite"></span></div>
+          <p id="bd-caption" class="bd-caption" aria-live="polite"></p>
         </div>
         <div class="bd-made">
           <h3>Who made it</h3>
           <div id="bd-bar" class="made-bar" role="img"></div>
           <ul id="bd-legend" class="made-legend"></ul>
           <p id="bd-origin" class="bd-origin" hidden></p>
-          <h3 class="bd-math-title">&#129518; Art math</h3>
-          <div id="bd-math" class="art-math"></div>
+          <details class="bd-behind">
+            <summary>Behind the scenes <small>process replay &amp; art math</small></summary>
+            <div class="bd-replay-bar"><button type="button" id="bd-replay" class="pill primary" data-tip="Watch it being made|Replays this frame stroke by stroke, in the order it was drawn. AI strokes are called out.">&#9998; Watch it being made</button><button type="button" id="bd-export" class="pill" data-tip="Save replay|A short video of this drawing being made, stroke by stroke, with your hand share at the end. Proof of the hand, ready for a portfolio.">&#11015; Save replay</button></div>
+            <div id="bd-math" class="art-math"></div>
+          </details>
         </div>
       </div>
+      <section class="wu-group" id="bd-motion-group" hidden>
+        <div class="wu-group-head"><h3>&#127916; How it moves</h3><button type="button" id="bd-motion-explain" class="pill">&#9670; Explain</button></div>
+        <p id="bd-motion-line" class="wu-explain"></p>
+        <ol id="bd-motion" class="beats"></ol>
+      </section>
       <section class="wu-group">
         <div class="wu-group-head"><h3>&#127902; Frame by frame, layer by layer</h3></div>
         <p class="wu-explain">Like an animator's exposure sheet: each row is a layer, each column a frame. &#9670; = placed asset, &#10022; = has AI strokes.</p>
@@ -381,7 +418,7 @@
       <div class="gate-card">
         <div class="gate-brand"><svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><path d="M14 4C14 4 6 14 6 19.5a8 8 0 0 0 16 0C22 14 14 4 14 4z"/><path class="brand-spark" d="M25 3l1.3 3.2 3.2 1.3-3.2 1.3-1.3 3.2-1.3-3.2-3.2-1.3 3.2-1.3z"/></svg><span class="wordmark">inkling</span></div>
         <h2 id="gate-title">Draw it once. <span>Animate it anywhere.</span></h2>
-        <p class="gate-promise">AI drafts. You decide. Every stroke is remembered.</p>
+        <p class="gate-promise">Draw it. Find it. Animate it. Share it. AI drafts; you decide.</p>
         <div class="gate-tabs" role="tablist" aria-label="Account">
           <button type="button" role="tab" id="gate-tab-signup" data-gate="signup" aria-selected="true">Create account</button>
           <button type="button" role="tab" id="gate-tab-login" data-gate="login" aria-selected="false">Sign in</button>
@@ -398,9 +435,9 @@
           <p id="gate-status" class="gate-status" role="status" aria-live="polite"></p>
         </form>
         <ul class="gate-perks">
-          <li><b>&#9997;</b><span>Your library is <b>private</b> to you</span></li>
-          <li><b>&#10022;</b><span>AI drafts in small steps. Nothing lands without a yes</span></li>
-          <li><b>&#129516;</b><span>Every stroke remembered: replay how anything was made</span></li>
+          <li><b>&#9997;</b><span>Characters, props, and backdrops in layers. Your library is <b>private</b></span></li>
+          <li><b>&#128269;</b><span>Find anything by <b>describing or sketching</b> it</span></li>
+          <li><b>&#127916;</b><span>An AI director pitches <b>10-second scenes</b>, and shows you how animation works</span></li>
         </ul>
         <p class="gate-fine">Accounts by m-stash &middot; drawings in MongoDB Atlas &middot; search by Voyage AI</p>
       </div>

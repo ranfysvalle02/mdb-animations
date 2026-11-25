@@ -276,7 +276,10 @@ def frame_two(version=1):
                        {"name": "Rocket", "asset": {"asset_id": ASSET_ID, "version": version}, "strokes": [ink(0.1, 0.0, 0.2, 0.2)]}]}
 
 
-@pytest.mark.parametrize("change", [{"fps": 30}, {"frames": [{"layers": []}]}, {"frames": [frame_two()] * 24}])
+@pytest.mark.parametrize("change", [{"fps": 30}, {"frames": [{"layers": []}]}, {"frames": [frame_two()] * 80},
+                                    {"frames": [{"layers": [{"name": "Rocket", "ref": 5}]}]},  # frame 1 has no layer 5
+                                    {"frames": [{"layers": [{"name": "Rocket", "xf": {"x": 0.1}}]}]},  # a pose of nothing
+                                    {"layers": [{"name": "Rocket", "ref": 0}]}])  # frame 1 can't reference itself
 def test_frame_validation(change):
     with pytest.raises(ValidationError):
         Shot.model_validate(shot_payload(**change))
@@ -458,3 +461,123 @@ def test_assets_filter_by_how_they_were_made(client):
     http.get("/api/assets", params={"q": "rocket", "hand_min": "0.8", "color": "red"})
     http.production.list_assets.assert_called_with("rocket", None, hand_min=0.8, color="red")
     assert http.get("/api/assets", params={"hand_min": "2"}).status_code == 422
+
+
+# ---------------------------------------------------------------- 10-second shots: frames that pose frame 1
+def ref_frame(x=0.0, sx=1.0, version=1):
+    return {"layers": [{"name": "BG", "ref": 0},
+                       {"name": "Rocket", "ref": 1, "asset": {"asset_id": ASSET_ID, "version": version},
+                        "xf": {"x": x, "sx": sx, "sy": 1 / sx, "px": 0.15, "py": 0.2}}]}
+
+
+def test_frames_pose_frame_one_and_expand_exactly():
+    from backend.models import Transform, pose_strokes
+    from backend.models import Stroke
+    stroke = Stroke.model_validate(ink(0.1, 0.1, 0.2, 0.3))
+    assert pose_strokes([stroke], Transform())[0].points == stroke.points  # identity is identity
+    moved = pose_strokes([stroke], Transform(x=0.5, px=0.15, py=0.2))[0]
+    assert [round(p.x, 6) for p in moved.points] == [0.6, 0.7] and [p.y for p in moved.points] == [0.1, 0.3]
+    squashed = pose_strokes([stroke], Transform(sx=2, sy=0.5, px=0.15, py=0.2))[0]
+    assert squashed.width == 8 and [round(p.x, 6) for p in squashed.points] == [0.05, 0.25]
+    assert pose_strokes([stroke], Transform(y=-1.2)) == []  # gone off the top: culled, not squashed at the edge
+
+    shot = Shot.model_validate(shot_payload(frames=[ref_frame(x=0.3)] * 79))  # 80 frames, 10 s at 8 fps
+    stored = shot.model_dump()["frames"][0]["layers"]
+    assert stored[0] == {"name": "BG", "visible": True, "opacity": 1.0, "strokes": [], "ref": 0}  # compact on disk
+    frame = shot.all_frames()[1]
+    assert frame[0].strokes == shot.layers[0].strokes and frame[0].ref is None
+    assert round(frame[1].strokes[0].points[0].x, 6) == 0.4 and frame[1].asset.version == 1
+
+
+def test_long_shots_get_a_sample_of_frame_vectors():
+    from backend.production import FRAME_VECTORS, sampled_frames
+    assert sampled_frames(6) == list(range(6))
+    picks = sampled_frames(80)
+    assert len(picks) == FRAME_VECTORS and picks[0] == 0 and picks[-1] == 79
+    production = offline_production()
+    production.save_shot(Shot.model_validate(shot_payload(frames=[ref_frame(x=i / 200) for i in range(79)])))
+    assert len(production.frames.add.call_args.args[0]) == FRAME_VECTORS  # 16 embeddings, not 80
+
+
+def test_a_new_asset_version_flows_into_frames_that_reference_frame_one():
+    production = offline_production()
+    latest = {"name": "Rocket", "strokes": [ink(0.4, 0.4, 0.6, 0.8, "#0000ff")]}
+    production.assets.mongo.find_one.return_value = {"id": ASSET_ID, "name": "Red Rocket", "version": 3, "layers": [latest]}
+    production.shots.mongo.find_one.side_effect = lambda query, projection=None: shot_record(frames=[ref_frame(x=0.2), ref_frame(x=0.4)])
+    result = production.sync_asset(SHOT_ID, ASSET_ID)
+    record = production.shots.add.call_args.args[0][0]
+    first = [layer["name"] for layer in record["layers"]]
+    assert first[1:3] == ["Rocket (v1 backup)", "Rocket"]  # the old art is kept, just below
+    for frame in record["frames"]:
+        rocket = frame["layers"][1]
+        assert rocket["ref"] == first.index("Rocket") and rocket["asset"]["version"] == 3  # re-pointed past the backup
+        assert rocket["strokes"] == [] and "xf" in rocket  # still a pose of frame 1: the new art, same motion
+    assert result["updated"] == 3
+
+
+def test_direct_endpoint_validates_and_is_metered_as_ai(client):
+    from starlette.requests import Request as Req
+
+    from backend.main import AI_BUDGET, budget_for
+    http, _ = client
+    http.ai.direct.return_value = {"ideas": []}
+    subject = {"id": 0, "name": "Red Rocket", "box": {"x": 0.4, "y": 0.5, "w": 0.1, "h": 0.3}}
+    assert http.post("/api/sparks/direct", json={"subjects": [subject], "backdrop": "Beach"}).json() == {"ideas": []}
+    assert http.post("/api/sparks/direct", json={"subjects": []}).status_code == 422
+    scope = {"type": "http", "method": "POST", "path": "/api/sparks/direct", "query_string": b"", "headers": []}
+    assert budget_for(Req(scope)) is AI_BUDGET
+
+
+MOTION = {"by": "ai", "prompt": "the rocket wobbles, then blasts off", "note": "", "seconds": 1, "fps": 8, "strength": 1,
+          "tracks": [{"name": "Rocket", "keys": [{"t": 0, "x": 0, "y": 0, "sx": 1, "sy": 1, "r": 0, "label": "start"},
+                                                  {"t": 0.5, "x": 0, "y": 0.01, "sx": 1.1, "sy": 0.9, "r": 0, "label": "anticipation"},
+                                                  {"t": 1, "x": 0, "y": -0.3, "sx": 0.9, "sy": 1.2, "r": 0, "label": "takeoff"}]}]}
+
+
+def test_scenes_embed_their_story_and_share_as_a_gif_snapshot():
+    production = offline_production()
+    production.save_shot(Shot.model_validate(shot_payload(frames=[ref_frame(x=i / 20) for i in range(7)], fps=8, motion=MOTION)))
+    story = production.shots.add.call_args.args[0][0]["story"]
+    assert story.startswith("the rocket wobbles, then blasts off. Beats: anticipation, takeoff. 8 frames")
+    assert "Cast: Red Rocket. Layers: BG, Rocket" in story and ".." not in story
+
+    production.shares = Mock()
+    production.shares.find_one.return_value = None
+    production.shots.mongo.find_one.side_effect = lambda query, projection=None: shot_record(
+        frames=[ref_frame(x=i / 20) for i in range(7)], fps=8, motion=MOTION, assets=[{"id": ASSET_ID, "name": "Red Rocket", "version": 1}])
+    first = production.share_shot(SHOT_ID)
+    query, update = production.shares.update_one.call_args.args[:2]
+    assert query == {"shot_id": SHOT_ID, "owner": "tester"} and first["frames"] == 8
+    snapshot = update["$set"]
+    assert snapshot["gif"].startswith(b"GIF89a") and snapshot["poster"].startswith(b"\x89PNG") and snapshot["cast"] == ["Red Rocket"]
+    assert snapshot["motion"]["prompt"] == MOTION["prompt"] and len(first["token"]) >= 16
+    production.shares.find_one.return_value = {"token": first["token"]}
+    assert production.share_shot(SHOT_ID)["token"] == first["token"]  # re-sharing refreshes, the link stays
+
+
+def test_shared_scenes_are_public_by_token_only_and_escaped(client):
+    from starlette.requests import Request as Req
+
+    from backend.main import EMBED_BUDGET, budget_for
+    http, _ = client
+    token = "AbCdEfGhIjKlMnOp"
+    http.production.shared.return_value = {"token": token, "code": "SQ010_0010", "description": "<script>alert(1)</script>",
+                                           "fps": 8, "frames": 8, "motion": MOTION, "cast": ["Red Rocket"]}
+    page = http.get(f"/s/{token}", headers={"host": 'evil.test"><script>x()</script>'})
+    assert page.status_code == 200 and "<script>alert" not in page.text and "&lt;script&gt;" in page.text
+    assert "<script>x()" not in page.text  # a forged Host header can't inject markup
+    assert "anticipation" in page.text and "chose 3 keyframes" in page.text and f"/s/{token}/clip.gif" in page.text
+    http.production.shared.reset_mock()
+    assert http.get("/s/short").status_code == 404 and not http.production.shared.called  # malformed: no lookup at all
+    http.production.shared.return_value = None
+    assert http.get(f"/s/{token}").status_code == 404
+    http.production.shared.return_value = {"gif": b"GIF89a..."}
+    clip = http.get(f"/s/{token}/clip.gif")
+    assert clip.headers["content-type"] == "image/gif" and clip.content == b"GIF89a..."
+
+    http.production.share_shot.return_value = {"token": token, "frames": 8, "bytes": 9}
+    shared = http.post(f"/api/shots/{SHOT_ID}/share").json()
+    assert shared["url"].endswith(f"/s/{token}") and shared["gif_url"].endswith("/clip.gif")
+    assert http.delete(f"/api/shots/{SHOT_ID}/share").status_code == 204
+    scope = {"type": "http", "method": "POST", "path": f"/api/shots/{SHOT_ID}/share", "query_string": b"", "headers": []}
+    assert budget_for(Req(scope)) is EMBED_BUDGET

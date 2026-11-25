@@ -15,7 +15,7 @@ from pydantic import BaseModel
 
 from backend.library import CANVAS_HEIGHT, CANVAS_WIDTH, png_bytes, render_image
 from backend.models import (
-    MAX_POINTS, MAX_STROKES, Layer, MotionRequest, Region, SketchRequest, SparkRequest, Stroke, TagRequest, VariationPlanRequest,
+    MAX_MOTION_KEYS, MAX_POINTS, MAX_STROKES, DirectRequest, Layer, MotionRequest, Region, SketchRequest, SparkRequest, Stroke, TagRequest, VariationPlanRequest,
     VariationRequest, clean_tags,
 )
 
@@ -59,6 +59,7 @@ class _Key(BaseModel):
     sx: float
     sy: float
     r: float
+    label: str = ""
 
 
 class _Track(BaseModel):
@@ -71,8 +72,18 @@ class _Motion(BaseModel):
     tracks: list[_Track]
 
 
-MAX_MOTION_KEYS = 16
-IDENTITY_KEY = {"t": 0.0, "x": 0.0, "y": 0.0, "sx": 1.0, "sy": 1.0, "r": 0.0}
+class _Idea(BaseModel):
+    title: str
+    logline: str
+    prompt: str
+    movers: list[int]
+
+
+class _Ideas(BaseModel):
+    ideas: list[_Idea]
+
+
+IDENTITY_KEY = {"t": 0.0, "x": 0.0, "y": 0.0, "sx": 1.0, "sy": 1.0, "r": 0.0, "label": "start"}
 
 
 def clean_track(keys: list[_Key]) -> list[dict]:
@@ -83,13 +94,13 @@ def clean_track(keys: list[_Key]) -> list[dict]:
         t = round(clamp(key.t, 0, 1), 4)
         by_t[t] = {"t": t, "x": round(clamp(key.x, -1.5, 1.5), 4), "y": round(clamp(key.y, -1.5, 1.5), 4),
                    "sx": round(clamp(key.sx, 0.05, 4), 3), "sy": round(clamp(key.sy, 0.05, 4), 3),
-                   "r": round(clamp(key.r, -1080, 1080), 1)}
+                   "r": round(clamp(key.r, -1080, 1080), 1), "label": " ".join(key.label.lower().split())[:24]}
     track = [by_t[t] for t in sorted(by_t)][:MAX_MOTION_KEYS]
     if not track or track[0]["t"] > 0:
         track.insert(0, dict(IDENTITY_KEY))
     track[0] = dict(IDENTITY_KEY)  # the clip starts exactly where the artist put things
     if track[-1]["t"] < 1:
-        track.append({**track[-1], "t": 1.0})
+        track.append({**track[-1], "t": 1.0, "label": "hold"})
     return track
 
 
@@ -390,6 +401,7 @@ class Sparks:
     def motion(self, request: MotionRequest) -> dict:
         """Choreography, not drawing: keyframes that move, scale, squash, and turn the artist's own layers."""
         frames = round(request.seconds * 8)
+        keys = "3-8" if request.seconds <= 3 else "6-16" if request.seconds <= 6 else "8-22"
         subjects = "\n".join(
             f"- subject {s.id}: {s.name!r}, center ({s.box.x + s.box.w / 2:.2f}, {s.box.y + s.box.h / 2:.2f}), "
             f"size {s.box.w:.2f} x {s.box.h:.2f}" for s in request.subjects)
@@ -401,11 +413,13 @@ class Sparks:
             "For each subject return keyframes. t is the time from 0 to 1. x and y are the offset of the subject's "
             "center from where it is now, in canvas fractions (x right, y down; y=-0.3 moves it up by 30% of the "
             "canvas height). sx and sy scale it (1 = as drawn; squash = sx 1.2, sy 0.8). r rotates it clockwise in "
-            "degrees. The first key must be t=0, x=0, y=0, sx=1, sy=1, r=0. Use 3-12 keys per subject, placed where "
-            "the motion changes. Use the principles of animation: anticipation, slow in and slow out, squash and "
-            "stretch, arcs, overshoot and settle. Keep subjects mostly on the canvas unless told to leave. Ground "
-            "things that walk or bounce on what's below them in the picture. Also return a note (at most 12 words) "
-            "describing the motion.",
+            f"degrees. The first key must be t=0, x=0, y=0, sx=1, sy=1, r=0. Plan the clip as 2-5 beats with clear "
+            f"timing, and use {keys} keys per subject, placed where the motion changes. Label every key with the beat "
+            "or principle it shows, in 1-2 lowercase words (e.g. start, anticipation, squash, stretch, takeoff, arc, "
+            "slow in, slow out, overshoot, settle, hold, turn, look). Use the principles of animation: anticipation, "
+            "slow in and slow out, squash and stretch, arcs, overshoot and settle, holds that let a pose read. Keep "
+            "subjects mostly on the canvas unless told to leave. Ground things that walk or bounce on what's below them "
+            "in the picture. Also return a note (at most 14 words) describing the motion.",
         ], _Motion)
         ids = {subject.id for subject in request.subjects}
         tracks = [{"subject": track.subject, "keys": clean_track(track.keys)}
@@ -415,6 +429,35 @@ class Sparks:
             raise AIError("Gemini couldn't choreograph that. Try a clearer move, like \"hops to the right twice\".")
         return {"kind": "motion", "note": result.note.strip()[:90], "prompt": request.prompt,
                 "seconds": request.seconds, "tracks": tracks}
+
+    def direct(self, request: DirectRequest) -> dict:
+        """A storyboard artist's pitch: 3 short shots that show off these drawings, as directions anyone can edit."""
+        subjects = "\n".join(
+            f"- subject {s.id}: {s.name!r} at center ({s.box.x + s.box.w / 2:.2f}, {s.box.y + s.box.h / 2:.2f}), "
+            f"size {s.box.w:.2f} x {s.box.h:.2f}" for s in request.subjects)
+        result = self._json([
+            types.Part.from_bytes(data=png_bytes(render_image(request.layers)), mime_type="image/png"),
+            f"You are a storyboard artist and animation director. The image is the first frame of a "
+            f"{request.seconds:g}-second shot{f' set on a {request.backdrop} backdrop' if request.backdrop else ''}. "
+            f"These are the artist's drawings that can move (canvas fractions, (0,0) top-left):\n{subjects}\n"
+            "Pitch 3 different shots that show off these drawings in motion, each fun and readable. Motion can only "
+            "move, scale, squash and stretch, and turn the existing drawings: no new drawing, no morphing, no camera "
+            "cuts. For each, return: a title (2-4 words, Title Case); a logline (at most 18 words: what happens and "
+            "why it's fun); a prompt (at most 45 words: plain, vivid words a 10-year-old could read and edit, as 2-4 "
+            "beats in order, e.g. 'First..., then..., at the end...'; say where things go in everyday words (left, "
+            "up, off the top, to the middle); call drawings by their names; never mention subject ids, coordinates, "
+            "or 't='); and movers (the subject ids that move, at most 4).",
+        ], _Ideas)
+        ids = {subject.id for subject in request.subjects}
+        ideas = []
+        for idea in result.ideas[:3]:
+            movers = list(dict.fromkeys(mover for mover in idea.movers if mover in ids))[:4]
+            title, logline, prompt = (" ".join(text.split()) for text in (idea.title, idea.logline, idea.prompt))
+            if movers and title and len(prompt) >= 10:
+                ideas.append({"title": title[:40], "logline": logline[:160], "prompt": prompt[:300], "movers": movers})
+        if not ideas:
+            raise AIError("Gemini couldn't pitch a shot for this. Try describing one yourself.")
+        return {"ideas": ideas}
 
     def plan_variations(self, asset: dict, request: VariationPlanRequest) -> list[dict]:
         """A short, editable plan: one brief per variation. The artist edits it before anything is drawn."""

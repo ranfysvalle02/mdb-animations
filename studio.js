@@ -16,7 +16,7 @@
   const TEXT_INPUTS = new Set(['text', 'search', 'email', 'url', 'tel', 'password', 'number']);
   const SHAPES = new Set(['line', 'rect', 'ellipse']);
   const TOOL_KEYS = { b: 'pen', p: 'pen', e: 'eraser', l: 'line', r: 'rect', o: 'ellipse', m: 'move', v: 'move', s: 'spark' };
-  const MAX_FRAMES = 24;
+  const MAX_FRAMES = 80;
 
   let layerSeq = 0;
   const newLayer = (name, props = {}) => ({ id: ++layerSeq, name, visible: true, opacity: 1, strokes: [], asset: null, ...props });
@@ -27,7 +27,12 @@
   let frameIndex = 0;
   let fps = 12;
   let onionSkin = true;
-  let playing = null; // { images, at, timer } while the flipbook plays on the overlay
+  let playing = null; // { at, timer }
+  let motionDraft = null; // { spec, stacks, at, timer, paths } while a motion previews
+  let motionSeconds = 10;
+  let sceneMotion = null; // the accepted direction behind this scene's frames, saved with the scene
+  let showMath = true;
+  let shareAfterSave = false; // "Share" on an unsaved scene saves it first
   let moving = null; // { layer, start, original, bounds } while the Move tool drags a layer
   // The audit trail for this canvas: what the artist and the AI did since it was opened. Sent with the
   // next asset/scene save, where the server appends it to the stored history.
@@ -337,8 +342,10 @@
     $('frames').classList.toggle('animating', many);
     $('frame-play').hidden = !many;
     $('frame-tools').hidden = !many;
+    $('explain-open').hidden = !(many && sceneMotion);
     $('frame-add').textContent = many ? '+ Frame' : '+ Frame by hand';
     $('frame-add').disabled = frames.length >= MAX_FRAMES;
+    const queue = [];
     $('frame-list').replaceChildren(...(many ? frames.map((stack, i) => {
       const item = document.createElement('li');
       const button = document.createElement('button');
@@ -349,7 +356,8 @@
       if (i === frameIndex) button.setAttribute('aria-current', 'true');
       const thumb = document.createElement('span');
       thumb.className = 'frame-thumb';
-      thumb.append(frameThumb(stack));
+      if (thumbCache.has(stack)) thumb.append(frameThumb(stack));
+      else queue.push([thumb, stack]);
       const number = document.createElement('span');
       number.className = 'frame-number';
       number.textContent = String(i + 1);
@@ -359,6 +367,19 @@
       return item;
     }) : []));
     document.querySelector('#frame-list .current')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    thumbQueue = queue;
+    if (queue.length && !thumbQueue.busy) fillThumbs();
+  }
+  // 80 thumbnails at once would stall a phone: paint a few per animation frame instead.
+  let thumbQueue = [];
+  function fillThumbs() {
+    const start = performance.now();
+    while (thumbQueue.length && performance.now() - start < 10) {
+      const [slot, stack] = thumbQueue.shift();
+      if (slot.isConnected) slot.replaceChildren(frameThumb(stack));
+    }
+    thumbQueue.busy = thumbQueue.length > 0;
+    if (thumbQueue.busy) requestAnimationFrame(fillThumbs);
   }
   function showFrame(i) {
     const activeName = activeLayer().name;
@@ -387,7 +408,8 @@
     pushUndo();
     // A new frame starts as a copy: change only what moves, like tracing the last drawing on a lightbox.
     frames.splice(frameIndex + 1, 0, layers.map(layer => newLayer(layer.name, {
-      visible: layer.visible, opacity: layer.opacity, strokes: layer.strokes.slice(), asset: layer.asset })));
+      visible: layer.visible, opacity: layer.opacity, strokes: layer.strokes.slice(), asset: layer.asset,
+      ...(layer.xf ? { xf: layer.xf, xfBase: layer.xfBase, xfStrokes: layer.xfStrokes } : {}), ...(layer.backdrop ? { backdrop: layer.backdrop } : {}) })));
     showFrame(frameIndex + 1);
     logEvent('artist', 'Added frame', `frame ${frameIndex + 1}, a copy of frame ${frameIndex}`);
     markGuide('animate');
@@ -409,16 +431,17 @@
   function play() {
     if (frames.length < 2 || playing) return;
     closePopover();
-    playing = { images: frames.map(stack => frameImage(stack)), at: frameIndex, timer: null };
+    playing = { at: frameIndex, timer: null };
     const tick = () => {
       renderOverlay();
       document.querySelectorAll('#frame-list .frame').forEach(b => b.classList.toggle('playing', Number(b.dataset.frame) === playing.at));
-      playing.at = (playing.at + 1) % playing.images.length;
+      playing.at = (playing.at + 1) % frames.length;
     };
     tick();
     playing.timer = setInterval(tick, 1000 / fps);
     $('frame-play').textContent = '\u23f8';
     $('frame-play').setAttribute('aria-label', 'Stop');
+    updateHud();
   }
   function stopPlay() {
     if (!playing) return;
@@ -427,7 +450,7 @@
     $('frame-play').textContent = '\u25b6';
     $('frame-play').setAttribute('aria-label', 'Play');
     document.querySelectorAll('#frame-list .playing').forEach(b => b.classList.remove('playing'));
-    renderOverlay();
+    updateHud();
   }
   $('frame-play').addEventListener('click', () => (playing ? stopPlay() : play()));
   $('frame-add').addEventListener('click', addFrame);
@@ -893,6 +916,7 @@
     frames = [layers];
     frameIndex = 0;
     pendingOrigin = null;
+    sceneMotion = null;
     rebuildOnion();
     activeId = layers[0].id;
     guides.length = 0;
@@ -941,7 +965,7 @@
         : Array.isArray(body?.detail) && body.detail[0]?.msg ? `${body.detail[0].msg.replace(/^Value error, /, '')}` : null;
       throw new Error(detail || `Request failed (${response.status}). Check the API and try again.`);
     }
-    return response.json();
+    return response.status === 204 ? null : response.json();
   }
   const postJSON = (path, body) => api(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
 
@@ -1238,19 +1262,22 @@
   function renderOverlay() {
     octx.clearRect(0, 0, W, H);
     if (playing) {
-      octx.drawImage(playing.images[playing.at], 0, 0);
+      // Painted live, frame by frame: 80 frames of full-size images would be ~200 MB.
+      octx.fillStyle = '#ffffff';
+      octx.fillRect(0, 0, W, H);
+      paintStack(octx, frames[playing.at] || frames[0]);
+      const k = mathScale(canvas.getBoundingClientRect().width);
+      octx.save();
+      octx.fillStyle = 'rgba(11, 36, 34, 0.8)';
+      octx.fillRect(12, 12, 116 * k, 30 * k);
+      octx.fillStyle = '#c3f192';
+      octx.font = `650 ${Math.round(13 * k)}px system-ui, sans-serif`;
+      octx.fillText(`${(playing.at / fps).toFixed(1)} s \u00b7 ${playing.at + 1}/${frames.length}`, 12 + 9 * k, 12 + 20 * k);
+      octx.restore();
       return;
     }
     if (motionDraft) {
-      const { images } = motionDraft;
-      octx.drawImage(images[Math.min(motionDraft.at, images.length - 1)], 0, 0);
-      octx.save();
-      octx.fillStyle = 'rgba(11, 36, 34, 0.72)';
-      octx.fillRect(12, 12, 122, 30);
-      octx.fillStyle = '#c3f192';
-      octx.font = '600 15px system-ui, sans-serif';
-      octx.fillText(`PREVIEW ${Math.min(motionDraft.at + 1, images.length)}/${images.length}`, 22, 33);
-      octx.restore();
+      paintMotionPreview();
       return;
     }
     if (shapeDraft) {
@@ -1468,7 +1495,7 @@
     const hud = $('layer-hud');
     const layer = activeLayer();
     hud.hidden = canvasIsBlank() || !!motionDraft || !!playing;
-    hud.textContent = `${tool === 'move' ? '\u2725' : '\u270e'} ${layer.asset ? '\u25c6 ' : ''}${layer.name}${frames.length > 1 ? `  \u00b7  frame ${frameIndex + 1}/${frames.length}` : ''}`;
+    hud.textContent = `${tool === 'move' ? '\u2725' : '\u270e'} ${layer.asset ? '\u25c6 ' : ''}${layer.name}${frames.length > 1 ? `  \u00b7  frame ${frameIndex + 1}/${frames.length} \u00b7 ${(frameIndex / fps).toFixed(1)} s` : ''}`;
     hud.classList.toggle('asset', !!layer.asset);
     renderOverlay();
   }
@@ -1478,32 +1505,46 @@
   });
 
   // ---------------------------------------------------------------- motion: keyframes that move your own strokes
+  // How animation works, and how Inkling does it: a few keyframes (the poses that matter) and in-betweens
+  // computed on a smooth curve. Every frame is the artist's own strokes, posed by numbers (move, squash and
+  // stretch, turn), never redrawn. Frames store "frame 1's layer, posed": a 10-second shot stays small.
   const MOTION_FPS = 8;
-  const MOTION_EXAMPLES = ['wobbles, then blasts off to the top right', 'hops twice to the right and lands with a squash',
-    'drifts in from the left and settles', 'spins once, grows, then bows'];
-  let motionDraft = null; // { spec, stacks, images, at, timer }
-  let motionSeconds = 2;
-  const K = (t, x = 0, y = 0, sx = 1, sy = 1, r = 0) => ({ t, x, y, sx, sy, r });
-  // Each preset gets the subject's box (canvas fractions) and returns keys. Free: no AI, no wait.
+  const K = (t, x = 0, y = 0, sx = 1, sy = 1, r = 0, label = '') => ({ t, x, y, sx, sy, r, label });
+  // Quick moves: free, instant, a few seconds. Each one starts from the pose you drew.
   const PRESETS = [
-    { id: 'liftoff', icon: '\ud83d\ude80', name: 'Lift off', hint: 'Squat, stretch, and launch up and away.',
-      keys: b => { const up = -Math.min(0.95, b.y + b.h + 0.05); return [K(0), K(0.15, 0, 0.01, 1.08, 0.9), K(0.3, 0, -0.01, 0.94, 1.1), K(0.6, 0, up * 0.3, 0.9, 1.15), K(1, 0, up, 0.85, 1.2)]; } },
-    { id: 'hop', icon: '\ud83d\udc07', name: 'Hop across', hint: 'Two hops toward the open side, squash on landing.',
-      keys: b => { const d = (b.x + b.w / 2 < 0.5 ? 1 : -1) * Math.min(0.4, b.x + b.w / 2 < 0.5 ? 0.95 - b.x - b.w : b.x - 0.05); const hy = -Math.min(0.2, b.y);
-        return [K(0), K(0.08, 0, 0.01, 1.1, 0.9), K(0.25, d * 0.25, hy, 0.95, 1.08), K(0.45, d * 0.5, 0.01, 1.15, 0.85), K(0.55, d * 0.52, 0, 1, 1), K(0.75, d * 0.76, hy, 0.95, 1.08), K(0.92, d, 0.01, 1.15, 0.85), K(1, d, 0, 1, 1)]; } },
-    { id: 'float', icon: '\ud83c\udf88', name: 'Float', hint: 'A gentle bob and sway. Loops nicely.',
-      keys: () => [K(0), K(0.25, 0, -0.035, 1, 1, -3), K(0.5, 0, 0, 1, 1, 0), K(0.75, 0, -0.035, 1, 1, 3), K(1)] },
-    { id: 'walk', icon: '\ud83d\udeb6', name: 'Walk across', hint: 'Steady steps with a little bob.',
-      keys: b => { const d = (b.x + b.w / 2 < 0.5 ? 1 : -1) * 0.35; return Array.from({ length: 9 }, (_, i) => K(i / 8, d * i / 8, i % 2 ? -0.015 : 0, 1, i % 2 ? 1.02 : 0.98, i % 2 ? 2 : -2)); } },
-    { id: 'spin', icon: '\ud83c\udf00', name: 'Spin', hint: 'One full turn, easing in and out.',
-      keys: () => [K(0), K(0.15, 0, 0, 1, 1, -12), K(0.5, 0, 0, 1, 1, 180), K(0.9, 0, 0, 1, 1, 372), K(1, 0, 0, 1, 1, 360)] },
-    { id: 'pop', icon: '\u2728', name: 'Pop in', hint: 'Appears from nothing with an overshoot.',
-      keys: () => [K(0, 0, 0, 0.05, 0.05), K(0.45, 0, 0, 1.18, 1.18), K(0.7, 0, 0, 0.94, 0.94), K(0.85, 0, 0, 1.03, 1.03), K(1)] },
-    { id: 'zoom', icon: '\ud83d\udd0d', name: 'Push in', hint: 'Grows toward the camera.',
-      keys: () => [K(0), K(0.2, 0, 0, 1.04, 1.04), K(1, 0, 0, 1.55, 1.55)] },
-    { id: 'shake', icon: '\u26a1', name: 'Shake', hint: 'Nervous jitter: fear, cold, or an engine warming up.',
-      keys: () => Array.from({ length: 11 }, (_, i) => K(i / 10, i % 10 ? (i % 2 ? 0.012 : -0.012) : 0, 0, 1, 1, i % 10 ? (i % 2 ? 3 : -3) : 0)) }
+    { id: 'liftoff', icon: '\ud83d\ude80', name: 'Lift off', seconds: 2.5, hint: 'Squat, stretch, and launch up and away.',
+      keys: b => { const up = -Math.min(0.95, b.y + b.h + 0.05); return [K(0, 0, 0, 1, 1, 0, 'start'), K(0.15, 0, 0.01, 1.08, 0.9, 0, 'anticipation'), K(0.3, 0, -0.01, 0.94, 1.1, 0, 'stretch'), K(0.6, 0, up * 0.3, 0.9, 1.15, 0, 'slow out'), K(1, 0, up, 0.85, 1.2, 0, 'exit')]; } },
+    { id: 'hop', icon: '\ud83d\udc07', name: 'Hop across', seconds: 3, hint: 'Two hops toward the open side, squash on landing.',
+      keys: b => { const right = b.x + b.w / 2 < 0.5; const d = (right ? 1 : -1) * Math.max(0.05, Math.min(0.4, right ? 0.95 - b.x - b.w : b.x - 0.05)); const hy = -Math.min(0.2, b.y);
+        return [K(0, 0, 0, 1, 1, 0, 'start'), K(0.08, 0, 0.01, 1.1, 0.9, 0, 'anticipation'), K(0.25, d * 0.25, hy, 0.95, 1.08, 0, 'arc'), K(0.45, d * 0.5, 0.01, 1.15, 0.85, 0, 'squash'), K(0.55, d * 0.52, 0, 1, 1, 0, 'settle'), K(0.75, d * 0.76, hy, 0.95, 1.08, 0, 'arc'), K(0.92, d, 0.01, 1.15, 0.85, 0, 'squash'), K(1, d, 0, 1, 1, 0, 'settle')]; } },
+    { id: 'float', icon: '\ud83c\udf88', name: 'Float', seconds: 3, hint: 'A gentle bob and sway. Loops nicely.',
+      keys: () => [K(0, 0, 0, 1, 1, 0, 'start'), K(0.25, 0, -0.035, 1, 1, -3, 'slow in'), K(0.5, 0, 0, 1, 1, 0, 'slow out'), K(0.75, 0, -0.035, 1, 1, 3, 'slow in'), K(1, 0, 0, 1, 1, 0, 'settle')] },
+    { id: 'walk', icon: '\ud83d\udeb6', name: 'Walk across', seconds: 3, hint: 'Steady steps with a little bob.',
+      keys: b => { const d = (b.x + b.w / 2 < 0.5 ? 1 : -1) * 0.35; return Array.from({ length: 9 }, (_, i) => K(i / 8, d * i / 8, i % 2 ? -0.015 : 0, 1, i % 2 ? 1.02 : 0.98, i % 2 ? 2 : -2, i ? (i % 2 ? 'step' : 'contact') : 'start')); } },
+    { id: 'spin', icon: '\ud83c\udf00', name: 'Spin', seconds: 2, hint: 'One full turn, easing in and out.',
+      keys: () => [K(0, 0, 0, 1, 1, 0, 'start'), K(0.15, 0, 0, 1, 1, -12, 'anticipation'), K(0.5, 0, 0, 1, 1, 180, 'turn'), K(0.9, 0, 0, 1, 1, 372, 'overshoot'), K(1, 0, 0, 1, 1, 360, 'settle')] },
+    { id: 'bounce', icon: '\ud83c\udfc0', name: 'Bounce', seconds: 2, hint: 'Up and down with squash and stretch.',
+      keys: b => { const up = -Math.min(0.22, b.y); return [K(0, 0, 0, 1, 1, 0, 'start'), K(0.12, 0, 0.005, 1.15, 0.85, 0, 'squash'), K(0.3, 0, up * 0.8, 0.92, 1.1, 0, 'stretch'), K(0.45, 0, up, 1, 1, 0, 'apex'), K(0.62, 0, up * 0.8, 0.92, 1.1, 0, 'stretch'), K(0.78, 0, 0.005, 1.18, 0.82, 0, 'squash'), K(0.9, 0, up * 0.15, 0.98, 1.02, 0, 'rebound'), K(1, 0, 0, 1, 1, 0, 'settle')]; } },
+    { id: 'zoom', icon: '\ud83d\udd0d', name: 'Push in', seconds: 2, hint: 'Grows toward the camera.',
+      keys: () => [K(0, 0, 0, 1, 1, 0, 'start'), K(0.2, 0, 0, 1.04, 1.04, 0, 'slow out'), K(1, 0, 0, 1.55, 1.55, 0, 'push in')] },
+    { id: 'shake', icon: '\u26a1', name: 'Shake', seconds: 1.5, hint: 'Nervous jitter: fear, cold, or an engine warming up.',
+      keys: () => Array.from({ length: 11 }, (_, i) => K(i / 10, i % 10 ? (i % 2 ? 0.012 : -0.012) : 0, 0, 1, 1, i % 10 ? (i % 2 ? 3 : -3) : 0, i ? 'shake' : 'start')) }
   ];
+  const PRINCIPLES = {
+    anticipation: 'A small move the other way first, so the big move reads.',
+    squash: 'It flattens on impact (and keeps its volume), so it feels soft and heavy.',
+    stretch: 'It stretches with speed, like a smear of motion.',
+    arc: 'Living things move on curves, not straight lines.',
+    'slow in': 'Easing into a pose: more frames near it, so it slows down.',
+    'slow out': 'Easing out of a pose: it starts slow and speeds up.',
+    overshoot: 'Going a little past the target...',
+    settle: '...and settling back. Nothing stops dead.',
+    hold: 'A still moment so the pose reads.',
+    takeoff: 'The moment it leaves the ground: maximum stretch.',
+    apex: 'The top of the arc: the slowest moment of a jump.',
+    turn: 'Rotation, eased in and out.',
+    contact: 'The moment a foot (or a ball) meets the ground.'
+  };
   // Catmull-Rom through the keys: smooth arcs, no stop-and-go at every key.
   function sampleKeys(keys, t) {
     if (t <= keys[0].t) return keys[0];
@@ -1516,46 +1557,170 @@
     const cr = c => 0.5 * ((2 * p1[c]) + (-p0[c] + p2[c]) * u + (2 * p0[c] - 5 * p1[c] + 4 * p2[c] - p3[c]) * u2 + (-p0[c] + 3 * p1[c] - 3 * p2[c] + p3[c]) * u3);
     return { t, x: cr('x'), y: cr('y'), sx: Math.max(0.03, cr('sx')), sy: Math.max(0.03, cr('sy')), r: cr('r') };
   }
-  function posedStrokes(strokes, pivot, k, strength) {
-    const s = strength;
-    const sx = 1 + (k.sx - 1) * s, sy = 1 + (k.sy - 1) * s, rad = k.r * s * Math.PI / 180;
-    const cos = Math.cos(rad), sin = Math.sin(rad), ox = pivot.x + k.x * s * W, oy = pivot.y + k.y * s * H;
+  // A frame's pose: offsets and pivot in canvas fractions, r in degrees. Mirrors pose_strokes in backend/models.py.
+  function xfAt(keys, t, strength, pivot) {
+    const k = sampleKeys(keys, t), s = strength;
+    const lim = (v, lo, hi) => Math.round(Math.max(lo, Math.min(hi, v)) * 1e5) / 1e5;
+    return { x: lim(k.x * s, -2, 2), y: lim(k.y * s, -2, 2), sx: lim(1 + (k.sx - 1) * s, 0.03, 4), sy: lim(1 + (k.sy - 1) * s, 0.03, 4),
+      r: lim(k.r * s, -1080, 1080), px: lim(pivot.px, -1, 2), py: lim(pivot.py, -1, 2) };
+  }
+  function poseXf(strokes, xf) {
+    const rad = xf.r * Math.PI / 180, cos = Math.cos(rad), sin = Math.sin(rad);
+    const cx = xf.px * W, cy = xf.py * H, ox = cx + xf.x * W, oy = cy + xf.y * H;
     const out = [];
     for (const stroke of strokes) {
       const points = stroke.points.map(p => {
-        const X = (p.x * W - pivot.x) * sx, Y = (p.y * H - pivot.y) * sy;
+        const X = (p.x * W - cx) * xf.sx, Y = (p.y * H - cy) * xf.sy;
         return { ...p, x: (ox + X * cos - Y * sin) / W, y: (oy + X * sin + Y * cos) / H };
       });
       // Off-canvas strokes leave the frame; the rest are pinned to the edge (where they're out of sight anyway).
       if (points.every(p => p.x < -0.02 || p.x > 1.02 || p.y < -0.02 || p.y > 1.02)) continue;
-      out.push({ ...stroke, width: Math.max(1, Math.min(40, stroke.width * Math.sqrt(sx * sy))),
+      out.push({ ...stroke, width: Math.max(1, Math.min(40, stroke.width * Math.sqrt(xf.sx * xf.sy))),
         points: points.map(p => ({ ...p, x: Math.max(0, Math.min(1, p.x)), y: Math.max(0, Math.min(1, p.y)) })) });
     }
     return out;
   }
+  const frameCount = seconds => Math.max(2, Math.min(MAX_FRAMES, Math.round(seconds * MOTION_FPS)));
   function motionFrames(spec) {
-    const count = Math.max(2, Math.min(MAX_FRAMES, Math.round(spec.seconds * MOTION_FPS)));
+    const count = frameCount(spec.seconds);
     const base = spec.base;
-    const pivots = new Map(spec.tracks.map(track => {
-      const b = inkBounds(base.find(layer => layer.id === track.layerId)?.strokes || []);
-      return [track.layerId, b ? { x: b.x + b.w / 2, y: b.y + b.h / 2 } : { x: W / 2, y: H / 2 }];
-    }));
+    const tracks = spec.tracks.map(track => {
+      const layer = base.find(l => l.id === track.layerId);
+      const b = layer && inkBounds(layer.strokes);
+      return { ...track, layer, baseStrokes: layer ? layer.strokes.slice() : [], pivot: b ? { px: (b.x + b.w / 2) / W, py: (b.y + b.h / 2) / H } : { px: 0.5, py: 0.5 } };
+    }).filter(track => track.layer);
     return Array.from({ length: count }, (_, f) => {
+      if (f === 0) return base; // every clip starts exactly as drawn
       const t = f / (count - 1);
       return base.map(layer => {
-        const track = spec.tracks.find(tr => tr.layerId === layer.id);
-        const strokes = track ? posedStrokes(layer.strokes, pivots.get(layer.id), sampleKeys(track.keys, t), spec.strength) : layer.strokes.slice();
-        return f === 0 && !track ? layer : newLayer(layer.name, { visible: layer.visible, opacity: layer.opacity, strokes, asset: layer.asset, backdrop: layer.backdrop });
+        const props = { visible: layer.visible, opacity: layer.opacity, asset: layer.asset, backdrop: layer.backdrop };
+        const track = tracks.find(tr => tr.layer === layer);
+        if (!track) return newLayer(layer.name, { ...props, strokes: layer.strokes.slice() });
+        const xf = xfAt(track.keys, t, spec.strength, track.pivot);
+        const strokes = poseXf(track.baseStrokes, xf);
+        return newLayer(layer.name, { ...props, strokes, xf, xfBase: track.baseStrokes, xfStrokes: strokes.slice() });
       });
     });
+  }
+  // Saving: a frame layer that still matches "frame 1's layer" (as is, or posed) is stored as a reference.
+  const sameStrokes = (a, b) => a === b || (!!a && !!b && a.length === b.length && a.every((s, i) => s === b[i]));
+  function compactStack(stack, first) {
+    return stack.map(layer => {
+      const meta = { name: layer.name, visible: layer.visible, opacity: layer.opacity, ...(layer.asset ? { asset: layer.asset } : {}) };
+      if (layer.xf && sameStrokes(layer.strokes, layer.xfStrokes)) {
+        const ref = first.findIndex(base => sameStrokes(base.strokes, layer.xfBase));
+        if (ref >= 0) return { ...meta, strokes: [], ref, xf: layer.xf };
+      }
+      if (layer.strokes.length) {
+        const ref = first.findIndex(base => sameStrokes(base.strokes, layer.strokes));
+        if (ref >= 0) return { ...meta, strokes: [], ref };
+      }
+      return { ...meta, strokes: layer.strokes };
+    });
+  }
+  // Loading: resolve references; frames share frame 1's stroke objects so they compact again on the next save.
+  function expandRecord(record) {
+    const first = record.layers;
+    return [first, ...(record.frames || []).map(frame => frame.layers.map(layer => {
+      if (layer.ref == null) return layer;
+      const base = first[layer.ref];
+      if (!base) return { ...layer, strokes: [] };
+      if (!layer.xf) return { ...layer, strokes: base.strokes.slice() };
+      const strokes = poseXf(base.strokes, layer.xf);
+      return { ...layer, strokes, xfBase: base.strokes, xfStrokes: strokes.slice() };
+    }))];
+  }
+  // Each moving layer's path across the frames (its pivot, posed), and the frames that are keyframes.
+  function motionPaths(stacks, tracks) {
+    return tracks.map(track => {
+      const count = stacks.length;
+      const points = stacks.map((stack, f) => {
+        const layer = stack.find(l => l.name === track.name);
+        if (layer?.xf) return { x: (layer.xf.px + layer.xf.x) * W, y: (layer.xf.py + layer.xf.y) * H };
+        const b = layer && inkBounds(layer.strokes);
+        return b ? { x: b.x + b.w / 2, y: b.y + b.h / 2 } : null;
+      });
+      const keys = (track.keys || []).map(k => ({ frame: Math.round(k.t * (count - 1)), label: k.label || '', t: k.t }));
+      return { name: track.name, points, keys };
+    });
+  }
+  // Canvas pixels per screen pixel: on a phone the 1000-px canvas shows ~350 px wide, so marks scale up to stay readable.
+  const mathScale = shown => Math.max(1, Math.min(2.6, W / Math.max(1, shown)));
+  function drawMath(c, paths, at, count, { timeline = true, scale = 1 } = {}) {
+    const k = scale;
+    c.save();
+    c.font = `600 ${Math.round(13 * k)}px system-ui, sans-serif`;
+    const labelled = [];
+    for (const path of paths) {
+      // Spacing: one dot per frame. Close dots = slow, far apart = fast.
+      c.strokeStyle = 'rgba(109, 40, 217, 0.35)';
+      c.lineWidth = 2 * k;
+      c.setLineDash([3 * k, 5 * k]);
+      c.beginPath();
+      path.points.forEach((p, i) => { if (p) (i ? c.lineTo(p.x, p.y) : c.moveTo(p.x, p.y)); });
+      c.stroke();
+      c.setLineDash([]);
+      path.points.forEach((p, i) => {
+        if (!p) return;
+        c.fillStyle = i === at ? '#6d28d9' : 'rgba(109, 40, 217, 0.55)';
+        c.beginPath();
+        c.arc(p.x, p.y, (i === at ? 5 : 2.5) * k, 0, Math.PI * 2);
+        c.fill();
+      });
+      for (const key of path.keys) {
+        const p = path.points[key.frame];
+        if (!p) continue;
+        const d = 6 * k;
+        c.save();
+        c.translate(p.x, p.y);
+        c.rotate(Math.PI / 4);
+        c.fillStyle = '#c3f192';
+        c.strokeStyle = '#0b2422';
+        c.lineWidth = 1.5 * k;
+        c.fillRect(-d, -d, 2 * d, 2 * d);
+        c.strokeRect(-d, -d, 2 * d, 2 * d);
+        c.restore();
+        // One label per neighborhood, never on top of another (or the timeline): a crowd of labels teaches nothing.
+        if (!key.label || key.label === 'start') continue;
+        const w = c.measureText(key.label).width + 12 * k, h = 20 * k;
+        const lx = Math.min(W - w - 4, p.x + 10 * k), ly = Math.min(H - h - 4, Math.max(timeline ? 18 + 30 * k : 4, p.y - 26 * k));
+        if (labelled.some(q => lx < q.x + q.w + 6 && q.x < lx + w + 6 && ly < q.y + q.h + 4 && q.y < ly + h + 4)) continue;
+        labelled.push({ x: lx, y: ly, w, h });
+        c.fillStyle = 'rgba(11, 36, 34, 0.8)';
+        c.fillRect(lx, ly, w, h);
+        c.fillStyle = '#e9f2ec';
+        c.fillText(key.label, lx + 6 * k, ly + 15 * k);
+      }
+    }
+    if (timeline && count > 1) {
+      // A timeline: every frame a tick, keyframes as diamonds, the playhead in violet.
+      const x0 = 12 + 120 * k, x1 = W - 12, y = 12 + 15 * k, step = (x1 - x0) / (count - 1);
+      c.fillStyle = 'rgba(11, 36, 34, 0.72)';
+      c.fillRect(x0 - 10, 12, x1 - x0 + 10, 30 * k);
+      c.fillStyle = 'rgba(233, 242, 236, 0.45)';
+      for (let i = 0; i < count; i++) c.fillRect(x0 + i * step - 0.5, y - 4 * k, 1, 8 * k);
+      for (const key of new Set(paths.flatMap(path => path.keys.map(k2 => k2.frame)))) {
+        c.save();
+        c.translate(x0 + key * step, y);
+        c.rotate(Math.PI / 4);
+        c.fillStyle = '#c3f192';
+        c.fillRect(-4 * k, -4 * k, 8 * k, 8 * k);
+        c.restore();
+      }
+      if (at >= 0) {
+        c.fillStyle = '#a78bfa';
+        c.fillRect(x0 + Math.min(at, count - 1) * step - 1.5 * k, 14, 3 * k, 30 * k - 4);
+      }
+    }
+    c.restore();
   }
   function previewMotion(spec) {
     stopPlay();
     stopMotionPreview();
     const stacks = motionFrames(spec);
-    motionDraft = { spec, stacks, images: stacks.map(stack => frameImage(stack)), at: 0, timer: null };
+    motionDraft = { spec, stacks, at: 0, timer: null, paths: motionPaths(stacks, spec.tracks) };
     motionDraft.timer = setInterval(() => {
-      motionDraft.at = (motionDraft.at + 1) % (motionDraft.images.length + 4); // a short hold on the last pose
+      motionDraft.at = (motionDraft.at + 1) % (motionDraft.stacks.length + 6); // a short hold on the last pose
       renderOverlay();
     }, 1000 / MOTION_FPS);
     updateHud();
@@ -1563,6 +1728,22 @@
     // Closing the sheet hands focus back to the Animate button; Enter must mean "keep", not "reopen".
     if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
     canvas.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+  function paintMotionPreview() {
+    const { stacks, paths } = motionDraft;
+    const at = Math.min(motionDraft.at, stacks.length - 1);
+    octx.fillStyle = '#ffffff';
+    octx.fillRect(0, 0, W, H);
+    paintStack(octx, stacks[at]);
+    const k = mathScale(canvas.getBoundingClientRect().width);
+    if (showMath) drawMath(octx, paths, at, stacks.length, { scale: k });
+    octx.save();
+    octx.fillStyle = 'rgba(11, 36, 34, 0.85)';
+    octx.fillRect(12, 12, 116 * k, 30 * k);
+    octx.fillStyle = '#c3f192';
+    octx.font = `650 ${Math.round(13 * k)}px system-ui, sans-serif`;
+    octx.fillText(`${(at / MOTION_FPS).toFixed(1)} s \u00b7 ${at + 1}/${stacks.length}`, 12 + 9 * k, 12 + 20 * k);
+    octx.restore();
   }
   function stopMotionPreview() {
     if (!motionDraft) return;
@@ -1576,6 +1757,15 @@
     const spec = { ...motionDraft.spec, strength: Math.round(Math.max(0.4, Math.min(1.9, motionDraft.spec.strength + delta)) * 10) / 10 };
     previewMotion(spec);
   }
+  function motionRecord(spec) {
+    const clean = v => Math.round(v * 1e4) / 1e4;
+    return { by: spec.by, prompt: (spec.prompt || '').slice(0, 300), note: (spec.title || spec.note || spec.label || '').slice(0, 160),
+      seconds: Math.round(frameCount(spec.seconds) / MOTION_FPS * 100) / 100, fps: MOTION_FPS, strength: spec.strength,
+      tracks: spec.tracks.slice(0, 4).map(track => ({ name: track.name.slice(0, 40), keys: track.keys.slice(0, 24).map(k => ({
+        t: clean(Math.max(0, Math.min(1, k.t))), x: clean(Math.max(-1.5, Math.min(1.5, k.x))), y: clean(Math.max(-1.5, Math.min(1.5, k.y))),
+        sx: clean(Math.max(0.03, Math.min(4, k.sx))), sy: clean(Math.max(0.03, Math.min(4, k.sy))), r: clean(Math.max(-1080, Math.min(1080, k.r))),
+        label: (k.label || '').slice(0, 24) })) })) };
+  }
   function keepMotion() {
     if (!motionDraft) return;
     const { spec, stacks } = motionDraft;
@@ -1588,6 +1778,16 @@
     activeId = (layers.find(layer => layer.name === spec.tracks[0].name) || layers[layers.length - 1]).id;
     fps = MOTION_FPS;
     $('fps').value = String(MOTION_FPS);
+    sceneMotion = motionRecord(spec);
+    if (!editing || editing.kind !== 'shot') {
+      // One tap to save: a readable scene code ("LittleFox_0413") and the direction as its notes (Voyage reads those too).
+      if (!CODE.test($('title').value.trim())) {
+        const who = spec.tracks.map(track => track.name.replace(/[^A-Za-z0-9]+/g, ' ').trim().split(' ').map(w => w[0].toUpperCase() + w.slice(1)).join('')).filter(Boolean)[0] || 'Scene';
+        const stamp = new Date();
+        $('title').value = `${who.slice(0, 24)}_${String(stamp.getHours()).padStart(2, '0')}${String(stamp.getMinutes()).padStart(2, '0')}`;
+      }
+      if (!$('description').value.trim()) $('description').value = (spec.title || spec.prompt || spec.note || '').slice(0, 200);
+    }
     recount();
     rebuildOnion();
     rebuildAll();
@@ -1595,12 +1795,14 @@
     if (saveKind !== 'shot' && !editing) setSaveKind('shot');
     renderSaveKind();
     const names = spec.tracks.map(track => track.name).join(', ');
-    const detail = `${spec.by === 'ai' ? `"${spec.prompt}"` : spec.label}: ${frames.length} frames at ${MOTION_FPS} fps, moving ${names}`
+    const keyCount = spec.tracks.reduce((n, track) => n + track.keys.length, 0);
+    const detail = `${spec.by === 'ai' ? `"${spec.prompt}"` : spec.label}: ${frames.length} frames (${keyCount} keyframes) at ${MOTION_FPS} fps, moving ${names}`
       + `${spec.strength !== 1 ? ` (strength ${spec.strength}\u00d7)` : ''}`;
     logEvent(spec.by === 'ai' ? 'ai' : 'artist', spec.by === 'ai' ? 'Motion, accepted' : 'Motion preset', detail);
     markGuide('animate');
     renderTray();
-    message('drawing-status', `\ud83c\udfac ${frames.length} frames${replaced > 1 ? ` (replacing ${replaced}; Undo brings them back)` : ''}. Every frame is yours to edit: scrub, grab with \u2725, redraw. Space plays.`);
+    message('drawing-status', `\ud83c\udfac ${frames.length} frames, ${(frames.length / MOTION_FPS).toFixed(1)} s${replaced > 1 ? ` (replacing ${replaced}; Undo brings them back)` : ''}. Each one is yours: scrub, grab with \u2725, redraw. Space plays.`, false,
+      [{ label: '\u25c6 How it moves', tip: 'How it moves|Keyframes, in-betweens, and spacing, shown on your shot.', run: () => explainScene() }]);
     setTool('move');
     play();
   }
@@ -1611,6 +1813,101 @@
     stopMotionPreview();
     renderTray();
   }
+
+  // ---------------------------------------------------------------- "How it moves": animation, demystified
+  function explainScene() {
+    if (motionDraft) return openExplain({ motion: motionRecord(motionDraft.spec), stacks: motionDraft.stacks, paths: motionDraft.paths });
+    if (!sceneMotion || frames.length < 2) return;
+    openExplain({ motion: sceneMotion, stacks: frames });
+  }
+  function openExplain({ motion, stacks, paths = null }) {
+    const count = stacks.length;
+    const fpsUsed = motion.fps || MOTION_FPS;
+    const track = motion.tracks[0];
+    const keyFrames = track.keys.map(k => ({ ...k, frame: Math.round(k.t * (count - 1)) }));
+    const allKeys = new Set(motion.tracks.flatMap(tr => tr.keys.map(k => Math.round(k.t * (count - 1)))));
+    const body = $('explain-body');
+    const section = (num, title, text) => {
+      const box = el('section', 'explain-step');
+      box.append(el('h3', '', `${num} ${title}`), el('p', 'muted', text));
+      body.append(box);
+      return box;
+    };
+    body.replaceChildren();
+    body.append(el('p', 'explain-direction', motion.by === 'ai' ? `\u2726 AI choreographed: "${motion.prompt}"` : `Preset: ${motion.note}`));
+
+    const one = section('\u2460', 'Keyframes: the poses that matter',
+      `${motion.by === 'ai' ? 'The AI' : 'The preset'} chose ${track.keys.length} keyframes for ${track.name}${motion.tracks.length > 1 ? ` (and ${motion.tracks.slice(1).map(t => `${t.keys.length} for ${t.name}`).join(', ')})` : ''}. Each is a pose: where it is, how squashed, how turned.`);
+    const strip = el('div', 'explain-keys');
+    for (const key of keyFrames.slice(0, 10)) {
+      const card = el('figure', 'explain-key');
+      card.append(frameImage(stacks[key.frame], 150));
+      card.append(el('figcaption', '', `${(key.frame / fpsUsed).toFixed(1)} s \u00b7 ${key.label || 'key'}`));
+      strip.append(card);
+    }
+    one.append(strip);
+
+    const two = section('\u2461', 'In-betweens: the frames in between',
+      `This shot has ${count} frames: ${(count / fpsUsed).toFixed(1)} seconds at ${fpsUsed} frames a second. ${allKeys.size} are keyframes; the other ${count - allKeys.size} are in-betweens, computed on a smooth curve through the keys. Animators call it tweening. The computer does the tedious part; you (or your AI assistant) choose the poses.`);
+    const film = el('div', 'explain-film');
+    const every = Math.max(1, Math.ceil(count / 16));
+    for (let f = 0; f < count; f += every) {
+      const cell = el('span', `explain-frame${allKeys.has(f) ? ' key' : ''}`);
+      cell.append(frameImage(stacks[f], 70), el('small', '', allKeys.has(f) ? `\u25c6 ${f + 1}` : String(f + 1)));
+      film.append(cell);
+    }
+    two.append(film);
+
+    const three = section('\u2462', 'Spacing is speed',
+      'One dot per frame. Dots close together: slow. Far apart: fast. Bunching dots near a key is "slow in and slow out", the secret of motion that feels alive.');
+    const map = document.createElement('canvas');
+    map.width = W;
+    map.height = H;
+    map.className = 'explain-map';
+    const m = map.getContext('2d');
+    m.fillStyle = '#ffffff';
+    m.fillRect(0, 0, W, H);
+    m.globalAlpha = 0.35;
+    paintStack(m, stacks[0]);
+    m.globalAlpha = 1;
+    drawMath(m, paths || motionPaths(stacks, motion.tracks), -1, count, { timeline: false, scale: mathScale(Math.min(window.innerWidth - 64, 860)) });
+    three.append(map);
+
+    const four = section('\u2463', 'Your drawing, moved. Never redrawn.',
+      `Every frame is your own strokes, posed by numbers like these for ${track.name}. Grab any frame and change it: it's your animation.`);
+    const table = el('table', 'explain-table');
+    const head = el('tr');
+    for (const label of ['Time', 'Beat', 'Move', 'Squash / stretch', 'Turn']) head.append(el('th', '', label));
+    table.append(head);
+    for (const key of keyFrames) {
+      const row = el('tr');
+      const pct = v => `${v >= 0 ? '+' : ''}${Math.round(v * 100)}%`;
+      row.append(el('td', '', `${(key.frame / fpsUsed).toFixed(1)} s`), el('td', '', key.label || '\u2014'),
+        el('td', '', `${pct(key.x)} \u2194  ${pct(key.y)} \u2195`), el('td', '', `${key.sx.toFixed(2)} \u00d7 ${key.sy.toFixed(2)}`), el('td', '', `${Math.round(key.r)}\u00b0`));
+      table.append(row);
+    }
+    four.append(table);
+
+    const used = [...new Set(motion.tracks.flatMap(tr => tr.keys.map(k => k.label)).filter(label => PRINCIPLES[label]))];
+    if (used.length) {
+      const five = section('\u2464', 'Principles of animation in this shot', 'The same ideas Disney animators wrote down in the 1930s.');
+      const list = el('dl', 'explain-principles');
+      for (const label of used) {
+        const item = el('div');
+        item.append(el('dt', '', label), el('dd', '', PRINCIPLES[label]));
+        list.append(item);
+      }
+      five.append(list);
+    }
+    $('explain-math').checked = showMath;
+    $('explain-sheet').showModal();
+  }
+  $('explain-close').addEventListener('click', () => $('explain-sheet').close());
+  $('explain-sheet').addEventListener('click', event => { if (event.target === $('explain-sheet')) $('explain-sheet').close(); });
+  $('explain-math').addEventListener('change', () => { showMath = $('explain-math').checked; renderOverlay(); });
+  $('explain-open').addEventListener('click', explainScene);
+
+  // ---------------------------------------------------------------- the Animate sheet: what moves, and the director
   // What can move: anything visible with ink that isn't scenery. Defaults to what's selected, else the assets.
   const movable = () => layers.filter(layer => layer.visible && hasInk([layer]) && !isScenery(layer));
   let animSubjects = new Set();
@@ -1641,36 +1938,37 @@
     document.querySelectorAll('#anim-presets button').forEach(button => { button.disabled = !ready; });
     $('anim-go').disabled = !ready;
   }
-  function chosenTracks(keysFor) {
-    return layers.filter(layer => animSubjects.has(layer.id)).map(layer => {
+  function chosenTracks(keysFor, ids = animSubjects) {
+    return layers.filter(layer => ids.has(layer.id)).map(layer => {
       const b = inkBounds(layer.strokes);
       const box = { x: b.x / W, y: b.y / H, w: b.w / W, h: b.h / H };
       return { layerId: layer.id, name: layer.name, box, keys: keysFor(box, layer) };
     });
   }
+  const subjectFor = (layer, box) => ({ id: layers.indexOf(layer), name: layer.name.slice(0, 40),
+    box: { x: Math.max(0, Math.min(1, box.x)), y: Math.max(0, Math.min(1, box.y)), w: Math.max(0.02, Math.min(1, box.w)), h: Math.max(0.02, Math.min(1, box.h)) } });
   function runPreset(preset) {
     const tracks = chosenTracks(box => preset.keys(box));
     if (!tracks.length) return;
     $('animate-sheet').close();
-    previewMotion({ by: 'preset', label: `${preset.icon} ${preset.name}`, seconds: motionSeconds, strength: 1, base: layers, tracks });
+    previewMotion({ by: 'preset', label: `${preset.icon} ${preset.name}`, note: `${preset.icon} ${preset.name}`, seconds: preset.seconds, strength: 1, base: layers, tracks });
   }
-  async function runAIMotion(prompt) {
-    const tracks = chosenTracks(() => []);
+  async function runAIMotion(prompt, ids = animSubjects, title = '') {
+    const tracks = chosenTracks(() => [], ids);
     if (!tracks.length || !prompt) return;
     const status = $('anim-status');
-    status.textContent = '\u2726 Choreographing your layers\u2026 (one AI call)';
+    status.textContent = `\u2726 Choreographing ${(frameCount(motionSeconds) / MOTION_FPS).toFixed(0)} seconds for ${tracks.map(t => t.name).join(' and ')}\u2026 (one AI call)`;
     status.classList.remove('error');
     $('anim-go').disabled = true;
     try {
-      const subjects = tracks.map(track => ({ id: layers.findIndex(layer => layer.id === track.layerId), name: track.name.slice(0, 40),
-        box: { x: Math.max(0, Math.min(1, track.box.x)), y: Math.max(0, Math.min(1, track.box.y)), w: Math.max(0.02, Math.min(1, track.box.w)), h: Math.max(0.02, Math.min(1, track.box.h)) } }));
+      const subjects = tracks.map(track => subjectFor(layers.find(layer => layer.id === track.layerId), track.box));
       const result = await postJSON('/api/sparks/motion', JSON.stringify({ prompt, seconds: motionSeconds, subjects, layers: docLayers() }));
       const byIndex = new Map(result.tracks.map(track => [track.subject, track.keys]));
       const aiTracks = tracks.map((track, i) => ({ ...track, keys: byIndex.get(subjects[i].id) })).filter(track => track.keys?.length);
       if (!aiTracks.length) throw new Error('AI returned no motion for those layers. Try other words.');
       status.textContent = '';
       $('animate-sheet').close();
-      previewMotion({ by: 'ai', label: `\u2726 ${result.note || prompt}`, prompt, seconds: motionSeconds, strength: 1, base: layers, tracks: aiTracks });
+      previewMotion({ by: 'ai', label: `\u2726 ${title || result.note || prompt}`, note: result.note || '', title, prompt, seconds: motionSeconds, strength: 1, base: layers, tracks: aiTracks });
     } catch (error) {
       status.textContent = error.message;
       status.classList.add('error');
@@ -1678,10 +1976,97 @@
       $('anim-go').disabled = !animSubjects.size;
     }
   }
-  // A backdrop from the starters, slid under everything in every frame (replacing a previous one).
+  // Director's ideas: instant ones from the names on the canvas, then (one AI call per new composition) a
+  // director's pitch that actually looks at the picture: who moves, where they go, what they do.
+  const IDEA_KINDS = [
+    [/rocket|ship|plane|jet|ufo|dragon|bird|bee|butterfly|bat/i, n => ({ title: 'Takeoff', logline: `${n} gets nervous, then launches into the sky.`,
+      prompt: `${n} wobbles nervously for 2 seconds, crouches in anticipation, blasts off in a big arc toward the top right, loops once across the sky, and exits off the top by the end.` })],
+    [/fox|cat|dog|rabbit|bunny|hero|kid|man|woman|girl|boy|robot|monster|creature|character|frog|bear|mouse/i, n => ({ title: 'Big Entrance', logline: `${n} hops in, looks around, and takes a bow.`,
+      prompt: `${n} hops in from the left in three bouncy hops, stops at center with a squash, looks left and right, takes a little bow, then hops off to the right.` })],
+    [/ball|balloon|badge|sun|coin|star|blob|slime/i, n => ({ title: 'Bounce Show', logline: `${n} bounces across the scene, squashing on every landing.`,
+      prompt: `${n} drops in from the top left and bounces three times across the scene, squashing on each landing and stretching on the way up, each bounce lower, then rolls to a stop on the right.` })],
+    [/tree|pine|palm|flower|plant|grass|flag/i, n => ({ title: 'Breezy Day', logline: `${n} sways in a gusting wind.`,
+      prompt: `${n} sways gently left and right for 4 seconds, bends hard in a sudden gust, springs back past upright, and settles.` })]
+  ];
+  let ideas = { key: '', items: null };
+  const backdropName = () => STARTERS.find(s => s.id === layers.find(layer => layer.backdrop)?.backdrop)?.name || '';
+  const sceneKey = () => `${movable().map(layer => `${layer.name}:${layer.asset?.asset_id || ''}`).join('|')}#${backdropName()}#${motionSeconds}`;
+  function quickIdeas() {
+    const can = movable();
+    const named = can.filter(layer => layer.asset).concat(can.filter(layer => !layer.asset));
+    const out = [];
+    for (const layer of named) {
+      const kind = IDEA_KINDS.find(([re]) => re.test(layer.name));
+      if (kind && out.length < 2) out.push({ ...kind[1](layer.name), movers: [layer.id] });
+    }
+    if (named[0] && out.length < 2) out.push({ title: 'Float & Spin', logline: `${named[0].name} drifts in, spins once, and floats away.`, movers: [named[0].id],
+      prompt: `${named[0].name} drifts in from the left, slows to a stop at center with a little overshoot, does one full spin, grows a bit, then floats up and away.` });
+    if (named.length > 1) out.push({ title: 'The Chase', logline: `${named[0].name} chases ${named[1].name} across the scene.`, movers: [named[0].id, named[1].id],
+      prompt: `${named[1].name} dashes from left to right with ${named[0].name} close behind; halfway, ${named[1].name} jumps over a gap while ${named[0].name} skids to a stop with a squash, then both exit right.` });
+    return out.slice(0, 3);
+  }
+  function renderIdeas(items, { loading = false, note = '' } = {}) {
+    const box = $('anim-ideas');
+    if (!movable().length) {
+      box.replaceChildren(el('span', 'anim-empty', 'Add an asset (or draw something) and the director will pitch shots for it.'));
+      return;
+    }
+    box.replaceChildren(...items.map(idea => {
+      const card = el('article', `idea-card${idea.ai ? ' ai' : ''}`);
+      const head = el('div', 'idea-head');
+      head.append(el('b', '', idea.title), el('span', 'idea-by', idea.ai ? '\u2726 Director' : 'instant idea'));
+      const movers = el('div', 'idea-movers');
+      for (const id of idea.movers) {
+        const layer = layers.find(l => l.id === id);
+        if (layer) movers.append(el('span', '', `${layer.asset ? '\u25c6 ' : ''}${layer.name}`));
+      }
+      const go = el('button', 'pill primary idea-go', `\u2726 Animate this \u00b7 ${(frameCount(motionSeconds) / MOTION_FPS).toFixed(0)} s`);
+      go.type = 'button';
+      go.dataset.tip = `Animate this|One AI call choreographs it: keyframes for ${idea.movers.length === 1 ? 'that drawing' : 'those drawings'}, previewed before anything changes.`;
+      go.addEventListener('click', () => {
+        animSubjects = new Set(idea.movers);
+        renderAnimSubjects();
+        $('anim-prompt').value = idea.prompt;
+        runAIMotion(idea.prompt, new Set(idea.movers), idea.title);
+      });
+      const edit = el('button', 'link-button', 'Edit first');
+      edit.type = 'button';
+      edit.addEventListener('click', () => { animSubjects = new Set(idea.movers); renderAnimSubjects(); $('anim-prompt').value = idea.prompt; $('anim-prompt').focus(); });
+      const actions = el('div', 'idea-actions');
+      actions.append(go, edit);
+      card.append(head, el('p', 'idea-logline', idea.logline), movers, el('p', 'idea-prompt', idea.prompt), actions);
+      return card;
+    }));
+    if (loading) box.append(el('div', 'idea-loading', '\u2726 The director is looking at your scene\u2026'));
+    if (note) box.append(el('p', 'anim-empty', note));
+  }
+  async function loadIdeas(force = false) {
+    const can = movable();
+    if (!can.length) { renderIdeas([]); return; }
+    const key = sceneKey();
+    if (!force && ideas.items && ideas.key === key) { renderIdeas(ideas.items); return; }
+    const quick = quickIdeas();
+    renderIdeas(quick, { loading: true });
+    try {
+      const subjects = can.slice(0, 8).map(layer => {
+        const b = inkBounds(layer.strokes);
+        return subjectFor(layer, { x: b.x / W, y: b.y / H, w: b.w / W, h: b.h / H });
+      });
+      const result = await postJSON('/api/sparks/direct', JSON.stringify({ seconds: frameCount(motionSeconds) / MOTION_FPS, backdrop: backdropName(), subjects, layers: docLayers() }));
+      if (sceneKey() !== key) return; // the scene changed while the director was thinking
+      const items = result.ideas.map(idea => ({ ...idea, ai: true, movers: idea.movers.map(index => layers[index]?.id).filter(Boolean) }))
+        .filter(idea => idea.movers.length);
+      ideas = { key, items: items.length ? items : quick };
+      renderIdeas(ideas.items);
+    } catch (error) {
+      renderIdeas(quick, { note: `${error.message} These instant ideas work too.` });
+    }
+  }
+  // A backdrop from the starters, slid under everything in every frame (one set of strokes, shared).
   function setBackdrop(starterId) {
     const starter = STARTERS.find(s => s.id === starterId);
-    const scenery = starter ? starter.build()[0].filter(layer => layer.name !== 'Draw here') : [];
+    const scenery = (starter ? starter.build()[0].filter(layer => layer.name !== 'Draw here') : []).map(layer => ({ ...layer,
+      strokes: layer.strokes.map(stroke => ({ ...stroke, points: stroke.points.slice(), kit: true, seq: 0 })) }));
     const kept = layers.filter(layer => !layer.backdrop);
     if (kept.length + scenery.length > MAX_LAYERS) {
       $('anim-status').textContent = `That backdrop needs ${scenery.length} layers; a drawing can have ${MAX_LAYERS}.`;
@@ -1689,8 +2074,7 @@
     }
     pushUndo();
     frames = frames.map(stack => [
-      ...scenery.map(layer => newLayer(layer.name, { backdrop: starterId, opacity: layer.opacity ?? 1,
-        strokes: layer.strokes.map(stroke => ({ ...stroke, points: stroke.points.slice(), kit: true, seq: 0 })) })),
+      ...scenery.map(layer => newLayer(layer.name, { backdrop: starterId, opacity: layer.opacity ?? 1, strokes: layer.strokes.slice() })),
       ...stack.filter(layer => !layer.backdrop)]);
     layers = frames[frameIndex];
     if (!layers.some(layer => layer.id === activeId)) activeId = layers[layers.length - 1].id;
@@ -1701,6 +2085,8 @@
     if (starter) logEvent('artist', 'Backdrop', `the ${starter.name} starter`);
     renderBackdrops();
     renderAnimSubjects();
+    renderAnimAssets();
+    loadIdeas();
   }
   function renderBackdrops() {
     const current = layers.find(layer => layer.backdrop)?.backdrop || '';
@@ -1713,14 +2099,28 @@
       return chip;
     }));
   }
+  // Casting: with a backdrop, Voyage's multimodal embeddings rank your assets' pictures against words
+  // about the place ("things you'd find at the Beach"). Same vector space for text and images: no tags needed.
+  const castCache = new Map();
+  async function castFor(place) {
+    if (!castCache.has(place)) {
+      castCache.set(place, api(`/api/assets?q=${encodeURIComponent(`characters and props that belong in a ${place} scene`)}`)
+        .then(result => result.items).catch(() => { castCache.delete(place); return []; }));
+    }
+    return castCache.get(place);
+  }
   async function renderAnimAssets() {
     const box = $('anim-assets');
+    const place = backdropName();
+    $('anim-cast-note').textContent = place ? `\u2726 Voyage AI picked these for the ${place}: it compares your words with your drawings.` : '';
     try {
-      const { items } = await api('/api/assets');
+      const [{ items: latest }, picks] = await Promise.all([api('/api/assets'), place ? castFor(place) : []]);
+      const fits = new Set(picks.slice(0, 4).map(item => item.id));
+      const items = [...picks.slice(0, 4), ...latest.filter(item => !fits.has(item.id))];
       box.replaceChildren(...(items.length ? items.slice(0, 16).map(item => {
-        const button = el('button', 'anim-asset');
+        const button = el('button', `anim-asset${fits.has(item.id) ? ' fits' : ''}`);
         button.type = 'button';
-        button.dataset.tip = `${item.name}|Drop it into the scene, ready to move.`;
+        button.dataset.tip = `${item.name}|${fits.has(item.id) ? `Voyage AI says it fits the ${place}. ` : ''}Drop it into the scene, ready to move.`;
         const image = el('img');
         image.src = item.image_url;
         image.alt = '';
@@ -1730,7 +2130,10 @@
           await startPlacing(item);
           animSubjects = new Set([activeId]);
           renderAnimSubjects();
-          $('anim-status').textContent = `\u25c6 ${item.name} is in. Pick a move.`;
+          $('anim-status').textContent = `\u25c6 ${item.name} is in.`;
+          $('anim-add').open = false; // the cast is set: the director's pitches are what's next
+          loadIdeas();
+          $('anim-ideas').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
         });
         return button;
       }) : [el('span', 'anim-empty', 'No assets yet. Save a drawing as \u25c6 Asset first.')]));
@@ -1749,32 +2152,28 @@
     renderBackdrops();
     renderAnimAssets();
     $('animate-sheet').showModal();
+    loadIdeas();
   }
   function buildAnimate() {
     $('anim-presets').replaceChildren(...PRESETS.map(preset => {
       const button = el('button', 'anim-preset');
       button.type = 'button';
-      button.dataset.tip = `${preset.name}|${preset.hint} Free: no AI.`;
+      button.dataset.tip = `${preset.name}|${preset.hint} Free: no AI. ${preset.seconds} s.`;
       button.append(el('span', 'anim-icon', preset.icon), el('span', '', preset.name));
       button.addEventListener('click', () => runPreset(preset));
       return button;
     }));
-    $('anim-examples').replaceChildren(...MOTION_EXAMPLES.map(text => {
-      const chip = el('button', 'example', text);
-      chip.type = 'button';
-      chip.dataset.tip = 'Try it|One AI call: keyframes for your layers, previewed before anything changes.';
-      chip.addEventListener('click', () => { $('anim-prompt').value = text; runAIMotion(text); });
-      return chip;
-    }));
     document.querySelectorAll('.anim-length [data-seconds]').forEach(button => button.addEventListener('click', () => {
       motionSeconds = Number(button.dataset.seconds);
       document.querySelectorAll('.anim-length [data-seconds]').forEach(b => b.setAttribute('aria-checked', String(b === button)));
+      if (ideas.items) renderIdeas(ideas.items);
     }));
   }
   $('animate-open').addEventListener('click', openAnimate);
   $('animate-close').addEventListener('click', () => $('animate-sheet').close());
   $('animate-sheet').addEventListener('click', event => { if (event.target === $('animate-sheet')) $('animate-sheet').close(); });
   $('anim-ai').addEventListener('submit', event => { event.preventDefault(); runAIMotion($('anim-prompt').value.trim()); });
+  $('anim-more').addEventListener('click', () => loadIdeas(true));
 
   // Drag an asset card's picture onto the canvas: it lands where you drop it (desktop).
   $('canvas-frame').addEventListener('dragover', event => {
@@ -1811,11 +2210,12 @@
       tray.hidden = false;
       tray.classList.remove('error');
       tray.classList.add('motion');
-      const { spec, images } = motionDraft;
-      const note = el('span', 'tray-note', `\ud83c\udfac ${spec.label} \u00b7 ${images.length} frames${spec.strength !== 1 ? ` \u00b7 ${spec.strength}\u00d7` : ''}`);
+      const { spec, stacks } = motionDraft;
+      const note = el('span', 'tray-note', `\ud83c\udfac ${spec.label} \u00b7 ${(stacks.length / MOTION_FPS).toFixed(1)} s, ${stacks.length} frames${spec.strength !== 1 ? ` \u00b7 ${spec.strength}\u00d7` : ''}`);
       tray.replaceChildren(note,
         trayButton('Keep <kbd>\u23ce</kbd>', 'Keep \u00b7 Enter|Becomes real frames: scrub, drag, and redraw any of them.', keepMotion),
         trayButton('Skip <kbd>Esc</kbd>', 'Skip \u00b7 Esc', skipMotion),
+        trayButton('\u25c6 How it works', 'How it works|Keyframes, in-betweens, and spacing: the animation, explained on your drawing.', explainScene),
         trayButton('Softer', 'Softer|Same motion, smaller moves. No AI call.', () => restrength(-0.3)),
         trayButton('Bigger', 'Bigger|Same motion, larger moves. No AI call.', () => restrength(0.3)));
       if (spec.by === 'ai') tray.append(trayButton('\u21bb', 'Another take|Asks AI again (one more call).', () => { skipMotion(); openAnimate(); }));
@@ -2023,6 +2423,10 @@
     $('save-label').textContent = !updating ? text.save
       : saveKind === 'asset' ? `Save as v${editing.version + 1}` : `Update ${editing.code}`;
     $('save-new').hidden = !updating;
+    // An animated scene is one tap from a link: unsaved, the button saves first.
+    const savedScene = editing && editing.kind === 'shot';
+    $('share-open').hidden = !(saveKind === 'shot' && (savedScene || frames.length > 1));
+    $('share-open').textContent = savedScene ? '\ud83d\udd17 Share this scene' : '\ud83d\udd17 Save & share';
     const placed = [...new Map(frames.flat().filter(layer => layer.asset).map(layer => [layer.asset.asset_id, layer])).values()];
     $('shot-links').textContent = placed.length
       ? `\u25c6 In this scene: ${placed.map(layer => `${layer.name} v${layer.asset.version}`).join(', ')}`
@@ -2056,7 +2460,8 @@
     }
     return { path: updating ? `/api/shots/${editing.id}` : '/api/shots', method: updating ? 'PUT' : 'POST', history,
       body: { code: name, project, sequence, status: $('shot-status').value, assignee: $('shot-assignee').value.trim(), ...base,
-        frames: frames.slice(1).map(stack => ({ layers: docStack(stack) })), fps, history } };
+        frames: frames.slice(1).map(stack => ({ layers: compactStack(stack, frames[0]) })), fps, history,
+        ...(sceneMotion && frames.length > 1 ? { motion: sceneMotion } : {}) } };
   }
 
   // Before a *new* asset is saved, check the library for one that already looks like it.
@@ -2091,6 +2496,8 @@
 
   $('save-form').addEventListener('submit', async event => {
     event.preventDefault();
+    const wantShare = shareAfterSave; // one-shot: any early return below drops it
+    shareAfterSave = false;
     const name = $('title').value.trim();
     if (!name) {
       message('drawing-status', `Add a ${KIND_TEXT[saveKind].label.toLowerCase()} before saving.`, true);
@@ -2162,9 +2569,11 @@
       } else if (kind === 'shot') {
         editing = { kind, id: saved.id, code: saved.code };
         if (saved.assets?.length) markGuide('shot');
+        if (wantShare) setTimeout(openShare);
         const first = saved.assets?.[0];
         message('drawing-status', `Saved ${saved.code}.${note} ${saved.assets?.length ? `Now findable from ${saved.assets.map(a => `"${a.name}"`).join(', ')}.` : 'Tip: place an asset in it, so the asset can find this scene.'}`, false,
-          first ? [{ label: `Where else is "${first.name}" used?`, run: () => openWhereUsed({ id: first.id, name: first.name }) }]
+          frames.length > 1 ? [{ label: '\ud83d\udd17 Share it', tip: 'Share|A public link: your scene as a looping GIF, with how it moves explained.', run: () => openShare() }]
+            : first ? [{ label: `Where else is "${first.name}" used?`, run: () => openWhereUsed({ id: first.id, name: first.name }) }]
             : [{ label: '\u25c6 Place an asset', tip: 'Place an asset|Opens Assets. Tap Place, then drag a box on the canvas.', run: () => goPlace() }]);
       } else {
         message('drawing-status', `Idea saved.${note} Find it later by describing it.`, false, [
@@ -2191,9 +2600,11 @@
         return;
       }
       stopPlay();
-      frames = [record.layers, ...(record.frames || []).map(frame => frame.layers)].map(stack => stack.map(layer => newLayer(layer.name, {
-        visible: layer.visible, opacity: layer.opacity, strokes: layer.strokes, asset: layer.asset || null
+      frames = expandRecord(record).map(stack => stack.map(layer => newLayer(layer.name, {
+        visible: layer.visible, opacity: layer.opacity, strokes: layer.strokes, asset: layer.asset || null,
+        ...(layer.xf ? { xf: layer.xf, xfBase: layer.xfBase, xfStrokes: layer.xfStrokes } : {})
       })));
+      sceneMotion = record.motion || null;
       frameIndex = 0;
       layers = frames[0];
       resyncSeq();
@@ -3015,6 +3426,7 @@
   function loadCanvas(stack, { kind, title = '', note, more = [], fps: speed = null, scroll = true }) {
     stopPlay();
     frames = [stack, ...more];
+    sceneMotion = null;
     resyncSeq();
     if (speed) { fps = speed; $('fps').value = String(fps); }
     frameIndex = 0;
@@ -3107,8 +3519,69 @@
   $('var-scene').addEventListener('click', sceneFromVariations);
   $('var-close').addEventListener('click', () => $('variations').close());
 
+  // ---------------------------------------------------------------- share: a public link to a scene
+  async function openShare() {
+    if (!editing || editing.kind !== 'shot' || revision !== savedRevision) {
+      // Sharing snapshots the saved scene, so save first (one tap), then share.
+      if (saveKind !== 'shot') setSaveKind('shot');
+      shareAfterSave = true;
+      $('save-form').requestSubmit();
+      return;
+    }
+    const id = editing.id;
+    $('share-ready').hidden = true;
+    $('share-gif').hidden = true;
+    $('share-status').textContent = `Rendering ${frames.length} frames into a GIF\u2026`;
+    $('share-status').classList.remove('error');
+    if (!$('share-sheet').open) $('share-sheet').showModal();
+    try {
+      const shared = await postJSON(`/api/shots/${encodeURIComponent(id)}/share`, '{}');
+      $('share-url').value = shared.url;
+      $('share-gif').src = `${shared.gif_url}?t=${Date.now()}`;
+      $('share-gif').hidden = false;
+      $('share-download').href = shared.gif_url;
+      $('share-download').download = `${editing.code}.gif`;
+      $('share-visit').href = shared.url;
+      $('share-native').hidden = !navigator.share;
+      $('share-ready').hidden = false;
+      $('share-status').textContent = `Live: ${shared.frames} frames, ${(shared.bytes / 1024).toFixed(0)} KB.`;
+      markGuide('share');
+      logEvent('artist', 'Shared', `a public link (${shared.frames} frames)`);
+    } catch (error) {
+      $('share-status').textContent = error.message;
+      $('share-status').classList.add('error');
+    }
+  }
+  $('share-open').addEventListener('click', openShare);
+  $('share-close').addEventListener('click', () => $('share-sheet').close());
+  $('share-sheet').addEventListener('click', event => { if (event.target === $('share-sheet')) $('share-sheet').close(); });
+  $('share-copy').addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText($('share-url').value);
+      $('share-copy').textContent = 'Copied!';
+    } catch {
+      $('share-url').select();
+      $('share-copy').textContent = 'Press \u2318C';
+    }
+    setTimeout(() => { $('share-copy').textContent = 'Copy'; }, 1600);
+  });
+  $('share-native').addEventListener('click', () => {
+    navigator.share?.({ title: `${editing?.code || 'My scene'} \u00b7 made in Inkling`, text: 'I drew this, then animated it. See how it moves:', url: $('share-url').value }).catch(() => {});
+  });
+  $('share-stop').addEventListener('click', async () => {
+    if (!editing || editing.kind !== 'shot') return;
+    try {
+      await api(`/api/shots/${encodeURIComponent(editing.id)}/share`, { method: 'DELETE' });
+      $('share-ready').hidden = true;
+      $('share-gif').hidden = true;
+      $('share-status').textContent = 'Stopped. The link no longer works.';
+    } catch (error) {
+      $('share-status').textContent = error.message;
+    }
+  });
+
   // ---------------------------------------------------------------- breakdown: frame by frame, layer by layer, asset by asset
-  let bd = null; // { stacks, fps, images, at, timer }
+  let bd = null; // { stacks, fps, motion, at, timer }
   const BY = { artist: ['\u270d', 'You'], ai: ['\u2726', 'AI'], studio: ['\u2699', 'Studio'] };
   function ago(iso) {
     const seconds = (Date.now() - Date.parse(iso)) / 1000;
@@ -3120,10 +3593,13 @@
   }
   function madeBy(stacks) {
     const counts = { hand: 0, ai: 0, kit: 0, placed: 0, placedAi: 0 };
+    const seen = new Set();
     for (const layer of stacks.flat()) {
-      if (!layer.visible) continue; // hidden guides and backups don't count
+      // Hidden guides and backups don't count; nor do posed copies of frame 1 (moved, not drawn).
+      if (!layer.visible || layer.xf) continue;
       for (const stroke of layer.strokes) {
-        if (stroke.erase) continue;
+        if (stroke.erase || seen.has(stroke)) continue;
+        seen.add(stroke);
         counts[layer.asset ? 'placed' : stroke.ai ? 'ai' : stroke.kit ? 'kit' : 'hand']++;
         if (layer.asset && stroke.ai) counts.placedAi++; // e.g. strokes an AI variation added to that asset
       }
@@ -3134,10 +3610,16 @@
     if (!bd) return;
     stopReplay();
     bd.at = at;
-    $('bd-canvas').getContext('2d').drawImage(bd.images[at], 0, 0);
+    const c = $('bd-canvas').getContext('2d');
+    c.fillStyle = '#ffffff';
+    c.fillRect(0, 0, W, H);
+    paintStack(c, bd.stacks[at]);
     $('bd-scrub').value = String(at + 1);
-    $('bd-frame').value = `${at + 1} / ${bd.images.length}`;
-    document.querySelectorAll('#bd-xsheet [data-col]').forEach(cell => cell.classList.toggle('now', Number(cell.dataset.col) === at));
+    $('bd-frame').value = `${at + 1} / ${bd.stacks.length}`;
+    // Long shots show a sample of columns; light up the one this frame falls in.
+    const cols = [...document.querySelectorAll('#bd-xsheet thead [data-col]')].map(cell => Number(cell.dataset.col));
+    const now = cols.filter(col => col <= at).pop();
+    document.querySelectorAll('#bd-xsheet [data-col]').forEach(cell => cell.classList.toggle('now', Number(cell.dataset.col) === now));
   }
   function bdStop() {
     stopReplay();
@@ -3355,6 +3837,27 @@
     };
     bd.replay = requestAnimationFrame(tick);
   }
+  // The shot's direction as a chain of beats: what an animator would pin above the desk.
+  function renderBeats(motion, stacks) {
+    const ok = !!motion && stacks.length > 1;
+    $('bd-motion-group').hidden = !ok;
+    if (!ok) return;
+    const keys = motion.tracks.length;
+    $('bd-motion-line').textContent = `${motion.by === 'ai' ? `\u2726 Directed with AI: "${motion.prompt}"` : `Quick move: ${motion.note}`} \u00b7 `
+      + `${motion.tracks.reduce((n, t) => n + t.keys.length, 0)} keyframes, ${stacks.length} frames at ${motion.fps} fps${keys > 1 ? ` \u00b7 ${keys} actors` : ''}.`;
+    const fpsUsed = motion.fps || MOTION_FPS;
+    $('bd-motion').replaceChildren(...motion.tracks.flatMap(track => track.keys.map(key => {
+      const frame = Math.round(key.t * (stacks.length - 1));
+      const item = el('li', 'beat');
+      const button = el('button', '', '');
+      button.type = 'button';
+      button.append(el('b', '', key.label || 'key'), el('small', '', `${keys > 1 ? `${track.name} \u00b7 ` : ''}${(frame / fpsUsed).toFixed(1)} s`));
+      button.addEventListener('click', () => { bdStop(); bdShow(frame); });
+      item.append(button);
+      return item;
+    })));
+  }
+  $('bd-motion-explain').addEventListener('click', () => { if (bd?.motion) openExplain({ motion: bd.motion, stacks: bd.stacks }); });
   function renderEvolution(versions) {
     $('bd-evolution-group').hidden = !versions?.length;
     if (!versions?.length) return;
@@ -3388,7 +3891,7 @@
     // doc: { title, sub, stacks, fps, history, pending, origin, assetNames }
     bdStop();
     const stacks = doc.stacks;
-    bd = { stacks, fps: doc.fps || 12, images: stacks.map(stack => frameImage(stack)), at: 0, timer: null };
+    bd = { stacks, fps: doc.fps || 12, motion: doc.motion || null, at: 0, timer: null };
     $('bd-title').textContent = doc.title;
     const layerTotal = Math.max(...stacks.map(stack => stack.length));
     $('bd-sub').textContent = [doc.sub, `${stacks.length} frame${stacks.length === 1 ? '' : 's'}${stacks.length > 1 ? ` at ${bd.fps} fps` : ''}`,
@@ -3398,7 +3901,7 @@
     document.querySelector('.bd-player-bar').hidden = stacks.length < 2; // a single drawing has nothing to scrub
 
     const counts = madeBy(stacks);
-    const total = counts.hand + counts.ai + counts.placed || 1;
+    const total = counts.hand + counts.ai + counts.placed + counts.kit || 1;
     const parts = [['hand', 'Your hand', counts.hand], ['ai', 'AI, accepted by you', counts.ai],
       ['placed', 'Placed assets (reused)', counts.placed], ...(counts.kit ? [['kit', 'Starter kit', counts.kit]] : [])];
     $('bd-bar').replaceChildren(...parts.filter(([, , n]) => n).map(([key, , n]) => {
@@ -3415,6 +3918,7 @@
     }));
     renderArtMath(stacks);
     renderEvolution(doc.versions);
+    renderBeats(doc.motion, stacks);
     $('bd-caption').textContent = '';
     $('bd-replay').textContent = '\u270e Watch it being made';
     $('bd-origin').hidden = !doc.origin;
@@ -3427,9 +3931,13 @@
     // Exposure sheet: rows are layers (top of the stack first), columns are frames.
     const names = [];
     for (const stack of stacks) for (const layer of [...stack].reverse()) if (!names.includes(layer.name)) names.push(layer.name);
+    // A 10-second shot has 80 frames: the sheet shows about 20 of them (every keyframe it can), the player shows all.
+    const every = Math.ceil(stacks.length / 20);
+    const keyCols = new Set((bd.motion?.tracks || []).flatMap(track => track.keys.map(k => Math.round(k.t * (stacks.length - 1)))));
+    const cols = stacks.map((_, i) => i).filter(i => i % every === 0 || i === stacks.length - 1);
     const head = el('tr');
-    head.append(el('th', 'corner', 'Layer'), ...stacks.map((_, i) => {
-      const th = el('th', '', String(i + 1));
+    head.append(el('th', 'corner', 'Layer'), ...cols.map(i => {
+      const th = el('th', keyCols.has(i) ? 'key' : '', `${keyCols.has(i) ? '\u25c6' : ''}${i + 1}`);
       th.dataset.col = String(i);
       th.scope = 'col';
       return th;
@@ -3437,6 +3945,7 @@
     const rows = names.map(name => {
       const tr = el('tr');
       const instances = stacks.map(stack => stack.find(layer => layer.name === name));
+      const shown = cols.map(i => [instances[i], i]);
       const first = instances.find(Boolean);
       const th = el('th', 'row-head');
       th.scope = 'row';
@@ -3447,7 +3956,7 @@
       if (aiStrokes && !first.asset) badges.append(el('span', 'badge ai', `\u2726 ${aiStrokes}`));
       if (!first.visible) badges.append(el('span', 'badge hidden', 'hidden'));
       th.append(badges);
-      tr.append(th, ...instances.map((layer, i) => {
+      tr.append(th, ...shown.map(([layer, i]) => {
         const td = el('td');
         td.dataset.col = String(i);
         if (!layer) {
@@ -3507,7 +4016,7 @@
     for (const layer of frames.flat()) if (layer.asset) placedNames[layer.asset.asset_id] = layer.name;
     openBreakdown({
       title: $('title').value.trim() || 'This canvas', sub: editing ? KIND_TEXT[editing.kind].save.replace('Save ', '') : 'unsaved',
-      stacks: frames, fps, history: savedHistory, pending: pendingEvents(), origin: pendingOrigin ? { ...pendingOrigin, name: varAsset?.name } : null,
+      stacks: frames, fps, motion: frames.length > 1 ? sceneMotion : null, history: savedHistory, pending: pendingEvents(), origin: pendingOrigin ? { ...pendingOrigin, name: varAsset?.name } : null,
       assetNames: placedNames
     });
   }
@@ -3516,7 +4025,7 @@
       const record = await api(`/api/shots/${encodeURIComponent(id)}`);
       openBreakdown({
         title: record.code, sub: `${record.project} / ${record.sequence} \u00b7 ${STATUS_LABELS[record.status]}`,
-        stacks: [record.layers, ...(record.frames || []).map(frame => frame.layers)], fps: record.fps, history: record.history,
+        stacks: expandRecord(record), fps: record.fps, history: record.history, motion: record.motion,
         assetNames: Object.fromEntries((record.assets || []).map(a => [a.id, a.name]))
       });
     } catch (error) {
@@ -3538,10 +4047,10 @@
   $('breakdown').addEventListener('close', bdStop);
   $('bd-scrub').addEventListener('input', () => { bdStop(); bdShow(Number($('bd-scrub').value) - 1); });
   $('bd-play').addEventListener('click', () => {
-    if (!bd || bd.images.length < 2) return;
+    if (!bd || bd.stacks.length < 2) return;
     if (bd.timer) { bdStop(); return; }
     $('bd-play').textContent = '\u23f8';
-    bd.timer = setInterval(() => bdShow((bd.at + 1) % bd.images.length), 1000 / bd.fps);
+    bd.timer = setInterval(() => bdShow((bd.at + 1) % bd.stacks.length), 1000 / bd.fps);
   });
   for (const id of ['variations', 'breakdown']) {
     $(id).addEventListener('click', event => { if (event.target === $(id)) $(id).close(); });
@@ -3729,14 +4238,16 @@
     try { return { done: {}, hidden: false, ...JSON.parse(localStorage.getItem(GUIDE_KEY) || '{}') }; } catch { return { done: {}, hidden: false }; }
   })();
   const GUIDE_STEPS = [
-    { id: 'draw', title: 'Draw it', detail: 'Finger or pencil. Stuck? Ask AI to sketch a start.',
+    { id: 'draw', title: 'Draw it', detail: 'A character, a prop, or a backdrop, in layers. Stuck? Ask AI for a blue-pencil start.',
       show: () => { canvas.scrollIntoView({ behavior: 'smooth', block: 'center' }); setAiMode('sketch'); pulse('#ai-bar .ai-input'); flashTray('Draw here, or type in Ask AI below for a blue-pencil start.'); } },
-    { id: 'asset', title: 'Save as asset', detail: 'Draw once, reuse anywhere. e.g. "Red Rocket".',
+    { id: 'asset', title: 'Save it as an asset', detail: 'Draw once, reuse it in every scene. e.g. "Red Rocket".',
       show: () => { setSaveKind('asset'); $('save-form').scrollIntoView({ behavior: 'smooth', block: 'center' }); $('title').focus({ preventScroll: true }); pulse('.kind-switch [data-kind="asset"]'); } },
-    { id: 'animate', title: 'Animate it', detail: 'Tap \ud83c\udfac Animate: pick what moves and how. A free preset, or describe it.',
+    { id: 'where', title: 'Find it', detail: 'Describe it or sketch it: Voyage AI matches words and drawings.',
+      show: () => { setLibraryTab('asset'); $('results').scrollIntoView({ behavior: 'smooth', block: 'start' }); pulse('#query'); } },
+    { id: 'animate', title: 'Animate it', detail: 'Tap \ud83c\udfac Animate: the AI director pitches a 10-second scene. Every frame stays yours.',
       show: () => openAnimate() },
-    { id: 'where', title: 'Find anything', detail: 'Any asset, scene, or frame: describe or sketch it.',
-      show: () => { setLibraryTab('asset'); $('results').scrollIntoView({ behavior: 'smooth', block: 'start' }); pulse('.asset-card .where-mini'); } }
+    { id: 'share', title: 'Share it', detail: 'Save the scene, then send a link: a looping GIF with how it moves, explained.',
+      show: () => { setSaveKind('shot'); $('save-form').scrollIntoView({ behavior: 'smooth', block: 'center' }); pulse('#share-open:not([hidden]), .kind-switch [data-kind="shot"]'); } }
   ];
   let prefsTimer = null;
   function saveGuide() {

@@ -151,6 +151,7 @@ def check_animation_and_lineage(made: dict, project: str) -> None:
     if "SQ090_0010" not in {e["code"] for e in used["linked"]}:
         raise RuntimeError("A rocket placed in every frame should be a linked use.")
     print(f"Animation: SQ090_0010 saved with 6 frames at 8 fps; links and an {len(record['history'])}-event trail kept.", flush=True)
+    check_share(shot["id"])
 
     from backend.demo import pine as pine_strokes, place, rocket as rocket_strokes
     with_pine = call("GET", f"/api/frames?project={project}&asset_id={pine['id']}")["items"]
@@ -194,6 +195,32 @@ def check_animation_and_lineage(made: dict, project: str) -> None:
           f"filtered out of 'mostly by hand'.", flush=True)
     print(f"Variations: planned {[item['name'] for item in plan]}; drew one keeping {variation['kept']} of "
           f"{variation['source_strokes']} artist strokes, adding {variation['added']}; kept it with its lineage.", flush=True)
+
+
+def check_share(shot_id: str) -> None:
+    """A shared scene is public by its link only: a page, a looping GIF, and it stops when sharing stops."""
+    import urllib.error
+    import urllib.request
+
+    from backend.demo import BASE, call
+
+    shared = call("POST", f"/api/shots/{shot_id}/share")
+    token = shared["token"]
+    with urllib.request.urlopen(f"{BASE}/s/{token}", timeout=30) as page, \
+            urllib.request.urlopen(f"{BASE}/s/{token}/clip.gif", timeout=30) as clip:
+        html, gif = page.read().decode(), clip.read()
+    if "SQ090_0010" not in html or not gif.startswith(b"GIF89a") or shared["frames"] != 6:
+        raise RuntimeError(f"The shared page and GIF should show the liftoff: {shared}")
+    if call("POST", f"/api/shots/{shot_id}/share")["token"] != token:
+        raise RuntimeError("Sharing again should keep the same link.")
+    call("DELETE", f"/api/shots/{shot_id}/share")
+    try:
+        urllib.request.urlopen(f"{BASE}/s/{token}", timeout=30)
+        raise RuntimeError("A link should stop working when sharing stops.")
+    except urllib.error.HTTPError as exc:
+        if exc.code != 404:
+            raise
+    print(f"Share: a public page and a {len(gif) // 1024} KB GIF by link only; the link stays on re-share and dies on stop.", flush=True)
 
 
 def check_similar_assets(made: dict) -> None:

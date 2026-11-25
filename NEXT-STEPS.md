@@ -5,10 +5,11 @@
 > the old rocket?" email chain, the hour spent hunting for the tree you drew last spring. The artist's
 > hand stays on every line, and the studio remembers everything: by meaning, by usage, and by process.
 
-**The story, in one breath:** *Draw it once. Animate it anywhere. Find any frame.*
-**The promise underneath it:** *AI drafts. You decide. Every stroke is remembered.*
+**The story, in one breath:** *Draw it. Find it. Animate it. Share it.*
+**The promise underneath it:** *AI drafts. You decide.* And while it drafts, it teaches: every animation
+shows its keyframes, its in-betweens, and why it moves the way it does.
 
-Every step below has to sharpen **Draw → Animate → Find**, or keep that promise. Otherwise it waits.
+Every step below has to sharpen **Draw → Find → Animate → Share**, or keep that promise. Otherwise it waits.
 
 ---
 
@@ -20,11 +21,12 @@ Every step below has to sharpen **Draw → Animate → Find**, or keep that prom
 | **Draw** | Built for fingers and pencils: pressure, palm rejection, brush-pen feel, 12 layers, shapes, eraser, Move, **Focus**, undo for everything |
 | **Ask AI** | One box, three modes, always previewed: **Sketch a layer** (blue-pencil draft under your ink), **Fix a spot** (a few strokes in a box), **Grow variations** (Gemini edits *your* strokes into lookalikes, from a plan you can edit) |
 | **Assets** | Versioned assets with a duplicate check ("this looks like Rocket Ship"), lineage (🌱 Family), and similar assets |
-| **Animate** | **🎬 Animate**: pick what moves, a backdrop, and a free preset or a described motion; one Gemini call returns keyframes (move, squash, turn) for the artist's own layers, previewed, then baked into editable frames (1-3 s at 8 fps). Grab anything on the canvas to move or resize it per frame; ink never lands on a linked asset. Every step is in the audit trail |
+| **Animate** | **🎬 Animate**: the cast, a backdrop (Voyage **casts** your library for it), and an **AI director** that pitches three shots for the scene. One Gemini call returns labelled keyframes (anticipation, takeoff, settle...) that pose the artist's own layers: up to **10 s, 80 frames**. The preview draws the keyframes, spacing, and a timeline on the canvas; **◆ How it works** explains it all on the artist's own shot. Kept frames are editable one by one, and stored as *frame 1, posed* (~60 KB for 10 s). Free quick moves need no AI |
+| **Share** | **🔗 Save & share**: a public `/s/<token>` page with a server-rendered looping GIF, the direction, the beats, and the principles in plain words. A snapshot; re-share updates it, **Stop sharing** kills it. Nothing else is public |
 | **Find** | One bar over assets, scenes, **single frames**, and ideas: by words, **by sketch**, or "with ◆ asset". Filters (status, project, hand share, color) run *inside* Atlas vector search |
-| **Remember** | Audit trail of every AI step taken or skipped; **Breakdown** (exposure sheet, who made what); every stroke's order and time; **Watch it being made**, **⬇ Save replay** (video), **Evolution** (v1 → vN), and **art math** stored in Atlas |
+| **Remember** | Audit trail of every AI step taken or skipped; **Breakdown** (how it moves, exposure sheet, who made what); behind the scenes, every stroke's order and time: **Watch it being made**, **⬇ Save replay** (video), **Evolution** (v1 → vN), and **art math** stored in Atlas |
 | **Accounts** | m-stash sign-up and sign-in; every query and vector search scoped by `owner`; token kept in an HttpOnly cookie, verified by m-stash; a private copy of the demo library in one tap; guide progress synced as an m-stash record |
-| **Any screen** | Mobile-first, plain copy with an example everywhere, tooltips, a 4-step guide, microanimations that respect *reduce motion* |
+| **Any screen** | Mobile-first, plain copy with an example everywhere, tooltips, a 5-step guide (draw, save, find, animate, share), microanimations that respect *reduce motion* |
 | **Ship** | One Docker image for Compose and Render (`render.yaml`): index setup and the demo seed on boot, `$PORT`, Secure cookies behind TLS. [Tutorials](docs/TUTORIALS.md) and screenshots regenerate from a script |
 
 ### The data model that makes it work
@@ -33,9 +35,12 @@ Every step below has to sharpen **Draw → Animate → Find**, or keep that prom
 assets          { name, type, version, layers, tags, origin, history,
                   stats{strokes, hand_share, ink_px, draw_ms, colors} }     + 1 vector
 asset_versions  { asset_id, version, layers, stats }                         (Evolution, replay of any version)
-shots           { code, project, sequence, status, assignee, fps,
-                  layers[ {..., asset: {asset_id, version}} ], frames, history } + 1 vector (frame 1)
-shot_frames     { shot_id, frame, hash, asset_ids, project, sequence, status }    + 1 vector per frame
+shots           { code, project, sequence, status, assignee, fps, motion{by, prompt, tracks[keys]},
+                  layers[ {..., asset: {asset_id, version}} ],
+                  frames[ {layers[ {ref, xf{x,y,sx,sy,r,px,py}} | {strokes} ]} ],
+                  story, history }                                            + 1 vector (frame 1 + story)
+shot_frames     { shot_id, frame, hash, asset_ids, project, sequence, status }    + 1 vector per sampled frame (<= 16)
+shares          { token, shot_id, code, motion, cast, gif, poster }           (public snapshot, by token only)
 shot_elements   { shot_id, layer_index, asset_id?, box, project, status }     + 1 vector per layer's ink
 strokes         { points, color, width, ai?, kit?, seq, ms }                  (inside layers: the process)
 ```
@@ -127,10 +132,12 @@ Today's thresholds rest on a handful of synthetic drawings. Before showing a stu
 - **Continuity check**: compare a placed character with its asset and flag drift in costume or colors.
 
 ### 6. Motion, to a point (M-L)
-Animation stays a taste of what's possible; assets are the product. Shipped: presets and AI keyframes for the
-artist's own layers, previewed and baked into editable frames.
-- **Keep the keyframes**: store motion as editable tracks (not only baked frames), with a curve editor, so a
-  timing tweak doesn't mean redrawing frames; then longer scenes (10 s) without 80 stored frames.
+Animation stays short on purpose and explains itself. Shipped: an AI director that pitches shots, labelled AI
+keyframes for 10-second scenes, frames stored as *frame 1, posed*, the keyframes drawn on the preview,
+*Animation, demystified*, and share links with a GIF.
+- **Edit the keyframes, not just the frames**: drag a ◆ on the path or the timeline and re-tween, with a
+  simple ease curve per segment (the motion record is already stored).
+- **Lesson mode**: the same shot played three ways (no easing, slow in/out, with anticipation) side by side.
 - **Suggest an in-between**: AI proposes frame N+1 from N and N+2 by moving the artist's own strokes, with
   an onion-skin preview, accepted per layer.
 - **Secondary motion**: let AI animate parts (a waving arm, a tail) once assets keep their own layers (step 3).
@@ -161,7 +168,9 @@ artist's own layers, previewed and baked into editable frames.
 - *Update to vN* replaces the placed layer's strokes. Anything drawn on that same layer moves to a hidden backup.
 - Elements are per *layer*: a look-alike sharing a layer with lots of other ink scores lower (0.79 vs 0.86).
   Per-layer elements come from frame 1 only; every frame gets a whole-frame vector.
-- Frames copy the whole layer stack (24 frames, 8 MiB request cap).
+- Frames are *frame 1, posed* only until someone edits them; an edited frame stores its layers in full (80 frames, 8 MiB request cap).
+- Motion moves whole layers (move, squash, turn); parts of a drawing (an arm, a tail) can't move on their own yet.
+- A share is a snapshot rendered on the server (~0.5 MB GIF for 10 s); there's no expiry or view count yet.
 - Process data covers strokes drawn since it shipped; older strokes have no time and replay in layer order.
 - The audit trail records what the member's browser reports, not signed events.
 - New saves take a moment to become vector-searchable (eventual consistency); exact links are immediate.

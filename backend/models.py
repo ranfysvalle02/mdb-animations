@@ -1,3 +1,4 @@
+import math
 import re
 from typing import Annotated, Literal
 
@@ -8,7 +9,10 @@ MAX_POINTS = 20000
 MAX_STROKES = 1000
 MAX_LAYERS = 12
 MAX_TAGS = 12
-MAX_FRAMES = 24
+MAX_FRAMES = 80  # 10 seconds at 8 frames a second: short scenes, on purpose
+MAX_MOTION_KEYS = 24
+# The studio canvas, in pixels (backend.library renders at this size too).
+POSE_W, POSE_H = 1000, 650
 MAX_EVENTS = 60
 FPS_CHOICES = (4, 6, 8, 12, 24)
 HEX_COLOR = r"^#[0-9a-fA-F]{6}$"
@@ -83,6 +87,22 @@ class AssetLink(BaseModel):
     version: int = Field(ge=1, le=100_000)
 
 
+class Transform(BaseModel):
+    """How a frame poses frame 1's layer: an offset, squash and stretch, and a turn around a pivot.
+
+    Offsets and the pivot are canvas fractions; ``r`` is degrees clockwise. It's the whole idea of
+    in-betweens: the artist's strokes, moved, never redrawn.
+    """
+    model_config = ConfigDict(extra="forbid")
+    x: float = Field(default=0, ge=-2, le=2, allow_inf_nan=False)
+    y: float = Field(default=0, ge=-2, le=2, allow_inf_nan=False)
+    sx: float = Field(default=1, ge=0.03, le=4, allow_inf_nan=False)
+    sy: float = Field(default=1, ge=0.03, le=4, allow_inf_nan=False)
+    r: float = Field(default=0, ge=-1080, le=1080, allow_inf_nan=False)
+    px: float = Field(default=0.5, ge=-1, le=2, allow_inf_nan=False)
+    py: float = Field(default=0.5, ge=-1, le=2, allow_inf_nan=False)
+
+
 class Layer(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     name: str = Field(default="Layer 1", min_length=1, max_length=40)
@@ -91,6 +111,50 @@ class Layer(BaseModel):
     strokes: list[Stroke] = Field(default_factory=list, max_length=MAX_STROKES)
     # Only placed layers carry a link; plain layers stay exactly as they were before assets existed.
     asset: AssetLink | None = Field(default=None, exclude_if=lambda value: value is None)
+    # In frames 2..N of a scene: "frame 1's layer number `ref`, posed by `xf`" instead of a copy of its
+    # strokes. A 10-second shot stays small, and a new asset version flows into every frame.
+    ref: int | None = Field(default=None, ge=0, lt=MAX_LAYERS, exclude_if=lambda value: value is None)
+    xf: Transform | None = Field(default=None, exclude_if=lambda value: value is None)
+
+    @model_validator(mode="after")
+    def reference_or_strokes(self) -> "Layer":
+        if self.xf is not None and self.ref is None:
+            raise ValueError("A pose (xf) needs the frame 1 layer it poses (ref).")
+        if self.ref is not None and self.strokes:
+            raise ValueError("A layer that references frame 1 carries no strokes of its own.")
+        return self
+
+
+def pose_strokes(strokes: list[Stroke], xf: Transform) -> list[Stroke]:
+    """Frame 1's strokes in a frame's pose. Mirrors poseXf in studio.js (cull off-canvas, pin the rest)."""
+    cos, sin = math.cos(math.radians(xf.r)), math.sin(math.radians(xf.r))
+    cx, cy = xf.px * POSE_W, xf.py * POSE_H
+    ox, oy = cx + xf.x * POSE_W, cy + xf.y * POSE_H
+    posed = []
+    for stroke in strokes:
+        points = []
+        for p in stroke.points:
+            dx, dy = (p.x * POSE_W - cx) * xf.sx, (p.y * POSE_H - cy) * xf.sy
+            points.append(((ox + dx * cos - dy * sin) / POSE_W, (oy + dx * sin + dy * cos) / POSE_H, p.pressure))
+        if all(x < -0.02 or x > 1.02 or y < -0.02 or y > 1.02 for x, y, _ in points):
+            continue
+        posed.append(stroke.model_copy(update={
+            "width": min(40.0, max(1.0, stroke.width * math.sqrt(xf.sx * xf.sy))),
+            "points": [Point(x=min(1.0, max(0.0, x)), y=min(1.0, max(0.0, y)), pressure=pressure) for x, y, pressure in points],
+        }))
+    return posed
+
+
+def expand_frame(first: list[Layer], layers: list[Layer]) -> list[Layer]:
+    """A frame's layers with every reference to frame 1 resolved into strokes."""
+    out = []
+    for layer in layers:
+        if layer.ref is None:
+            out.append(layer)
+            continue
+        base = first[layer.ref].strokes
+        out.append(layer.model_copy(update={"strokes": pose_strokes(base, layer.xf) if layer.xf else list(base), "ref": None, "xf": None}))
+    return out
 
 
 def upgrade_legacy(data: object) -> object:
@@ -101,7 +165,9 @@ def upgrade_legacy(data: object) -> object:
     return data
 
 
-def check_layers(layers: list[Layer], *, require_ink: bool) -> None:
+def check_layers(layers: list[Layer], *, require_ink: bool, allow_refs: bool = False) -> None:
+    if not allow_refs and any(layer.ref is not None for layer in layers):
+        raise ValueError("Only frames 2 and later of a scene can reference frame 1.")
     strokes = [stroke for layer in layers for stroke in layer.strokes]
     if len(strokes) > MAX_STROKES:
         raise ValueError("A drawing may contain at most 1,000 strokes and shapes.")
@@ -190,15 +256,20 @@ class Shot(BaseModel):
     fps: Literal[4, 6, 8, 12, 24] = 12
     tags: list[Tag] = Field(default_factory=list, max_length=MAX_TAGS)
     history: History
+    # How it moves, kept for the audit trail and for explaining it: who directed it, and the keyframes.
+    motion: "MotionRecord | None" = Field(default=None, exclude_if=lambda value: value is None)
 
     def all_frames(self) -> list[list[Layer]]:
-        return [self.layers, *(frame.layers for frame in self.frames)]
+        """Every frame as plain layers (references to frame 1 resolved), for rendering, links, and search."""
+        return [self.layers, *(expand_frame(self.layers, frame.layers) for frame in self.frames)]
 
     @model_validator(mode="after")
     def limits(self) -> "Shot":
         check_layers(self.layers, require_ink=True)
         for frame in self.frames:
-            check_layers(frame.layers, require_ink=False)
+            check_layers(frame.layers, require_ink=False, allow_refs=True)
+            if any(layer.ref is not None and layer.ref >= len(self.layers) for layer in frame.layers):
+                raise ValueError("A frame references a layer that frame 1 doesn't have.")
         self.tags = list(dict.fromkeys(self.tags))
         return self
 
@@ -245,6 +316,36 @@ class SparkRequest(BaseModel):
         return self
 
 
+class MotionKey(BaseModel):
+    """A keyframe: when (t, 0-1 of the clip), where (offset), squash and stretch, turn, and why (label)."""
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    t: Unit
+    x: float = Field(ge=-1.5, le=1.5, allow_inf_nan=False)
+    y: float = Field(ge=-1.5, le=1.5, allow_inf_nan=False)
+    sx: float = Field(ge=0.03, le=4, allow_inf_nan=False)
+    sy: float = Field(ge=0.03, le=4, allow_inf_nan=False)
+    r: float = Field(ge=-1080, le=1080, allow_inf_nan=False)
+    label: str = Field(default="", max_length=24)
+
+
+class MotionTrack(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    name: str = Field(min_length=1, max_length=40)
+    keys: list[MotionKey] = Field(min_length=1, max_length=MAX_MOTION_KEYS)
+
+
+class MotionRecord(BaseModel):
+    """The direction behind a scene's motion: a preset or an AI choreography the artist accepted."""
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    by: Literal["ai", "preset"]
+    prompt: str = Field(default="", max_length=300)
+    note: str = Field(default="", max_length=160)
+    seconds: float = Field(ge=0.5, le=10, allow_inf_nan=False)
+    fps: Literal[4, 6, 8, 12, 24] = 8
+    strength: float = Field(default=1, ge=0.2, le=2.5, allow_inf_nan=False)
+    tracks: list[MotionTrack] = Field(min_length=1, max_length=4)
+
+
 class MotionSubject(BaseModel):
     """A layer that should move: its index in the stack, its name, and where its ink sits (canvas fractions)."""
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
@@ -256,8 +357,8 @@ class MotionSubject(BaseModel):
 class MotionRequest(BaseModel):
     """Ask AI to choreograph a short clip: keyframes for the artist's own layers, never new drawing."""
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-    prompt: str = Field(min_length=3, max_length=200)
-    seconds: float = Field(ge=0.5, le=3, allow_inf_nan=False)
+    prompt: str = Field(min_length=3, max_length=300)
+    seconds: float = Field(ge=0.5, le=10, allow_inf_nan=False)
     subjects: list[MotionSubject] = Field(min_length=1, max_length=4)
     layers: list[Layer] = Field(default_factory=list, max_length=MAX_LAYERS)
 
@@ -266,6 +367,20 @@ class MotionRequest(BaseModel):
         check_layers(self.layers, require_ink=False)
         if len({subject.id for subject in self.subjects}) != len(self.subjects):
             raise ValueError("Each subject may appear once.")
+        return self
+
+
+class DirectRequest(BaseModel):
+    """Ask AI to pitch a few shots for what's on the canvas: who moves, where, and what they do."""
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    seconds: float = Field(default=10, ge=1, le=10, allow_inf_nan=False)
+    backdrop: str = Field(default="", max_length=40)
+    subjects: list[MotionSubject] = Field(min_length=1, max_length=8)
+    layers: list[Layer] = Field(default_factory=list, max_length=MAX_LAYERS)
+
+    @model_validator(mode="after")
+    def limits(self) -> "DirectRequest":
+        check_layers(self.layers, require_ink=False)
         return self
 
 
@@ -327,3 +442,6 @@ class TagRequest(BaseModel):
     def limits(self) -> "TagRequest":
         check_layers(self.layers, require_ink=True)
         return self
+
+
+Shot.model_rebuild()
