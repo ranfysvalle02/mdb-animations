@@ -4,6 +4,8 @@
 
 > **inkling** /ˈɪŋklɪŋ/ *n.* a slight hint or suggestion.
 
+**[✦ Try it live: inkling.oblivio-company.com](https://inkling.oblivio-company.com)**
+
 **Keep the pencil. Hand AI the in-betweens.**
 *You draw the moments that matter. AI handles everything in between.*
 
