@@ -1,8 +1,9 @@
 // Inkling's service worker: the studio opens with no signal, so you can draw in airplane mode.
 // Only the app shell is cached. Your library, AI, and share links are never served from a cache.
-const VERSION = 'inkling-shell-v1';
+const VERSION = 'inkling-shell-v2';
 const SHELL = ['/', '/studio.css', '/studio.js', '/manifest.webmanifest',
-  '/icons/icon-192.png', '/icons/icon-512.png', '/icons/maskable-512.png', '/icons/apple-touch-icon.png'];
+  '/icons/icon-192.png', '/icons/icon-512.png', '/icons/maskable-512.png', '/icons/apple-touch-icon.png',
+  '/lab/inkling-lab.js', '/lab/p5.min.js']; // the Lab works offline too
 
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(VERSION).then(cache => cache.addAll(SHELL)).then(() => self.skipWaiting()));

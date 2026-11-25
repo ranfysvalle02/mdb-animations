@@ -62,6 +62,24 @@ pause, not per keystroke): assets, backdrops, scenes, single frames, and AI vide
 (**Place**, **✦ Bring to life**, **Use as backdrop**, **Open**, **◎ Similar**). **✏️ My drawing** searches with
 the canvas. ↑↓ and Enter work too. Before you type, it offers starter backdrops and your latest work.
 
+**⟨/⟩ The Lab: your strokes, as numbers.** For the mathy and the curious: **Lab** (next to Focus, or **L**) tilts
+the paper back, dims the lights, and hands your drawing to [p5.js](https://p5js.org), Processing for the web. Your strokes
+arrive as data (`strokes`, `frames`, `layers`: points, pressure, drawing order), and a sketch moves them.
+
+- **Start from a preset**, all plain readable code, no AI: 🧊 **Time sculpture** (each stroke floats at the depth of
+  when you drew it; orbit it in 3D), 🎞 **Flipbook tunnel**, 🌬️ **Flow field** (Perlin noise bends your lines),
+  ❄️ **Kaleidoscope**, ✨ **Ink to dust**, 🌊 **The wave**.
+- **Ask AI to write it**: *"make my lines spiral into a galaxy"*. Gemini writes (or revises) a p5.js sketch against
+  the small Inkling API; every result is a **take** you can flip back to, with what changed in lines (*+11 −17*).
+- **Edit any line and run it** (⌘/Ctrl+Enter). Errors point at the line; an endless loop is stopped after 2.5 s.
+- **⤓ Bake to frames** runs the loop once per frame from a fixed seed and turns everything drawn with `ink()` into
+  editable strokes: a 24/48/80-frame flipbook you can save, share, and search. 3D bakes exactly what you see, through
+  p5's own camera matrices. Baked strokes are marked *code* on the authorship meter; the sketch's source is saved
+  with the scene (and Voyage can find it: *"the one with the spiral"*).
+- **Sandboxed by design**: sketches run in an `<iframe sandbox="allow-scripts">` (an opaque origin: no cookies, no
+  storage, no `/api/`) whose Content-Security-Policy refuses every network connection. Strokes go in and baked
+  strokes come out through `postMessage` only. The Lab works offline; only *Ask AI* needs a connection.
+
 **Install it. Draw in airplane mode.** Inkling is a progressive web app: **☰ → Install Inkling** (or Safari's
 Share → Add to Home Screen) puts it on your home screen, and it opens with no signal. Offline is a studio, not an
 error page: pen, layers, frames, the shapes kit, stamps, effects, and **quick moves** all work, and Flipbook picks a

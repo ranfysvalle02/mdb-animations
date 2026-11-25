@@ -353,3 +353,17 @@ def test_the_installable_app_ships_a_manifest_icons_and_a_root_scoped_worker(cli
     assert "/api/" not in worker.text.split("SHELL")[1].split(";")[0]  # the private library is never precached
     assert client.get("/apple-touch-icon.png").status_code == 200
     assert client.get("/icons/studio.js").status_code == 404  # only the named icons
+
+
+def test_lab_sketches_run_sandboxed_with_no_network_and_count_as_ai(client):
+    from starlette.requests import Request as Req
+
+    from backend.main import AI_BUDGET, budget_for
+    scope = {"type": "http", "method": "POST", "path": "/api/sparks/code", "query_string": b"", "headers": []}
+    assert budget_for(Req(scope)) is AI_BUDGET
+    client, _ = client  # the runner loads signed out too: it works offline, and holds no session
+    runner = client.get("/lab/inkling-lab.js")
+    policy = runner.headers["content-security-policy"]
+    assert runner.status_code == 200 and "connect-src 'none'" in policy and "default-src 'none'" in policy
+    assert client.get("/lab/p5.LICENSE.txt").status_code == 200  # LGPL: the license ships with the library
+    assert client.get("/lab/studio.js").status_code == 404  # only the Lab's own files

@@ -665,3 +665,17 @@ def test_scene_motion_records_code_effects_but_rejects_unknown_ones():
     for bad in (["lava"], ["snow", "rain", "bubbles"]):
         with pytest.raises(ValidationError):
             MotionRecord.model_validate({**MOTION, "effects": bad})
+
+
+def test_scenes_keep_the_lab_code_their_frames_were_baked_from():
+    from backend.production import shot_story
+    code = "function setup(){}\nfunction draw(){}"
+    stroke = {"color": "#123b38", "width": 3, "points": [{"x": 0.1, "y": 0.1}, {"x": 0.2, "y": 0.2}], "code": True}
+    shot = Shot.model_validate(shot_payload(sketch={"by": "ai", "title": "Galaxy spiral", "prompt": "spiral into a galaxy", "code": code, "frames": 2},
+                                            frames=[{"layers": [{"name": "Lab", "strokes": [stroke]}]}]))
+    assert shot.model_dump()["sketch"]["code"] == code
+    assert shot.frames[0].layers[0].strokes[0].model_dump()["code"] is True  # baked strokes stay marked as code
+    assert "Galaxy spiral" in shot_story(shot, [])
+    for bad in ({"by": "robot"}, {"code": "x" * 12_001}, {"frames": 81}):
+        with pytest.raises(ValidationError):
+            Shot.model_validate(shot_payload(sketch={"by": "ai", "title": "t", "code": code, "frames": 2, **bad}))

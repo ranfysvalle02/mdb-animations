@@ -25,7 +25,7 @@ from backend.ai import AIError, AIUnavailable, Sparks, clip_brief
 from backend.auth import DEMO_OWNER, SESSION_COOKIE, AuthError, AuthUnavailable, Budget, MStash, OpenAuth, Throttle, jwt_claims, service_owner
 from backend.library import Library, LibraryError, ink_crop, render_image
 from backend.models import (
-    ASSET_TYPES, CODE_PATTERN, MAX_LAYERS, SHOT_STATUSES, AnimateRequest, Asset, ClipRequest, DirectRequest, Drawing, Layer, LayersRequest, MotionRequest, RefineIdeasRequest,
+    ASSET_TYPES, CODE_PATTERN, MAX_LAYERS, SHOT_STATUSES, AnimateRequest, Asset, ClipRequest, CodeRequest, DirectRequest, Drawing, Layer, LayersRequest, MotionRequest, RefineIdeasRequest,
     RefineRequest, Shot, ShotUpdate, SketchRequest, SparkRequest, TagRequest,
     SketchSearch, VariationPlanRequest, VariationRequest,
     normalize_tag,
@@ -111,7 +111,7 @@ EMBED_BUDGET = Budget("embeds", "saves and searches", int(os.environ.get("INKLIN
 _ID = r"[0-9a-fA-F-]{36}"
 METERED = [
     (VIDEO_BUDGET, "POST", re.compile(r"/api/clips")),
-    (AI_BUDGET, "POST", re.compile(r"/api/(animate|sparks/(strokes|sketch|guide|motion|direct|refine|refine/ideas)|tags/suggest|assets/" + _ID + r"/variations(/plan)?)")),
+    (AI_BUDGET, "POST", re.compile(r"/api/(animate|sparks/(strokes|sketch|guide|motion|direct|refine|refine/ideas|code)|tags/suggest|assets/" + _ID + r"/variations(/plan)?)")),
     (EMBED_BUDGET, "POST", re.compile(r"/api/(drawings|assets|assets/similar|shots|search/sketch|shots/" + _ID + r"/(sync/" + _ID + r"|link|share))")),
     (EMBED_BUDGET, "PUT", re.compile(r"/api/(assets|shots)/" + _ID)),
     (EMBED_BUDGET, "GET", re.compile(r"/api/(search|assets/" + _ID + r"/where-used)")),
@@ -467,6 +467,13 @@ async def spark_motion(request: Request) -> dict:
     """AI choreographs a short clip as keyframes for the artist's own layers. A preview; nothing is applied."""
     motion = await read_json(request, MotionRequest)
     return await run_in_threadpool(request.app.state.ai.motion, motion)
+
+
+@app.post("/api/sparks/code")
+async def spark_code(request: Request) -> dict:
+    """AI writes (or revises) a Lab sketch: p5.js over the artist's own strokes. It runs sandboxed, in the browser."""
+    code = await read_json(request, CodeRequest)
+    return await run_in_threadpool(request.app.state.ai.code_sketch, code)
 
 
 @app.post("/api/sparks/refine/ideas")
@@ -954,6 +961,22 @@ def sitemap(request: Request) -> Response:
 @app.get("/og.png", include_in_schema=False)
 def social_card() -> FileResponse:
     return FileResponse(ROOT / "og.png", media_type="image/png", headers={"Cache-Control": "public, max-age=86400"})
+
+
+# The Lab's scripts. The studio inlines them into a sandboxed iframe (opaque origin) whose own policy refuses the
+# network; served on their own, they carry the same policy.
+LAB_FILES = {"inkling-lab.js": "text/javascript", "p5.min.js": "text/javascript", "p5.LICENSE.txt": "text/plain"}
+LAB_POLICY = ("default-src 'none'; script-src 'self' 'unsafe-eval'; style-src 'unsafe-inline'; img-src data: blob:; "
+              "font-src data:; connect-src 'none'; media-src 'none'; frame-src 'none'; worker-src 'none'; "
+              "base-uri 'none'; form-action 'none'; frame-ancestors 'self'")
+
+
+@app.get("/lab/{name}", include_in_schema=False)
+def lab_file(name: str) -> FileResponse:
+    if name not in LAB_FILES:
+        raise HTTPException(404, "Not part of the Lab.")
+    headers = {**REVALIDATE, "Content-Security-Policy": LAB_POLICY, "X-Content-Type-Options": "nosniff"}
+    return FileResponse(ROOT / "lab" / name, media_type=LAB_FILES[name], headers=headers)
 
 
 # The installable app: manifest, icons, and a service worker that caches only the app shell (never /api/).

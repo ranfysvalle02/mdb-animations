@@ -11,6 +11,7 @@ MAX_LAYERS = 12
 MAX_TAGS = 12
 MAX_FRAMES = 80  # 10 seconds at 8 frames a second: short scenes, on purpose
 MAX_MOTION_KEYS = 24
+MAX_SKETCH_CODE = 12_000  # a Lab sketch: readable code, not a program
 # The studio canvas, in pixels (backend.library renders at this size too).
 POSE_W, POSE_H = 1000, 650
 MAX_EVENTS = 60
@@ -69,6 +70,7 @@ class Stroke(BaseModel):
     # always say how much of a drawing is the artist's hand. Hand strokes carry no flag at all.
     ai: bool = Field(default=False, exclude_if=lambda value: not value)
     kit: bool = Field(default=False, exclude_if=lambda value: not value)  # came with a starter kit
+    code: bool = Field(default=False, exclude_if=lambda value: not value)  # baked from a Lab sketch (code over your strokes)
     # Process: drawing order across layers (for replay) and how long the stroke took to draw.
     seq: int | None = Field(default=None, ge=0, le=10_000_000, exclude_if=lambda value: value is None)
     ms: int | None = Field(default=None, ge=0, le=3_600_000, exclude_if=lambda value: value is None)
@@ -259,6 +261,8 @@ class Shot(BaseModel):
     history: History
     # How it moves, kept for the audit trail and for explaining it: who directed it, and the keyframes.
     motion: "MotionRecord | None" = Field(default=None, exclude_if=lambda value: value is None)
+    # Or the Lab sketch its frames were baked from: the code is part of the scene's story, readable forever.
+    sketch: "SketchRecord | None" = Field(default=None, exclude_if=lambda value: value is None)
 
     def all_frames(self) -> list[list[Layer]]:
         """Every frame as plain layers (references to frame 1 resolved), for rendering, links, and search."""
@@ -348,6 +352,30 @@ class MotionRecord(BaseModel):
     # Effects are code, not AI: a layer of tiny strokes computed per frame from a fixed seed.
     effects: list[Literal["snow", "rain", "sparkles", "confetti", "bubbles"]] = Field(
         default_factory=list, max_length=2, exclude_if=lambda value: not value)
+
+
+class SketchRecord(BaseModel):
+    """The Lab code a scene's frames were baked from: who wrote it (a preset, AI, or the artist) and the source."""
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    by: Literal["preset", "ai", "artist"]
+    title: str = Field(min_length=1, max_length=80)
+    prompt: str = Field(default="", max_length=400)
+    code: str = Field(min_length=1, max_length=MAX_SKETCH_CODE)
+    frames: int = Field(ge=2, le=MAX_FRAMES)
+
+
+class CodeRequest(BaseModel):
+    """Ask AI to write (or revise) a Lab sketch: p5.js over the artist's own strokes, never new drawing."""
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    prompt: str = Field(min_length=3, max_length=400)
+    code: str = Field(default="", max_length=MAX_SKETCH_CODE)  # the sketch on screen, to revise
+    title: str = Field(default="", max_length=120)
+    layers: list[Layer] = Field(default_factory=list, max_length=MAX_LAYERS)
+
+    @model_validator(mode="after")
+    def limits(self) -> "CodeRequest":
+        check_layers(self.layers, require_ink=False)
+        return self
 
 
 def fit_box(value):

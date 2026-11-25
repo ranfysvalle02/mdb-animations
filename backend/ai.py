@@ -17,7 +17,7 @@ from pydantic import BaseModel
 
 from backend.library import CANVAS_HEIGHT, CANVAS_WIDTH, png_bytes, render_image
 from backend.models import (
-    MAX_MOTION_KEYS, MAX_POINTS, MAX_STROKES, DirectRequest, Layer, MotionRequest, RefineIdeasRequest, RefineRequest, Region, SketchRequest,
+    MAX_MOTION_KEYS, MAX_POINTS, MAX_SKETCH_CODE, MAX_STROKES, CodeRequest, DirectRequest, Layer, MotionRequest, RefineIdeasRequest, RefineRequest, Region, SketchRequest,
     SparkRequest, Stroke, TagRequest, VariationPlanRequest,
     VariationRequest, clean_tags,
 )
@@ -141,6 +141,47 @@ class _Variation(BaseModel):
     note: str
     keep: list[int]
     strokes: list[_VarStroke]
+
+
+class _CodeSketch(BaseModel):
+    code: str
+    note: str
+
+
+# The contract a Lab sketch is written against (the runner in lab/inkling-lab.js implements it).
+LAB_API = """\
+Write a p5.js 1.11 sketch in GLOBAL mode (define function setup() and function draw()). It runs in a sandbox
+with no network and no DOM beyond its canvas. Use these globals, provided by Inkling:
+- W = 1000, H = 650: the paper size. Call createCanvas(W, H) for 2D, or createCanvas(W, H, WEBGL) for 3D.
+  In WEBGL the origin is the center; use translate(-W / 2, -H / 2) to work in paper coordinates.
+- strokes: the artist's drawing (frame 1), in drawing order. Each stroke is
+  { points: [{x, y, pressure}], color: '#rrggbb', width, layer: 'name', order: 0..n-1 }, x in 0..W, y in 0..H.
+- frames: every flipbook frame, each an array of strokes in the same shape (frames[0] is strokes).
+- layers: [{ name, strokes }] for frame 1.
+- LOOP: how many frames will be baked (24 to 80). loopT() returns 0..1, the progress through that loop.
+  Make the motion a seamless loop over LOOP frames, driven by loopT() (not millis()).
+- ink(points, style): draws a stroke AND records it, so it can be baked into editable frames. points is an
+  array of {x, y, z?} (or [x, y, z?]); style is { color, width, fill } (color as '#rrggbb' or [r, g, b]).
+  Everything you want baked must be drawn with ink(); other p5 drawing is preview-only.
+- inkStroke(stroke, map?): ink one of the artist's strokes, optionally mapping each point with
+  map(p, i, stroke) => {x, y, z}. Keeps the stroke's color and width.
+- KEEP_DRAWING (optional): set to true if the artist's original drawing should stay visible under the baked
+  code layer; leave it out if your sketch redraws their strokes itself.
+Rules: only move, transform, repeat, or recombine the artist's own strokes; never invent new figures or text.
+Call background() every frame. Use random() and noise() (they are seeded, so baking is repeatable). Keep it
+under ~900 ink() calls and ~15,000 points per frame. Always use braces on loops. Keep the code short,
+readable, and commented for an artist learning to code.
+"""
+
+
+def clean_sketch(code: str) -> str:
+    """Model output as runnable source: no Markdown fences, bounded, and actually a sketch."""
+    code = re.sub(r"^\s*```[a-zA-Z]*\s*\n|\n?```\s*$", "", code.strip()).strip()
+    if len(code) > MAX_SKETCH_CODE:
+        raise AIError("Gemini wrote more code than a sketch should have. Try a simpler idea.")
+    if not re.search(r"function\s+draw\s*\(", code) or not re.search(r"function\s+setup\s*\(", code):
+        raise AIError("Gemini didn't write a complete sketch (setup and draw). Try again.")
+    return code
 
 
 def simplify(points: list[tuple[float, float]], epsilon: float) -> list[tuple[float, float]]:
@@ -523,6 +564,22 @@ class Sparks:
         if not ideas:
             raise AIError("Gemini couldn't pitch a shot for this. Try describing one yourself.")
         return {"ideas": ideas}
+
+    def code_sketch(self, request: CodeRequest) -> dict:
+        """A Lab sketch: readable p5.js that moves the artist's own strokes. Gemini writes code, never art."""
+        drawn = [stroke for layer in request.layers if layer.visible for stroke in layer.strokes if not stroke.erase]
+        summary = (f"The drawing has {len(drawn)} strokes on layers: "
+                   + ", ".join(dict.fromkeys(layer.name for layer in request.layers if layer.visible and layer.strokes))
+                   if drawn else "The drawing is empty: write a sketch that works with any strokes.")
+        revise = (f"Revise this sketch (keep what the request doesn't mention):\n```js\n{request.code}\n```\n"
+                  if request.code.strip() else "")
+        result = self._json([
+            types.Part.from_bytes(data=png_bytes(render_image(request.layers)), mime_type="image/png"),
+            f"You are a creative-coding mentor helping an artist bring their drawing to life with code.\n{LAB_API}\n"
+            f"The image is their drawing. {summary}.\n{revise}Request: {request.prompt}\n"
+            "Return the complete sketch as code, and a note (at most 14 words) saying what it does.",
+        ], _CodeSketch)
+        return {"kind": "code", "code": clean_sketch(result.code), "note": result.note.strip()[:120]}
 
     def refine_ideas(self, request: RefineIdeasRequest) -> list[str]:
         """What this drawing could use next: short prompts the artist can tap, or edit before running."""

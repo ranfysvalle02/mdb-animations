@@ -54,6 +54,7 @@
   let peeking = false; // while "hold to compare" is held, previews step aside to show the original
   let motionSeconds = 10;
   let sceneMotion = null; // the accepted direction behind this scene's frames, saved with the scene
+  let sceneSketch = null; // or the Lab code its frames were baked from
   let showMath = false;
   let shareAfterSave = false; // "Share" on an unsaved scene saves it first
   let moving = null; // { layer, start, original, bounds } while the Move tool drags a layer
@@ -1068,13 +1069,14 @@
     const counts = madeBy([layers]);
     const ai = counts.ai + counts.placedAi;
     const mine = counts.hand + counts.placed - counts.placedAi;
-    const total = mine + ai + counts.kit;
+    const total = mine + ai + counts.kit + counts.code;
     const meter = $('authorship');
     meter.hidden = !total;
     if (!total) return;
     const pct = n => Math.round(n / total * 100);
-    meter.textContent = !mine && !ai ? '\ud83e\udde9 Kit lines \u00b7 your turn \u270d'
-      : `\u270d ${pct(mine)}% your hand${ai ? ` \u00b7 \u2726 ${pct(ai)}% AI` : ''}${counts.kit ? ` \u00b7 ${pct(counts.kit)}% kit` : ''}`;
+    meter.textContent = !mine && !ai && counts.code ? '\u27e8/\u27e9 Code over your lines \u270d'
+      : !mine && !ai ? '\ud83e\udde9 Kit lines \u00b7 your turn \u270d'
+      : `\u270d ${pct(mine)}% your hand${ai ? ` \u00b7 \u2726 ${pct(ai)}% AI` : ''}${counts.code ? ` \u00b7 \u27e8/\u27e9 ${pct(counts.code)}% code` : ''}${counts.kit ? ` \u00b7 ${pct(counts.kit)}% kit` : ''}`;
     meter.classList.toggle('pure', !ai);
   }
   $('authorship').addEventListener('click', () => $('breakdown-open').click());
@@ -1520,6 +1522,7 @@
     frameIndex = 0;
     pendingOrigin = null;
     sceneMotion = null;
+    sceneSketch = null;
     rebuildOnion();
     activeId = layers[0].id;
     guides.length = 0;
@@ -2770,6 +2773,7 @@
     fps = MOTION_FPS;
     $('fps').value = String(MOTION_FPS);
     sceneMotion = motionRecord(spec);
+    sceneSketch = null;
     if (!editing || editing.kind !== 'shot') {
       // One tap to save: a readable scene code ("LittleFox_0413") and the direction as its notes (Voyage reads those too).
       if (!CODE.test($('title').value.trim())) {
@@ -3377,6 +3381,7 @@
     frameIndex = 0;
     activeId = layers[layers.length - 1].id;
     sceneMotion = null;
+    sceneSketch = null;
     pendingOrigin = null;
     editing = null;
     sparks.length = 0;
@@ -4103,6 +4108,9 @@
     } else if (!mod && key === 'f' && !busy()) {
       event.preventDefault();
       setFocus(!document.body.classList.contains('focus-mode'));
+    } else if (!mod && key === 'l' && !busy()) {
+      event.preventDefault();
+      openLab();
     } else if (!mod && key === 'n' && !busy()) {
       event.preventDefault();
       addFrame();
@@ -4279,7 +4287,7 @@
     return { path: updating ? `/api/shots/${editing.id}` : '/api/shots', method: updating ? 'PUT' : 'POST', history,
       body: { code: name, project, sequence, status: $('shot-status').value, assignee: $('shot-assignee').value.trim(), ...base,
         frames: frames.slice(1).map(stack => ({ layers: compactStack(stack, frames[0]) })), fps, history,
-        ...(sceneMotion && frames.length > 1 ? { motion: sceneMotion } : {}) } };
+        ...(sceneMotion && frames.length > 1 ? { motion: sceneMotion } : {}), ...(sceneSketch && frames.length > 1 ? { sketch: sceneSketch } : {}) } };
   }
 
   // Before a *new* asset is saved, check the library for one that already looks like it.
@@ -4423,6 +4431,7 @@
         ...(layer.xf ? { xf: layer.xf, xfBase: layer.xfBase, xfStrokes: layer.xfStrokes } : {})
       })));
       sceneMotion = record.motion || null;
+      sceneSketch = record.sketch || null;
       frameIndex = 0;
       layers = frames[0];
       resyncSeq();
@@ -5599,6 +5608,7 @@
     stopPlay();
     frames = [stack, ...more];
     sceneMotion = null;
+    sceneSketch = null;
     resyncSeq();
     if (speed) { fps = speed; $('fps').value = String(fps); }
     frameIndex = 0;
@@ -5763,7 +5773,7 @@
     return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
   }
   function madeBy(stacks) {
-    const counts = { hand: 0, ai: 0, kit: 0, placed: 0, placedAi: 0 };
+    const counts = { hand: 0, ai: 0, kit: 0, code: 0, placed: 0, placedAi: 0 };
     const seen = new Set();
     for (const layer of stacks.flat()) {
       // Hidden guides and backups don't count; nor do posed copies of frame 1 (moved, not drawn).
@@ -5773,7 +5783,7 @@
       for (const stroke of layer.strokes) {
         if (stroke.erase || seen.has(stroke)) continue;
         seen.add(stroke);
-        counts[layer.asset ? 'placed' : stroke.ai ? 'ai' : stroke.kit ? 'kit' : 'hand']++;
+        counts[layer.asset ? 'placed' : stroke.ai ? 'ai' : stroke.code ? 'code' : stroke.kit ? 'kit' : 'hand']++;
         if (layer.asset && stroke.ai) counts.placedAi++; // e.g. strokes an AI variation added to that asset
       }
     }
@@ -6741,6 +6751,492 @@
     launchShortcut();
   }
 
+  // ---------------------------------------------------------------- the Lab: your strokes, as numbers
+  // Processing for the web (p5.js) over the artist's own strokes. Sketches run in a sandboxed iframe (opaque origin,
+  // no network); presets and edits are yours, AI can write a take, and Bake turns the loop into editable frames.
+  const LAB_SEED = 7;
+  const LAB_PRESETS = [
+    { id: 'sculpture', icon: '\ud83e\uddca', name: 'Time sculpture', hint: 'Your strokes, pulled apart by when you drew them. 3D.', code: `// Time sculpture: your drawing, pulled apart by time.
+// Every stroke floats at a depth set by when you drew it:
+// your first line in front, your last line at the back.
+// Drag to orbit, scroll to zoom. Bake captures the turn.
+
+function setup() {
+  createCanvas(W, H, WEBGL);
+}
+
+function draw() {
+  background('#f6f7f1');
+  orbitControl();                          // your mouse is the camera
+  const t = loopT();                       // 0..1 around the loop
+  const lift = min(1, frameCount / 36);    // the drawing peels off the page
+  const depth = 640 * (1 - pow(1 - lift, 3));
+  rotateY(-0.6 * lift + sin(t * TWO_PI) * 0.3);  // turn to the side, then sway (it loops)
+  rotateX(-0.32 * lift);
+  translate(-W / 2, -H / 2, 0);
+  const last = max(1, strokes.length - 1);
+  for (const s of strokes) {
+    const z = map(s.order, 0, last, depth / 2, -depth / 2);
+    inkStroke(s, p => ({ x: p.x, y: p.y, z: z }));
+  }
+}
+` },
+    { id: 'tunnel', icon: '\ud83c\udf9e', name: 'Flipbook tunnel', hint: 'Every frame, stacked in space and gliding toward you. 3D.', code: `// Flipbook tunnel: every frame of your flipbook, stacked in space,
+// gliding toward you. One frame? It echoes into the distance.
+
+function setup() {
+  createCanvas(W, H, WEBGL);
+}
+
+function draw() {
+  background('#f6f7f1');
+  orbitControl();
+  const t = loopT();
+  const pick = max(1, ceil(frames.length / 10));   // at most ~10 slices
+  const stack = frames.length > 1 ? frames.filter((f, i) => i % pick === 0) : Array(8).fill(strokes);
+  const gap = 140;
+  rotateY(-0.45);
+  rotateX(-0.15);
+  translate(-W / 2, -H / 2, 0);
+  stack.forEach((frame, i) => {
+    const z = -(i - t) * gap;                       // one slice forward per loop
+    for (const s of frame) {
+      inkStroke(s, p => ({ x: p.x, y: p.y, z: z }));
+    }
+  });
+}
+` },
+    { id: 'flow', icon: '\ud83c\udf2c\ufe0f', name: 'Flow field', hint: 'An invisible wind of Perlin noise bends every line.', code: `// Flow field: an invisible wind, made of Perlin noise, bends every line you drew.
+// The wind travels in a circle through the noise, so the loop is seamless.
+
+function setup() {
+  createCanvas(W, H);
+}
+
+function draw() {
+  background('#f6f7f1');
+  const a = loopT() * TWO_PI;
+  const strength = 26;                     // try 60 for a storm
+  for (const s of strokes) {
+    inkStroke(s, p => {
+      const angle = noise(p.x * 0.004 + cos(a) * 0.6, p.y * 0.004 + sin(a) * 0.6) * TWO_PI * 2;
+      return { x: p.x + cos(angle) * strength, y: p.y + sin(angle) * strength };
+    });
+  }
+}
+` },
+    { id: 'kaleido', icon: '\u2744\ufe0f', name: 'Kaleidoscope', hint: 'Six mirrored slices of your drawing, turning.', code: `// Kaleidoscope: six slices of your drawing, mirrored around the center, turning.
+
+let cx = W / 2;
+let cy = H / 2;
+
+function setup() {
+  createCanvas(W, H);
+  const xs = strokes.flatMap(s => s.points.map(p => p.x));
+  const ys = strokes.flatMap(s => s.points.map(p => p.y));
+  if (xs.length) {
+    cx = (min(xs) + max(xs)) / 2;
+    cy = (min(ys) + max(ys)) / 2;
+  }
+}
+
+function draw() {
+  background('#f6f7f1');
+  const slices = 6;
+  translate(W / 2, H / 2);
+  rotate(loopT() * TWO_PI / slices);       // one slice per loop: seamless
+  for (let k = 0; k < slices; k++) {
+    push();
+    rotate(k * TWO_PI / slices);
+    if (k % 2) {
+      scale(1, -1);                        // every other slice is a mirror
+    }
+    for (const s of strokes) {
+      inkStroke(s, p => ({ x: (p.x - cx) * 0.5, y: (p.y - cy) * 0.5 }));
+    }
+    pop();
+  }
+}
+` },
+    { id: 'dust', icon: '\u2728', name: 'Ink to dust', hint: 'Your lines dissolve into particles, then gather back.', code: `// Ink to dust: your lines dissolve into drifting particles, then gather back.
+
+const dots = [];
+
+function setup() {
+  createCanvas(W, H);
+  const all = strokes.flatMap(s => s.points.map(p => ({ x: p.x, y: p.y, color: s.color, width: s.width })));
+  const step = max(1, floor(all.length / 700));   // ~700 dots is plenty
+  for (let i = 0; i < all.length; i += step) {
+    dots.push({ ...all[i], angle: random(TWO_PI), reach: random(40, 160), rise: random(20, 120) });
+  }
+}
+
+function draw() {
+  background('#f6f7f1');
+  const spread = pow(sin(loopT() * PI), 2);       // 0, then 1, then 0: apart, then home
+  for (const d of dots) {
+    const x = d.x + cos(d.angle) * d.reach * spread;
+    const y = d.y + sin(d.angle) * d.reach * spread - d.rise * spread;
+    ink([{ x: x, y: y }], { color: d.color, width: max(2, d.width * 0.9) });
+  }
+}
+` },
+    { id: 'wave', icon: '\ud83c\udf0a', name: 'The wave', hint: 'Each line bobs in turn, in the order you drew it.', code: `// The wave: each line bobs in turn, in the order you drew it.
+
+function setup() {
+  createCanvas(W, H);
+}
+
+function draw() {
+  background('#f6f7f1');
+  const t = loopT();
+  const count = max(1, strokes.length);
+  for (const s of strokes) {
+    const lift = sin((t - s.order / count) * TWO_PI) * 16;   // phase = when you drew it
+    inkStroke(s, p => ({ x: p.x, y: p.y - lift }));
+  }
+}
+` }
+  ];
+  let labTakes = [];
+  let labAt = -1;
+  let labReady = false;
+  let labAsking = false;
+  let labWatch = null;
+  let labBaking = null;
+  const labFrame = () => $('lab-frame');
+  // The sandbox page is built here from p5 and the runner (fetched once; the service worker keeps them for airplane
+  // mode, which it couldn't do for a sandboxed page's own requests). Its policy refuses every network connection.
+  const LAB_POLICY = "default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval'; style-src 'unsafe-inline'; img-src data: blob:; "
+    + "font-src data:; connect-src 'none'; media-src 'none'; frame-src 'none'; worker-src 'none'; base-uri 'none'; form-action 'none'";
+  let labScripts = null;
+  async function labRunnerDoc() {
+    labScripts = labScripts || Promise.all(['/lab/p5.min.js', '/lab/inkling-lab.js'].map(path => fetch(path).then(response => {
+      // Only real scripts go into the sandbox (never an error page or JSON that a proxy sent instead).
+      if (!response.ok || !/javascript/.test(response.headers.get('content-type') || '')) throw new Error('The Lab couldn\u2019t load. Reload Inkling and try again.');
+      return response.text();
+    }))).catch(error => { labScripts = null; throw error; });
+    const [library, runner] = await labScripts;
+    const inline = text => text.replace(/<\/script/gi, '<\\/script');
+    return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${LAB_POLICY}">`
+      + '<meta name="viewport" content="width=device-width, initial-scale=1"><style>html,body{margin:0;height:100%;overflow:hidden;background:transparent}'
+      + 'body{display:grid;place-items:center}canvas{width:min(100vw,100vh*1000/650)!important;height:auto!important;aspect-ratio:1000/650;'
+      + `border-radius:14px;box-shadow:0 30px 80px #0009;touch-action:none}</style><script>${inline(library)}</script><script>${inline(runner)}</script>`
+      + '</head><body></body></html>';
+  }
+  // The artist's strokes as the sketch sees them: paper coordinates, drawing order, every frame.
+  function labData() {
+    const asLab = (stack) => {
+      const list = stack.filter(layer => layer.visible)
+        .flatMap(layer => layer.strokes.filter(stroke => !stroke.erase).map(stroke => ({ stroke, layer: layer.name })));
+      list.sort((a, b) => (a.stroke.seq ?? 0) - (b.stroke.seq ?? 0));
+      return list.map(({ stroke, layer }, order) => ({
+        points: stroke.points.map(p => ({ x: p.x * W, y: p.y * H, pressure: p.pressure ?? 0.5 })),
+        color: stroke.color, width: stroke.width, layer, order
+      }));
+    };
+    return { frames: frames.map(asLab), layers: frames[0].filter(layer => layer.visible).map(layer => ({ name: layer.name, strokes: asLab([layer]) })) };
+  }
+  function labError(text) {
+    $('lab-error').hidden = !text;
+    $('lab-error').textContent = text ? `\u26a0 ${text}` : '';
+  }
+  function labLines() {
+    const code = $('lab-code').value;
+    $('lab-lines').textContent = `${code.split('\n').length} lines${labTakes[labAt] && code !== labTakes[labAt].code ? ' \u00b7 edited, \u2318\u21b5 to run' : ''}`;
+  }
+  // Each run gets a fresh sandbox: nothing carries over, and a stuck sketch is simply thrown away.
+  let labRun = 0;
+  async function runLab(code = $('lab-code').value) {
+    labReady = false;
+    labError('');
+    clearTimeout(labWatch);
+    const run = ++labRun;
+    $('lab-hint').textContent = 'Starting your sketch\u2026';
+    let doc;
+    try {
+      doc = await labRunnerDoc();
+    } catch (error) {
+      labError(error.message);
+      return;
+    }
+    if (run !== labRun || !$('lab').open) return; // a newer run (or closing the Lab) won
+    const fresh = document.createElement('iframe');
+    fresh.id = 'lab-frame';
+    fresh.className = 'lab-frame';
+    fresh.title = 'Your sketch, running';
+    fresh.setAttribute('sandbox', 'allow-scripts');
+    fresh.setAttribute('referrerpolicy', 'no-referrer');
+    fresh.dataset.code = code;
+    fresh.srcdoc = doc;
+    // A sketch can't reach the network, open windows, or submit forms; if it tries to navigate its own frame away,
+    // the frame is gone before anything else runs there.
+    let loads = 0;
+    fresh.addEventListener('load', () => {
+      if (++loads < 2) return;
+      fresh.removeAttribute('srcdoc');
+      fresh.src = 'about:blank';
+      labReady = false;
+      labError('The sketch tried to leave the sandbox, so it was stopped.');
+    });
+    labFrame().replaceWith(fresh);
+    labWatch = setTimeout(() => {
+      if (labReady || run !== labRun) return;
+      labFrame().removeAttribute('srcdoc');
+      labError('The sketch didn\u2019t start within 8 s, so it was stopped. An endless loop in setup()?');
+      $('lab-hint').textContent = '';
+    }, 8000);
+  }
+  window.addEventListener('message', event => {
+    const frame = labFrame();
+    if (!frame || event.source !== frame.contentWindow || !event.data || typeof event.data !== 'object') return;
+    const message = event.data;
+    if (message.type === 'loaded') {
+      frame.contentWindow.postMessage({ type: 'run', code: frame.dataset.code, data: labData(), seed: LAB_SEED, loop: Number($('lab-frames').value) }, '*');
+    } else if (message.type === 'ready') {
+      labReady = true;
+      clearTimeout(labWatch);
+      $('lab-hint').textContent = message.webgl ? 'Drag to orbit \u00b7 scroll to zoom \u00b7 bake keeps your view' : 'Your strokes, moved by code';
+    } else if (message.type === 'error') {
+      labError(`${message.line ? `Line ${message.line}: ` : ''}${message.message}`);
+      $('lab-error').dataset.line = message.line || '';
+      if (labBaking) { labBaking = null; setLabBusy(false); }
+    } else if (message.type === 'baked' && labBaking) {
+      const take = labBaking;
+      labBaking = null;
+      setLabBusy(false);
+      if (message.frames) bakeLab(take, message.frames, message.keep === true);
+    }
+  });
+  $('lab-error').addEventListener('click', () => {
+    const line = Number($('lab-error').dataset.line);
+    if (!line) return;
+    const lines = $('lab-code').value.split('\n');
+    const start = lines.slice(0, line - 1).reduce((n, text) => n + text.length + 1, 0);
+    $('lab-code').focus();
+    $('lab-code').setSelectionRange(start, start + (lines[line - 1] || '').length);
+  });
+  // What changed between two versions of the code, in lines: AI's edits are never a mystery.
+  function lineDiff(before, after) {
+    const count = new Map();
+    for (const line of before.split('\n')) count.set(line, (count.get(line) || 0) + 1);
+    let added = 0;
+    for (const line of after.split('\n')) {
+      if (count.get(line)) count.set(line, count.get(line) - 1);
+      else added++;
+    }
+    const removed = [...count.values()].reduce((n, v) => n + v, 0);
+    return `+${added} \u2212${removed} lines`;
+  }
+  function renderLabTakes() {
+    const strip = $('lab-takes');
+    const chips = labTakes.map((take, i) => {
+      const chip = el('button', `take${i === labAt ? ' active' : ''}`);
+      chip.type = 'button';
+      chip.setAttribute('aria-pressed', String(i === labAt));
+      chip.append(el('b', '', String(i + 1)), el('span', '', take.title.length > 28 ? `${take.title.slice(0, 27)}\u2026` : take.title));
+      chip.addEventListener('click', () => showLabTake(i));
+      return chip;
+    });
+    if (labAsking) chips.push(Object.assign(el('span', 'take pending'), { textContent: `Take ${labTakes.length + 1}\u2026` }));
+    strip.replaceChildren(...(chips.length ? [el('small', '', 'Takes'), ...chips] : []));
+    strip.hidden = !chips.length;
+    document.querySelectorAll('#lab-presets button').forEach(button => button.setAttribute('aria-pressed', String(labTakes[labAt]?.preset === button.dataset.preset)));
+  }
+  function showLabTake(index) {
+    if (!labTakes[index]) return;
+    labAt = index;
+    const take = labTakes[index];
+    $('lab-code').value = take.code;
+    $('lab-note').textContent = take.note;
+    renderLabTakes();
+    labLines();
+    runLab(take.code);
+  }
+  function addLabTake(take) {
+    labTakes = [...labTakes, take].slice(-12);
+    showLabTake(labTakes.length - 1);
+  }
+  function setLabBusy(on, text = '') {
+    $('lab-go').disabled = on;
+    $('lab-bake').disabled = on;
+    $('lab-run').disabled = on;
+    $('lab-go').textContent = on && labAsking ? 'Writing\u2026' : 'Write it';
+    $('lab-bake').textContent = on && labBaking ? 'Baking\u2026' : '\u2913 Bake to frames';
+    if (text) $('lab-note').textContent = text;
+    renderLabTakes();
+  }
+  $('lab-presets').append(...LAB_PRESETS.map(preset => {
+    const button = el('button', 'lab-preset');
+    button.type = 'button';
+    button.dataset.preset = preset.id;
+    button.dataset.tip = `${preset.name}|${preset.hint} No AI: plain code you can read.`;
+    button.append(el('span', '', preset.icon), el('b', '', preset.name));
+    button.addEventListener('click', () => {
+      const same = labTakes.findIndex(take => take.preset === preset.id && take.code === preset.code);
+      if (same >= 0) { showLabTake(same); return; }
+      addLabTake({ title: preset.name, by: 'preset', preset: preset.id, prompt: '', code: preset.code,
+        note: `${preset.icon} ${preset.name}: ${preset.hint} Plain code, no AI. Change any number and run it.` });
+    });
+    return button;
+  }));
+  $('lab-code').addEventListener('input', labLines);
+  $('lab-code').addEventListener('keydown', event => {
+    if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') { event.preventDefault(); $('lab-run').click(); return; }
+    if (event.key === 'Tab' && !event.shiftKey) {
+      event.preventDefault();
+      const area = $('lab-code'), at = area.selectionStart;
+      area.setRangeText('  ', at, area.selectionEnd, 'end');
+      labLines();
+    }
+  });
+  $('lab-run').addEventListener('click', () => {
+    const code = $('lab-code').value;
+    const current = labTakes[labAt];
+    if (!code.trim()) { labError('Write a sketch (or pick one above) first.'); return; }
+    if (current && code === current.code) { runLab(code); return; }
+    const named = (current?.title || 'Your sketch').replace(/^[+\u270e]\s*/, '');
+    addLabTake({ title: `\u270e ${named}`, by: 'artist', prompt: current?.prompt || '', code,
+      note: `\u270e Your edit${current ? `: ${lineDiff(current.code, code)}` : ''}. Every take stays a tap away.` });
+  });
+  $('lab-frames').addEventListener('change', () => runLab()); // the preview loops over exactly what gets baked
+  $('lab-ask').addEventListener('submit', async event => {
+    event.preventDefault();
+    const prompt = $('lab-prompt').value.trim();
+    if (prompt.length < 3) { $('lab-prompt').focus(); return; }
+    const before = $('lab-code').value;
+    labAsking = true;
+    setLabBusy(true, '\u2726 Gemini is writing code over your strokes\u2026');
+    try {
+      const result = await postJSON('/api/sparks/code', JSON.stringify({ prompt, code: before.slice(0, 12000),
+        title: $('title').value.trim().slice(0, 120), layers: docLayers() }));
+      $('lab-prompt').value = '';
+      addLabTake({ title: `+ ${prompt}`, by: 'ai', prompt, code: result.code,
+        note: `\u2726 Gemini wrote it: ${result.note || 'a new sketch'} (${before.trim() ? lineDiff(before, result.code) : `${result.code.split('\n').length} lines`}). Read it, change it, run it.` });
+    } catch (error) {
+      labError(error.message);
+      $('lab-note').textContent = labTakes[labAt]?.note || '';
+    } finally {
+      labAsking = false;
+      setLabBusy(false);
+    }
+  });
+  $('lab-bake').addEventListener('click', () => {
+    const take = labTakes[labAt];
+    if (!take) return;
+    if (!labReady) { labError('Run the sketch first; Bake captures what it draws.'); return; }
+    if (take.code !== $('lab-code').value) { $('lab-run').click(); labError('Your edit is running now. Bake again to capture it.'); return; }
+    labBaking = take;
+    setLabBusy(true, `\u2913 Drawing all ${$('lab-frames').value} frames from the same seed\u2026`);
+    labFrame().contentWindow.postMessage({ type: 'bake', frames: Number($('lab-frames').value) }, '*');
+    setTimeout(() => { if (labBaking === take) { labBaking = null; setLabBusy(false); labError('Baking took too long. Fewer frames, or fewer ink() calls?'); } }, 20000);
+  });
+  // Baked strokes, made safe for a scene: on the paper, valid colors and widths, and inside one frame's limits.
+  function bakedStrokes(list, room, perStroke) {
+    const out = [];
+    let points = 0;
+    let trimmed = false;
+    for (const raw of list || []) {
+      let pts = (raw.points || []).filter(p => Number.isFinite(p.x) && Number.isFinite(p.y)).map(p => ({ x: p.x / W, y: p.y / H }));
+      if (!pts.length || pts.every(p => p.x < -0.02 || p.x > 1.02 || p.y < -0.02 || p.y > 1.02)) continue;
+      if (pts.length > perStroke) {
+        const step = Math.ceil(pts.length / perStroke);
+        pts = pts.filter((p, i) => i % step === 0 || i === pts.length - 1);
+      }
+      if (out.length >= room.strokes || points + pts.length > room.points) { trimmed = true; break; }
+      points += pts.length;
+      const fill = /^#[0-9a-f]{6}$/i.test(raw.fill || '') && pts.length > 2 ? raw.fill.toLowerCase() : null;
+      out.push({ points: pts.map(p => ({ x: r4(clampTo(p.x, 0, 1)), y: r4(clampTo(p.y, 0, 1)), pressure: 0.75 })),
+        color: /^#[0-9a-f]{6}$/i.test(raw.color || '') ? raw.color.toLowerCase() : '#123b38',
+        width: Math.round(clampTo(Number(raw.width) || 3, 1, 40) * 10) / 10, ...(fill ? { fill } : {}), code: true, seq: 0 });
+    }
+    return { strokes: out, trimmed };
+  }
+  function bakeLab(take, raw, keep) {
+    const base = frames[0];
+    if (base.length + 1 > MAX_LAYERS) { labError(`The Lab needs one free layer (${MAX_LAYERS} max). Merge or delete one first.`); return; }
+    const baseStrokes = base.flatMap(layer => layer.strokes);
+    const room = { strokes: MAX_STROKES - baseStrokes.length, points: MAX_POINTS - countPoints(baseStrokes) };
+    if (room.strokes < 1 || room.points < 2) { labError('This drawing already uses the canvas limits, so nothing can be baked on top.'); return; }
+    // Fit the whole bake in one save (2 MiB): fewer points per stroke until it does.
+    let baked = null;
+    for (const perStroke of [240, 120, 60, 30]) {
+      baked = raw.slice(0, MAX_FRAMES).map(list => bakedStrokes(list, room, perStroke));
+      if (JSON.stringify(baked.map(frame => frame.strokes)).length < 1_500_000) break;
+      baked = null;
+    }
+    if (!baked) { labError('Too much to bake into one scene. Try fewer frames, or a sketch with fewer ink() calls.'); return; }
+    if (!baked.some(frame => frame.strokes.length)) { labError('Nothing was inked. Bake captures what ink() and inkStroke() draw.'); return; }
+    const title = take.title.replace(/^[+\u270e]\s*/, '').slice(0, 60) || 'Sketch';
+    stopPlay();
+    pushUndo();
+    const stacks = baked.map(frame => [
+      ...base.map(layer => newLayer(layer.name, { visible: keep && layer.visible, opacity: layer.opacity, strokes: layer.strokes.slice(),
+        asset: layer.asset || null, backdrop: layer.backdrop || null })),
+      newLayer(`\u27e8/\u27e9 ${title}`.slice(0, 40), { strokes: frame.strokes })
+    ]);
+    frames = stacks;
+    frameIndex = 0;
+    layers = frames[0];
+    activeId = layers[layers.length - 1].id;
+    fps = MOTION_FPS;
+    $('fps').value = String(MOTION_FPS);
+    sceneMotion = null;
+    sceneSketch = { by: take.by, title: title.slice(0, 80), prompt: take.prompt.slice(0, 400), code: take.code, frames: stacks.length };
+    if (!editing || editing.kind !== 'shot') {
+      if (!CODE.test($('title').value.trim())) {
+        const stamp = new Date();
+        $('title').value = `Lab_${String(stamp.getHours()).padStart(2, '0')}${String(stamp.getMinutes()).padStart(2, '0')}`;
+      }
+      if (!$('description').value.trim()) $('description').value = (take.prompt || `${title}: a code sketch over my drawing`).slice(0, 200);
+    }
+    logEvent(take.by === 'ai' ? 'ai' : 'artist', 'Lab bake', `${title} (${take.by === 'ai' ? 'AI-written' : take.by === 'preset' ? 'preset' : 'your code'}): ${stacks.length} frames`);
+    recount();
+    rebuildOnion();
+    rebuildAll();
+    renderFrames();
+    renderLayersPanel();
+    if (saveKind !== 'shot' && !editing) setSaveKind('shot');
+    renderSaveKind();
+    closeLab();
+    play();
+    const perFrame = Math.round(baked.reduce((n, frame) => n + frame.strokes.length, 0) / baked.length);
+    const trimmed = baked.some(frame => frame.trimmed);
+    message('drawing-status', `\u2913 Baked ${stacks.length} frames from \u201c${title}\u201d: about ${plural(perFrame, 'stroke')} a frame, all editable.${trimmed ? ' Some frames were trimmed to fit the canvas limits.' : ''} ${keep ? 'Your drawing stays underneath.' : 'Your original layers are kept, hidden.'}`, false, [
+      { label: '\u21b6 Undo', tip: 'Undo|Your drawing exactly as it was.', run: () => { undo(); message('drawing-status', 'Undone. Your drawing is back; the Lab still has your takes.'); } },
+      { label: '\u27e8/\u27e9 Back to the Lab', run: () => openLab() }]);
+  }
+  function openLab() {
+    if (busy() || $('lab').open) return;
+    if (!hasInk()) { flashTray('Draw something first: the Lab works on your strokes.', true); canvas.scrollIntoView({ behavior: 'smooth', block: 'center' }); return; }
+    stopPlay();
+    if (motionDraft) skipMotion();
+    if (document.body.classList.contains('focus-mode')) setFocus(false);
+    const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    // The page tilts back and the lights go down: your drawing is about to become numbers.
+    $('canvas-frame').classList.add('lab-tilt');
+    setTimeout(() => {
+      $('canvas-frame').classList.remove('lab-tilt');
+      $('lab').showModal();
+      document.body.classList.add('lab-open');
+      if (labAt < 0) $('lab-presets').querySelector('button').click();
+      else runLab(labTakes[labAt].code === $('lab-code').value ? labTakes[labAt].code : $('lab-code').value);
+    }, still ? 0 : 380);
+  }
+  function closeLab() {
+    if (!$('lab').open) return;
+    clearTimeout(labWatch);
+    labRun++;
+    labFrame().removeAttribute('srcdoc'); // the sketch stops; nothing runs in the background
+    $('lab').close();
+  }
+  $('lab').addEventListener('close', () => { document.body.classList.remove('lab-open'); labRun++; labFrame().removeAttribute('srcdoc'); });
+  $('lab-open').addEventListener('click', openLab);
+  $('lab-close').addEventListener('click', closeLab);
+  $('lab').addEventListener('keydown', event => { if (event.key === 'Escape' && event.target !== $('lab-code')) { event.preventDefault(); closeLab(); } });
+  $('lab').addEventListener('cancel', event => { event.preventDefault(); closeLab(); });
+  MENU_ACTIONS.lab = () => openLab();
+
   // ---------------------------------------------------------------- offline: airplane mode is a studio, not an error page
   // Everything that's yours keeps working (pen, layers, frames, kit, stamps, quick moves, effects). Everything that
   // needs the internet (Gemini, Voyage search, your library, sharing, voice) is hidden here and refused by `reach`.
@@ -6837,7 +7333,7 @@
       } else {
         // The same compact shape a saved scene uses: frames 2..N as poses of frame 1.
         await draftStore('readwrite', store => store.put({ v: 1, at: Date.now(), owner: account?.user?.id || lastUser(),
-          title: $('title').value, description: $('description').value, fps, motion: sceneMotion,
+          title: $('title').value, description: $('description').value, fps, motion: sceneMotion, sketch: sceneSketch,
           layers: docStack(frames[0]), frames: frames.slice(1).map(stack => ({ layers: compactStack(stack, frames[0]) })) }, DRAFT_KEY));
       }
       draftRevision = at;
@@ -6860,6 +7356,7 @@
     layers = frames[0];
     activeId = layers[layers.length - 1].id;
     sceneMotion = draft.motion || null;
+    sceneSketch = draft.sketch || null;
     fps = draft.fps || 12;
     $('fps').value = String(fps);
     $('title').value = draft.title || '';

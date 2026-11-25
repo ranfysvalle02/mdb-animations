@@ -154,6 +154,9 @@ def shot_story(shot: Shot, cast: list[str]) -> str:
         if beats:
             parts.append("Beats: " + ", ".join(beats))
         parts.append(f"{len(shot.frames) + 1} frames, {(len(shot.frames) + 1) / shot.fps:.0f} seconds of animation")
+    if shot.sketch:
+        parts.append(f"Generative code sketch: {shot.sketch.title}. {shot.sketch.prompt}")
+        parts.append(f"{len(shot.frames) + 1} frames baked from code")
     if cast:
         parts.append("Cast: " + ", ".join(cast))
     names = dict.fromkeys(layer.name for layer in shot.layers if layer.visible and layer.strokes)
@@ -645,7 +648,7 @@ class Production(Scoped):
         record = self.get_shot(shot_id)
         if record is None:
             raise ProductionError("Shot not found.")
-        fields = ("code", "project", "sequence", "status", "assignee", "description", "tags", "layers", "frames", "fps", "motion")
+        fields = ("code", "project", "sequence", "status", "assignee", "description", "tags", "layers", "frames", "fps", "motion", "sketch")
         return Shot.model_validate({field: record[field] for field in fields if field in record})
 
     def sync_asset(self, shot_id: str, asset_id: str) -> dict:

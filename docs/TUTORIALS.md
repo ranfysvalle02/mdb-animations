@@ -3,6 +3,11 @@
 Seven short tutorials, about two minutes each. Do them in order the first time; each builds on the last.
 Everything here works with a finger, a stylus, or a mouse. On touch screens, tap with two fingers to undo and three to redo.
 
+**Your strokes, as code.** Tap **⟨/⟩ Lab** (or press **L**). Pick 🧊 *Time sculpture* and drag to orbit your drawing
+in 3D, ordered by when you drew each line. Try 🌬️ *Flow field*, change `strength = 26` to `60`, and press ⌘/Ctrl+Enter.
+Ask AI for something new (*"make my lines spiral into a galaxy"*), flip between takes, then **⤓ Bake to frames** to turn
+the loop into an editable flipbook. Undo brings your drawing back.
+
 **No signal? Keep drawing.** Install Inkling from the ☰ menu (or Share → Add to Home Screen on iPhone) and it opens in
 airplane mode. Drawing, layers, frames, stamps, effects, and quick moves all work offline; AI, search, and saving to
 your library wait for the connection. Your drawing is kept on the device, so nothing is lost on a reload.

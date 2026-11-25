@@ -61,6 +61,7 @@
       <button type="button" data-go="draw" style="--i:0"><span class="menu-icon">&#9999;&#65039;</span><span><b>Draw</b><small>Back to your canvas</small></span></button>
       <button type="button" data-go="starters" style="--i:1"><span class="menu-icon">&#10024;</span><span><b>Starters</b><small>A beach, outer space, a character sheet</small></span></button>
       <button type="button" data-go="ai" data-online style="--i:2"><span class="menu-icon">&#10022;</span><span><b>AI helpers</b><small>Sketch a start, refine, fix a spot, variations</small></span></button>
+      <button type="button" data-go="lab" style="--i:3"><span class="menu-icon">&#10216;/&#10217;</span><span><b>Lab</b><small>Your strokes as code: 3D, Processing, AI-written sketches</small></span></button>
       <button type="button" data-go="tools" style="--i:3"><span class="menu-icon">&#9636;</span><span><b>Layers &amp; frames</b><small>Layers, flipbook frames, download</small></span></button>
       <button type="button" data-go="save" data-online style="--i:4"><span class="menu-icon">&#8595;</span><span><b>Save to your library</b><small>Name it, tag it, share it</small></span></button>
       <button type="button" data-go="find" data-online style="--i:5"><span class="menu-icon">&#9678;</span><span><b>Find your art</b><small>Search by words, voice, or a sketch</small></span></button>
@@ -102,6 +103,7 @@
           </div>
           <div class="history" role="group" aria-label="History"><button type="button" id="undo" class="icon-button" disabled aria-label="Undo" data-tip="Undo &middot; Cmd/Ctrl+Z">&#8630;</button><button type="button" id="redo" class="icon-button" disabled aria-label="Redo" data-tip="Redo &middot; Shift+Cmd/Ctrl+Z">&#8631;</button></div>
           <button type="button" id="focus-toggle" class="focus-button" aria-label="Focus mode" aria-pressed="false" data-tip="Focus &middot; F|Full-screen canvas for finger and pencil. Esc to leave."><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg><span>Focus</span></button>
+          <button type="button" id="lab-open" class="focus-button lab-button" aria-label="Open the Lab" data-tip="Lab &middot; L|Your strokes as code: 3D, presets, and AI-written p5.js you can read and edit. Bake it back into frames."><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5M13.5 4l-3 16"/></svg><span>Lab</span></button>
           <div class="toolbar-row">
             <div class="swatches" id="swatches" role="group" aria-label="Ink colors">
               <button type="button" class="ink-dot" data-color="#123b38" aria-label="Ink" aria-pressed="true" style="--c:#123b38"></button>
@@ -592,6 +594,7 @@
         <div><dt><kbd>F</kbd></dt><dd>Focus: full-screen paper</dd></div>
         <div><dt><kbd>W</kbd></dt><dd>Magic wand: a nudge to get going</dd></div>
         <div><dt><kbd>A</kbd></dt><dd>Flipbook it</dd></div>
+        <div><dt><kbd>L</kbd></dt><dd>Open the Lab (your strokes as code)</dd></div>
         <div><dt><kbd>&larr;</kbd> <kbd>&rarr;</kbd> <kbd>&#9166;</kbd> <kbd>Esc</kbd></dt><dd>Flip takes, keep one, discard</dd></div>
         <div><dt><kbd>?</kbd></dt><dd>This page</dd></div>
       </dl>
@@ -609,6 +612,7 @@
         <div><dt>&#129516; Similar assets</dt><dd>Near-duplicates in your library.</dd></div>
         <div><dt>&#127902; Flipbook</dt><dd>In-betweening without redrawing: your exact strokes, posed in motion.</dd></div>
         <div><dt>&#10022; Talk to</dt><dd>Aim your words at one layer or a few. Everyone else keeps their motion.</dd></div>
+        <div><dt>&#10216;/&#10217; Lab</dt><dd>Your strokes as numbers: 3D, Processing-style code, AI-written sketches you can read. Bake it back to frames.</dd></div>
         <div><dt>&#9992;&#65039; Offline</dt><dd>Install it, then draw in airplane mode. Your drawing is kept on this device; AI and search wait for the signal.</dd></div>
         <div><dt>&#10052;&#65039; Effects</dt><dd>Snow, rain, sparkles, confetti, bubbles: tiny strokes drawn by code. Free, instant, no AI.</dd></div>
         <div><dt>&#9312; Takes</dt><dd>Every AI attempt, side by side. Flip back, branch, hold to compare. Nothing is final until you keep it, and Undo brings the takes back.</dd></div>
@@ -702,6 +706,7 @@
             <li><b>Tags</b> your saves so search just works (skip it by adding your own).</li>
             <li><b>Sparks</b>: a blue-pencil sketch to trace, a fix for a stuck spot, a refinement. Drafts you keep or skip, marked as AI forever.</li>
             <li><b>Flipbooks</b>: picks a few key poses for the layers you aim at. Plain math fills the frames in between. Your strokes are never redrawn, and effects like snow or rain are code, not AI.</li>
+            <li><b>Lab sketches</b>: writes readable p5.js (Processing for the web) that moves your strokes. It runs sandboxed in your browser with no network, and you can edit every line.</li>
             <li><b>AI video</b> (Gemini Omni): a new take inspired by your art. It may restyle it, it is paid, and <b>What the AI saw</b> shows the exact picture and words it got.</li>
           </ul>
         </div>
@@ -715,6 +720,49 @@
           <li><b>Breakdown</b> replays any drawing, stroke by stroke.</li>
           <li>Stamping and copy-paste reuse your own lines with no AI at all; flipbooks pose your own lines too.</li>
         </ul>
+      </section>
+    </dialog>
+
+    <dialog id="lab" class="lab" aria-labelledby="lab-title">
+      <div class="lab-stage">
+        <iframe id="lab-frame" class="lab-frame" title="Your sketch, running" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe>
+        <p id="lab-hint" class="lab-hint"></p>
+        <button type="button" id="lab-error" class="lab-error" hidden></button>
+      </div>
+      <section class="lab-panel" aria-label="Lab">
+        <div class="lab-head">
+          <div><p class="eyebrow">&#10216;/&#10217; Lab</p><h2 id="lab-title">Your strokes, as numbers.</h2><p class="muted">Code moves them. AI can write it. You can read every line.</p></div>
+          <button type="button" id="lab-close" class="close" aria-label="Close the Lab">&times;</button>
+        </div>
+        <div id="lab-presets" class="lab-presets" role="group" aria-label="Start from a sketch"></div>
+        <form id="lab-ask" class="lab-ask" data-online autocomplete="off">
+          <span aria-hidden="true">&#10022;</span>
+          <label class="sr-only" for="lab-prompt">Ask AI to write the code</label>
+          <input id="lab-prompt" maxlength="400" enterkeyhint="go" placeholder="Make my lines spiral into a galaxy">
+          <button type="submit" id="lab-go">Write it</button>
+        </form>
+        <div id="lab-takes" class="takes lab-takes" role="group" aria-label="Sketch takes" hidden></div>
+        <p id="lab-note" class="lab-note" aria-live="polite"></p>
+        <div class="lab-code-wrap">
+          <div class="lab-code-head"><span>sketch.js</span><small id="lab-lines"></small></div>
+          <textarea id="lab-code" class="lab-code" maxlength="12000" spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off" wrap="off" aria-label="Sketch code"></textarea>
+        </div>
+        <div class="lab-actions">
+          <button type="button" id="lab-run" class="lab-run" data-tip="Run &middot; Cmd/Ctrl+Enter|Your edits become a new take. Runs in a sandbox with no network.">&#9654; Run</button>
+          <label class="lab-frames"><span class="sr-only">Frames to bake</span><select id="lab-frames"><option value="24">24 frames &middot; 3 s</option><option value="48" selected>48 frames &middot; 6 s</option><option value="80">80 frames &middot; 10 s</option></select></label>
+          <button type="button" id="lab-bake" class="lab-bake" data-tip="Bake to frames|Every frame of the loop becomes editable strokes in a flipbook. Undo brings your drawing back.">&#10515; Bake to frames</button>
+        </div>
+        <details class="lab-api"><summary>The Inkling API</summary>
+          <dl>
+            <div><dt><code>strokes</code></dt><dd>Your drawing, in the order you drew it: <code>{points: [{x, y, pressure}], color, width, layer, order}</code>. The paper is <code>W</code> &times; <code>H</code> (1000 &times; 650).</dd></div>
+            <div><dt><code>frames</code>, <code>layers</code></dt><dd>Every flipbook frame (each a list of strokes), and frame 1 by layer.</dd></div>
+            <div><dt><code>ink(points, {color, width, fill})</code></dt><dd>Draws a stroke <i>and</i> records it for baking. Points can have a <code>z</code> in 3D.</dd></div>
+            <div><dt><code>inkStroke(stroke, map)</code></dt><dd>Inks one of your strokes, moving each point with <code>map(p, i)</code>.</dd></div>
+            <div><dt><code>loopT()</code>, <code>LOOP</code></dt><dd>0&ndash;1 through the loop that gets baked. Drive motion with it for a seamless flipbook.</dd></div>
+            <div><dt><code>KEEP_DRAWING = true</code></dt><dd>Keeps your drawing visible under the baked layer.</dd></div>
+          </dl>
+          <p class="muted">Plain <a href="https://p5js.org" target="_blank" rel="noopener">p5.js</a>, Processing for the web, in a sandbox with no network. <code>random()</code> and <code>noise()</code> are seeded, so a bake is repeatable.</p>
+        </details>
       </section>
     </dialog>
 

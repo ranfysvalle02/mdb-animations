@@ -560,3 +560,22 @@ def test_refine_keeps_the_artists_strokes_by_index_and_never_touches_placed_asse
     placed = {**ink, "asset": {"asset_id": "0b6b6a4e-3f0a-4c55-9e43-7f0f3f1a2b3c", "version": 1}}
     with pytest.raises(ValidationError, match="linked"):
         RefineRequest.model_validate({"prompt": "add a smile", "target": 0, "layers": [placed]})
+
+
+def test_code_endpoint_sends_the_drawing_and_current_sketch_to_the_ai(client):
+    http, _ = client
+    http.ai.code_sketch.return_value = {"kind": "code", "code": "function setup(){}\nfunction draw(){}", "note": "spins"}
+    body = {"prompt": "spiral into a galaxy", "code": "function draw(){}", "layers": [{"strokes": []}]}
+    assert http.post("/api/sparks/code", json=body).json()["note"] == "spins"
+    sent = http.ai.code_sketch.call_args.args[0]
+    assert sent.prompt == "spiral into a galaxy" and sent.code == "function draw(){}"
+    assert http.post("/api/sparks/code", json={**body, "prompt": "go"}).status_code == 422
+    assert http.post("/api/sparks/code", json={**body, "code": "x" * 12_001}).status_code == 422
+
+
+def test_ai_sketches_are_unfenced_bounded_and_complete():
+    from backend.ai import AIError, clean_sketch
+    assert clean_sketch("```js\nfunction setup() {}\nfunction draw() {}\n```") == "function setup() {}\nfunction draw() {}"
+    for bad in ("function draw() {}", "let x = 1;", "function setup(){}\nfunction draw(){}\n" + "//" * 7000):
+        with pytest.raises(AIError):
+            clean_sketch(bad)

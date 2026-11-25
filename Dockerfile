@@ -10,6 +10,7 @@ RUN pip install -r backend/requirements.txt \
 COPY backend backend
 COPY index.html studio.html studio.js studio.css og.png manifest.webmanifest sw.js ./
 COPY icons icons
+COPY lab lab
 USER studio
 # Hosts like Render assign the port via $PORT (default 8000 locally).
 ENV PORT=8000
