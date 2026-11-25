@@ -1,0 +1,66 @@
+name: animation-studio
+
+x-studio: &studio
+  build: .
+  environment:
+    MONGODB_URI: ${MONGODB_URI:-mongodb://atlas:27017/?directConnection=true}
+    MONGODB_DB: ${MONGODB_DB:-animation_studio}
+    VOYAGE_API_KEY: ${VOYAGE_API_KEY:?Set VOYAGE_API_KEY in .env before starting the studio}
+    GEMINI_API_KEY: ${GEMINI_API_KEY:?Set GEMINI_API_KEY in .env to enable sparks and auto-tags}
+    GEMINI_TEXT_MODEL: ${GEMINI_TEXT_MODEL:-gemini-3.5-flash}
+    GEMINI_IMAGE_MODEL: ${GEMINI_IMAGE_MODEL:-gemini-3.1-flash-image}
+    WHERE_USED_MIN_SCORE: ${WHERE_USED_MIN_SCORE:-0.75}
+    SIMILAR_ASSET_MIN_SCORE: ${SIMILAR_ASSET_MIN_SCORE:-0.75}
+    # Accounts (m-stash). The pk_ key is a publishable, frontend-safe key; never put an sk_ key here.
+    INKLING_AUTH: ${INKLING_AUTH:-mstash}
+    MSTASH_API: ${MSTASH_API:-https://m-stash.onrender.com}
+    MSTASH_APP_KEY: ${MSTASH_APP_KEY:-pk_yHSFykvx0dOwKjY0_RqelF6Cea-ll2j5}
+    MSTASH_APP_ID: ${MSTASH_APP_ID:-6b066706e721f4b3abbaee3b}
+  init: true
+  read_only: true
+  tmpfs:
+    - /tmp:size=64m
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+
+services:
+  atlas:
+    image: mongodb/mongodb-atlas-local:8.0
+    hostname: atlas
+    restart: unless-stopped
+    volumes:
+      - atlas-data:/data/db
+      - atlas-config:/data/configdb
+      - atlas-search:/data/mongot
+
+  setup:
+    <<: *studio
+    command: ["python", "-m", "backend.setup"]
+    restart: "no"
+    healthcheck:
+      disable: true
+    depends_on:
+      atlas:
+        condition: service_healthy
+
+  studio:
+    <<: *studio
+    ports:
+      - "127.0.0.1:${PORT:-8000}:8000"
+    restart: unless-stopped
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/ready', timeout=15)"]
+      interval: 10s
+      timeout: 20s
+      retries: 6
+      start_period: 10s
+
+volumes:
+  atlas-data:
+  atlas-config:
+  atlas-search:

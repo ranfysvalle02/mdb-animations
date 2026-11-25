@@ -1,0 +1,305 @@
+import re
+from typing import Annotated, Literal
+
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
+
+Unit = Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)]
+MAX_POINTS = 20000
+MAX_STROKES = 1000
+MAX_LAYERS = 12
+MAX_TAGS = 12
+MAX_FRAMES = 24
+MAX_EVENTS = 60
+FPS_CHOICES = (4, 6, 8, 12, 24)
+HEX_COLOR = r"^#[0-9a-fA-F]{6}$"
+UUID_PATTERN = r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+CODE_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,39}$"
+ASSET_TYPES = ("character", "prop", "environment", "fx", "other")
+SHOT_STATUSES = ("todo", "in_progress", "review", "approved")
+AssetType = Literal["character", "prop", "environment", "fx", "other"]
+ShotStatus = Literal["todo", "in_progress", "review", "approved"]
+STATUS_LABELS = {"todo": "To do", "in_progress": "In progress", "review": "In review", "approved": "Approved"}
+Code = Annotated[str, Field(pattern=CODE_PATTERN)]
+TAG_PATTERN = re.compile(r"^[a-z0-9][a-z0-9 -]{0,29}$")
+
+
+def normalize_tag(value: str) -> str:
+    tag = " ".join(value.lower().split())
+    if not TAG_PATTERN.match(tag):
+        raise ValueError("Tags are 1-30 letters, numbers, spaces, or hyphens.")
+    return tag
+
+
+def clean_tags(values: list[str]) -> list[str]:
+    """Normalize, drop invalid entries, and dedupe (for model-generated tags)."""
+    tags: list[str] = []
+    for value in values:
+        try:
+            tag = normalize_tag(value)
+        except ValueError:
+            continue
+        if tag not in tags:
+            tags.append(tag)
+    return tags[:MAX_TAGS]
+
+
+Tag = Annotated[str, AfterValidator(normalize_tag)]
+
+
+class Point(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    x: Unit
+    y: Unit
+    pressure: Unit = 0.5
+
+
+class Stroke(BaseModel):
+    """Freehand ink, a shape outline (optionally filled), or an eraser pass within its layer."""
+    model_config = ConfigDict(extra="forbid")
+    color: str = Field(pattern=HEX_COLOR)
+    width: float = Field(ge=1, le=40, allow_inf_nan=False)
+    points: list[Point] = Field(min_length=1, max_length=MAX_POINTS)
+    erase: bool = False
+    fill: str | None = Field(default=None, pattern=HEX_COLOR)
+    # Provenance: AI-made strokes stay marked after the artist accepts them, so a breakdown can
+    # always say how much of a drawing is the artist's hand. Hand strokes carry no flag at all.
+    ai: bool = Field(default=False, exclude_if=lambda value: not value)
+    kit: bool = Field(default=False, exclude_if=lambda value: not value)  # came with a starter kit
+    # Process: drawing order across layers (for replay) and how long the stroke took to draw.
+    seq: int | None = Field(default=None, ge=0, le=10_000_000, exclude_if=lambda value: value is None)
+    ms: int | None = Field(default=None, ge=0, le=3_600_000, exclude_if=lambda value: value is None)
+
+    @model_validator(mode="after")
+    def erasers_do_not_fill(self) -> "Stroke":
+        if self.erase and self.fill:
+            raise ValueError("An eraser stroke cannot have a fill.")
+        return self
+
+
+class AssetLink(BaseModel):
+    """A layer placed from a library asset: which asset, and which version was placed."""
+    model_config = ConfigDict(extra="forbid")
+    asset_id: str = Field(pattern=UUID_PATTERN)
+    version: int = Field(ge=1, le=100_000)
+
+
+class Layer(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    name: str = Field(default="Layer 1", min_length=1, max_length=40)
+    visible: bool = True
+    opacity: Unit = 1.0
+    strokes: list[Stroke] = Field(default_factory=list, max_length=MAX_STROKES)
+    # Only placed layers carry a link; plain layers stay exactly as they were before assets existed.
+    asset: AssetLink | None = Field(default=None, exclude_if=lambda value: value is None)
+
+
+def upgrade_legacy(data: object) -> object:
+    """Drawings saved before layers had a flat ``strokes`` list: that becomes one layer."""
+    if isinstance(data, dict) and "strokes" in data and "layers" not in data:
+        data = dict(data)
+        data["layers"] = [{"name": "Layer 1", "strokes": data.pop("strokes")}]
+    return data
+
+
+def check_layers(layers: list[Layer], *, require_ink: bool) -> None:
+    strokes = [stroke for layer in layers for stroke in layer.strokes]
+    if len(strokes) > MAX_STROKES:
+        raise ValueError("A drawing may contain at most 1,000 strokes and shapes.")
+    if sum(len(stroke.points) for stroke in strokes) > MAX_POINTS:
+        raise ValueError("A drawing may contain at most 20,000 points.")
+    if require_ink and not any(layer.visible and any(not s.erase for s in layer.strokes) for layer in layers):
+        raise ValueError("Draw something on a visible layer first.")
+
+
+class HistoryEvent(BaseModel):
+    """One line of the audit trail: who did what (the artist, the AI at the artist's request, or the studio)."""
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    at: str = Field(min_length=10, max_length=40)
+    by: Literal["artist", "ai", "studio"]
+    action: str = Field(min_length=1, max_length=40)
+    detail: str = Field(default="", max_length=240)
+
+
+History = Annotated[list[HistoryEvent], Field(default_factory=list, max_length=MAX_EVENTS)]
+
+
+class Origin(BaseModel):
+    """Where an asset came from when it isn't drawn from scratch: an AI variation of another asset."""
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    kind: Literal["variation"] = "variation"
+    asset_id: str = Field(pattern=UUID_PATTERN)
+    version: int = Field(ge=1, le=100_000)
+    brief: str = Field(default="", max_length=200)
+    kept: int = Field(default=0, ge=0, le=MAX_STROKES)
+    added: int = Field(default=0, ge=0, le=MAX_STROKES)
+
+
+class Frame(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    layers: list[Layer] = Field(min_length=1, max_length=MAX_LAYERS)
+
+
+class Drawing(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    title: str = Field(min_length=1, max_length=120)
+    description: str = Field(default="", max_length=2000)
+    layers: list[Layer] = Field(min_length=1, max_length=MAX_LAYERS)
+    tags: list[Tag] = Field(default_factory=list, max_length=MAX_TAGS)
+
+    _legacy = model_validator(mode="before")(upgrade_legacy)
+
+    @model_validator(mode="after")
+    def limits(self) -> "Drawing":
+        check_layers(self.layers, require_ink=True)
+        self.tags = list(dict.fromkeys(self.tags))
+        return self
+
+
+class Asset(BaseModel):
+    """A reusable character, prop, or environment drawing."""
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    name: str = Field(min_length=1, max_length=80)
+    type: AssetType = "prop"
+    description: str = Field(default="", max_length=2000)
+    layers: list[Layer] = Field(min_length=1, max_length=MAX_LAYERS)
+    tags: list[Tag] = Field(default_factory=list, max_length=MAX_TAGS)
+    origin: Origin | None = None
+    history: History  # new events since the last save; the server appends them to the stored trail
+
+    @model_validator(mode="after")
+    def limits(self) -> "Asset":
+        check_layers(self.layers, require_ink=True)
+        if any(layer.asset for layer in self.layers):
+            raise ValueError("Assets can't contain placed assets yet; flatten it into a drawing first.")
+        self.tags = list(dict.fromkeys(self.tags))
+        return self
+
+
+class Shot(BaseModel):
+    """A shot: production metadata next to the layered artwork (placed assets are linked layers)."""
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    code: Code
+    project: Code
+    sequence: Code
+    status: ShotStatus = "todo"
+    assignee: str = Field(default="", max_length=60)
+    description: str = Field(default="", max_length=2000)
+    layers: list[Layer] = Field(min_length=1, max_length=MAX_LAYERS)  # frame 1: thumbnail, vectors, elements
+    # Frames 2..N of a flipbook animation; each frame has its own layer stack.
+    frames: list[Frame] = Field(default_factory=list, max_length=MAX_FRAMES - 1)
+    fps: Literal[4, 6, 8, 12, 24] = 12
+    tags: list[Tag] = Field(default_factory=list, max_length=MAX_TAGS)
+    history: History
+
+    def all_frames(self) -> list[list[Layer]]:
+        return [self.layers, *(frame.layers for frame in self.frames)]
+
+    @model_validator(mode="after")
+    def limits(self) -> "Shot":
+        check_layers(self.layers, require_ink=True)
+        for frame in self.frames:
+            check_layers(frame.layers, require_ink=False)
+        self.tags = list(dict.fromkeys(self.tags))
+        return self
+
+
+class ShotUpdate(BaseModel):
+    """Operational changes only: no artwork, so no re-embedding."""
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    status: ShotStatus | None = None
+    assignee: str | None = Field(default=None, max_length=60)
+
+    @model_validator(mode="after")
+    def something(self) -> "ShotUpdate":
+        if self.status is None and self.assignee is None:
+            raise ValueError("Send a status or an assignee.")
+        return self
+
+
+class Region(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    x: Unit
+    y: Unit
+    w: float = Field(ge=0.02, le=1, allow_inf_nan=False)
+    h: float = Field(ge=0.02, le=1, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def inside_canvas(self) -> "Region":
+        if self.x + self.w > 1.0001 or self.y + self.h > 1.0001:
+            raise ValueError("The spark region must lie inside the canvas.")
+        return self
+
+
+class SparkRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    region: Region
+    prompt: str = Field(default="", max_length=300)
+    title: str = Field(default="", max_length=120)
+    layers: list[Layer] = Field(default_factory=list, max_length=MAX_LAYERS)
+
+    _legacy = model_validator(mode="before")(upgrade_legacy)
+
+    @model_validator(mode="after")
+    def limits(self) -> "SparkRequest":
+        check_layers(self.layers, require_ink=False)
+        return self
+
+
+class SketchRequest(BaseModel):
+    """Ask AI for a blue-pencil starting layer; the artist accepts, edits, and draws over it."""
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    prompt: str = Field(min_length=3, max_length=200)
+    title: str = Field(default="", max_length=120)
+    layers: list[Layer] = Field(default_factory=list, max_length=MAX_LAYERS)
+
+    @model_validator(mode="after")
+    def limits(self) -> "SketchRequest":
+        check_layers(self.layers, require_ink=False)
+        return self
+
+
+class LayersRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    layers: list[Layer] = Field(min_length=1, max_length=MAX_LAYERS)
+
+    @model_validator(mode="after")
+    def limits(self) -> "LayersRequest":
+        check_layers(self.layers, require_ink=True)
+        return self
+
+
+class VariationPlanRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    goal: str = Field(min_length=3, max_length=200)
+    count: int = Field(default=6, ge=1, le=9)
+
+
+class VariationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    brief: str = Field(min_length=3, max_length=200)
+
+
+class SketchSearch(BaseModel):
+    """Search with a drawing: the visible ink is the query."""
+    model_config = ConfigDict(extra="forbid")
+    scope: Literal["asset", "shot", "frame", "idea"] = "frame"
+    layers: list[Layer] = Field(min_length=1, max_length=MAX_LAYERS)
+
+    @model_validator(mode="after")
+    def limits(self) -> "SketchSearch":
+        check_layers(self.layers, require_ink=True)
+        return self
+
+
+class TagRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    title: str = Field(default="", max_length=120)
+    description: str = Field(default="", max_length=2000)
+    layers: list[Layer] = Field(min_length=1, max_length=MAX_LAYERS)
+
+    _legacy = model_validator(mode="before")(upgrade_legacy)
+
+    @model_validator(mode="after")
+    def limits(self) -> "TagRequest":
+        check_layers(self.layers, require_ink=True)
+        return self

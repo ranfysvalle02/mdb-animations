@@ -1,0 +1,134 @@
+# The Inkling tour
+
+Six short tutorials, about two minutes each. Do them in order the first time; each builds on the last.
+Everything here works with a finger, a stylus, or a mouse.
+
+| # | Tutorial | You'll learn |
+| --- | --- | --- |
+| 1 | [Your studio in 30 seconds](#1-your-studio-in-30-seconds) | Sign up, pick the demo library |
+| 2 | [Never start from a blank page](#2-never-start-from-a-blank-page) | Starters, Ask AI |
+| 3 | [Draw it once, grow a cast](#3-draw-it-once-grow-a-cast) | Save an asset, variations, the duplicate check |
+| 4 | [Animate it](#4-animate-it) | Place, frames, onion skin, playback |
+| 5 | [Find any frame](#5-find-any-frame) | Search by words, by doodle, by asset |
+| 6 | [Always know: where, and how it was made](#6-always-know-where-and-how-it-was-made) | Where used, Breakdown, replay, evolution |
+
+---
+
+## 1. Your studio in 30 seconds
+
+![Sign-in](screenshots/01-sign-in.png)
+
+1. Open Inkling and choose **Create account**: just an email and a password of 12 or more characters.
+   (Already have one? **Sign in**. Used the wrong tab? If the password matches, it lets you in anyway.)
+2. Pick how to start:
+
+![Welcome](screenshots/02-welcome.png)
+
+- **Start with the demo library**: a private copy of Little Fox, Red Rocket, and a handful of scenes,
+  including a 6-frame liftoff. Change anything; nobody else sees it.
+- **Start fresh**: a blank page, with starters one tap away.
+
+> Your library is private. Every save, search, and vector lookup is scoped to your account. Tap your
+> initial (top right) to see your counts or sign out.
+
+## 2. Never start from a blank page
+
+**Starters.** On an empty canvas, starter scenes float along the bottom of the paper. Tap one and you
+get plain, editable layers (sky, sea, sand, palm) with an empty **Draw here** on top. The strip fades the
+moment your pencil touches the page.
+
+![The beach starter: five layers you can edit](screenshots/03-starter-beach.png)
+
+**Ask AI → Sketch a layer.** Type what you want (*"a lighthouse on a rocky cliff"*) and Gemini drafts
+blue-pencil strokes that draw themselves in. Then choose:
+
+- **Use sketch** (Enter): it lands as a faint layer *under* your ink, as scaffolding to trace, erase, or hide.
+- **Skip** (Esc), or **↻** for another take.
+
+![Ask AI drafts a blue-pencil layer; you decide](screenshots/04-ask-ai-sketch.png)
+
+> **Fix a spot** works the same way, but for a box you draw: *"fix the fingers"*. Nothing lands without
+> your yes, and every AI stroke is marked as AI, forever.
+
+## 3. Draw it once, grow a cast
+
+1. Draw something (try **Focus** for full-screen paper). In **Save as**, pick **◆ Asset**, give it a
+   name, and **Save asset**. Saving again later makes v2, v3, and so on.
+2. Before a *new* asset is saved, Voyage checks your library: *"This looks like Rocket Ship. Same thing?"*
+   Save it as the next version of that one, or as new.
+3. Need a squadron? On the asset, tap **✦ Variations**. You get an editable **plan** first (a name and
+   brief for each). Then AI edits **your own strokes** to match each brief. Keep the ones you like,
+   finish them by hand, and **Build a scene** with them.
+
+![Your library: the original, its variants, and how much of each is your hand](screenshots/05-library.png)
+
+Every card shows its version, where it's used, its lineage (*✦ variant of Red Rocket*), and its art math
+(*✍ 56% hand*, palette dots). **✍ Mostly by hand** and the color dots filter the library, and Voyage search
+too.
+
+## 4. Animate it
+
+1. On an asset, tap **◆ Place**: it drops into the canvas as a *linked* layer (◆ v2 in the Layers list).
+2. Tap **🎞 Animate it: add frame 2** (or **+ Frame**). Each new frame copies the last, like tracing on a
+   lightbox.
+3. Use **Move** to slide what moves. **Onion** shows the previous frame as a faint red ghost.
+4. Press **▶** or **Space** to play. Save as **▣ Scene** with a code, status, and artist.
+
+![Frame 5 of the liftoff, with frame 4 ghosted underneath](screenshots/09-flipbook.png)
+
+Placements stay linked to their asset and version in *every* frame, so a redraw of the asset can update
+them all at once (tutorial 6).
+
+## 5. Find any frame
+
+Open **Find anything** and pick a tab: **◆ Assets**, **▣ Scenes**, **🎞 Frames**, or **✎ Ideas**.
+
+**By words.** Describe the moment: *"the rocket flying high in the sky above the hills"*. Hits are
+grouped by scene, with the best frame first and chips for every frame. **Open frame N** puts it on the
+canvas, ready to tweak.
+
+![Search frames by describing them](screenshots/07-find-frames.png)
+
+**By doodle.** Sketch roughly what you're after (a little tree down low, a rocket up high) and tap **✏️**.
+Your drawing becomes the query. Composition matters, so the liftoff's **frame 6** (rocket highest) comes
+first.
+
+![Doodle it, and Inkling finds the frame](screenshots/08-search-by-drawing.png)
+
+**By asset.** On the Frames tab, pick an asset in **With** to list exactly the frames that place it,
+filterable by status (*Not approved*, *In review*...).
+
+## 6. Always know: where, and how it was made
+
+**Where used?** On any asset:
+
+![Where is Red Rocket used? Two scenes still show v1](screenshots/06-where-used.png)
+
+- **🔗 Used in**: every scene that placed it. **⚠ outdated** ones can **Update to v2** in one tap (the old
+  art is kept as a hidden backup layer).
+- **👀 Look-alikes**: scenes with something that *looks* like it but was never linked (someone redrew it).
+  **Yes, it's this asset** turns one into a linked use.
+- **🧬 Similar assets** (near-duplicates) and **🌱 Family** (the original and its variations).
+
+**🔍 Breakdown.** Who made it (your hand, AI you accepted, starter kit, reused assets), the art math, an
+exposure sheet layer by layer and frame by frame, and the full audit trail. Press **✎ Watch it being made**
+to replay it stroke by stroke, in the order it was drawn:
+
+![Little Fox, replayed: stroke 10 of 19, your hand](screenshots/10-watch-it-being-made.png)
+
+Scroll to **📈 Evolution** to see every saved version, from the first doodle on:
+
+![v1: 4 strokes. v2: 9. v3: 19, with two AI whiskers you accepted](screenshots/11-evolution.png)
+
+**⬇ Save replay** records the replay as a video (title card, captions, and an end card with
+*"19 strokes · 89% your hand · 23s pencil down"*). It's proof of the hand, for a portfolio or a client.
+
+<p align="center"><img src="screenshots/13-replay-phone.png" width="300" alt="The replay on a phone"></p>
+
+---
+
+**Shortcuts:** `F` Focus · `Space` play · `N` new frame · `,` / `.` previous/next frame · `[` / `]` brush size ·
+`Cmd/Ctrl+Z` undo · `Enter` accept an AI draft · `Esc` skip it.
+
+*Screenshots are generated by [`capture_screenshots.py`](capture_screenshots.py) against a running studio,
+so they can be refreshed whenever the UI changes.*

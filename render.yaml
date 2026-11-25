@@ -1,0 +1,39 @@
+# Render Blueprint: New > Blueprint > pick this repo. See docs/deploy-render.md.
+services:
+  - type: web
+    name: inkling
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: starter            # "free" works too, but sleeps when idle (first visit then takes ~1 min)
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      # Secrets: Render asks for these when you create the Blueprint.
+      - key: MONGODB_URI     # hosted Atlas (Flex or M10+: Inkling uses 5 vector indexes)
+        sync: false
+      - key: VOYAGE_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      # Accounts (m-stash). The pk_ key is publishable and safe to commit; never put an sk_ key here.
+      - key: MSTASH_APP_KEY
+        value: pk_yHSFykvx0dOwKjY0_RqelF6Cea-ll2j5
+      - key: MSTASH_APP_ID
+        value: 6b066706e721f4b3abbaee3b
+      - key: MSTASH_API
+        value: https://m-stash.onrender.com
+      # Runtime
+      - key: MONGODB_DB
+        value: inkling
+      - key: INKLING_SETUP_ON_START   # create collections + vector indexes on boot (idempotent)
+        value: "1"
+      - key: INKLING_SEED_DEMO        # seed the shared demo library once (billable Voyage calls, first boot only)
+        value: "1"
+      - key: TRUST_PROXY              # Render terminates TLS: honor X-Forwarded-Proto/For
+        value: "1"
+      - key: INKLING_SERVICE_KEY      # internal scripts' key (loopback only)
+        generateValue: true
+      - key: WHERE_USED_MIN_SCORE
+        value: "0.75"
+      - key: SIMILAR_ASSET_MIN_SCORE
+        value: "0.75"

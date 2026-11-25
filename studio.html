@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0b2422">
+  <meta name="description" content="Inkling: draw an asset once with your finger or pencil, animate it in scenes frame by frame, and find any asset or frame by describing or sketching it. AI drafts, you decide, and every stroke is remembered.">
+  <title>Inkling: draw it once, animate it anywhere</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M14 4C14 4 6 14 6 19.5a8 8 0 0 0 16 0C22 14 14 4 14 4z' fill='%23123b38'/%3E%3Cpath d='M25 3l1.3 3.2 3.2 1.3-3.2 1.3-1.3 3.2-1.3-3.2-3.2-1.3 3.2-1.3z' fill='%237c3aed'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/studio.css">
+  <script src="/studio.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="Inkling home">
+      <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><path d="M14 4C14 4 6 14 6 19.5a8 8 0 0 0 16 0C22 14 14 4 14 4z"/><path class="brand-spark" d="M25 3l1.3 3.2 3.2 1.3-3.2 1.3-1.3 3.2-1.3-3.2-3.2-1.3 3.2-1.3z"/></svg>
+      <span class="wordmark">inkling</span>
+    </a>
+    <span class="connection" data-tip="Your library|Saved in MongoDB Atlas. Searched by meaning with Voyage AI. AI drafts by Gemini."><span id="connection-dot" class="dot"></span><span id="connection">Connecting...</span></span>
+    <button type="button" id="help-open" class="help-button" aria-label="How Inkling works">?</button>
+    <button type="button" id="account-button" class="account-button" aria-label="Your account" aria-haspopup="menu" aria-expanded="false" hidden><span id="account-initial">?</span></button>
+    <div id="account-menu" class="account-menu" role="menu" hidden>
+      <p class="account-email" id="account-email"></p>
+      <p class="account-counts" id="account-counts"></p>
+      <p class="account-note">Your library is private to you.</p>
+      <button type="button" id="sign-out" class="pill" role="menuitem">Sign out</button>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <h1>Draw it once. <span>Animate it anywhere.</span></h1>
+      <p class="lede">Draw an asset with your finger or pencil. Drop it into scenes and tweak them frame by frame. Find any asset or frame by describing or sketching it. <b>AI drafts. You decide. Every stroke is remembered.</b></p>
+    </section>
+
+    <section id="guide" class="guide" aria-label="How it works" hidden>
+      <ol id="guide-steps" class="guide-steps"></ol>
+      <div class="guide-foot"><span id="guide-count">0 of 4</span><button type="button" id="guide-hide" class="link-button">Hide</button></div>
+    </section>
+
+    <section class="studio" aria-labelledby="canvas-heading">
+      <h2 id="canvas-heading" class="sr-only">Canvas</h2>
+      <div class="canvas-card">
+        <div class="toolbar" role="toolbar" aria-label="Drawing tools">
+          <div class="tools" role="group" aria-label="Tool">
+            <button type="button" class="tool" data-tool="pen" aria-pressed="true" aria-label="Pen" data-tip="Pen &middot; B|Pressure-sensitive with a stylus."><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20l4-1L19 8l-3-3L5 16z"/><path d="M14 7l3 3"/></svg></button>
+            <button type="button" class="tool" data-tool="eraser" aria-pressed="false" aria-label="Eraser" data-tip="Eraser &middot; E|Only erases the selected layer."><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 16l9-9 6 6-6 6H7z"/><path d="M8 11l6 6M13 19h8"/></svg></button>
+            <button type="button" class="tool" data-tool="line" aria-pressed="false" aria-label="Line" data-tip="Line &middot; L|Shift snaps to 45&deg;."><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19L19 5"/></svg></button>
+            <button type="button" class="tool" data-tool="rect" aria-pressed="false" aria-label="Rectangle" data-tip="Rectangle &middot; R|Shift for a square."><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="6" width="16" height="12" rx="1"/></svg></button>
+            <button type="button" class="tool" data-tool="ellipse" aria-pressed="false" aria-label="Ellipse" data-tip="Ellipse &middot; O|Shift for a circle."><svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="12" rx="8" ry="6"/></svg></button>
+            <button type="button" class="tool" data-tool="move" aria-pressed="false" aria-label="Move layer" data-tip="Move layer &middot; M|Drag to slide the whole selected layer. Animate a placed asset frame by frame."><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18M12 3l-3 3M12 3l3 3M12 21l-3-3M12 21l3-3M3 12l3-3M3 12l3 3M21 12l-3-3M21 12l-3 3"/></svg></button>
+            <button type="button" class="tool spark-tool" data-tool="spark" aria-pressed="false" aria-label="Fix a spot with AI" data-tip="Fix a spot &middot; S|Box a stuck spot (an eye, a hand). AI suggests a few strokes. You accept or skip.">&#10022;</button>
+          </div>
+          <button type="button" id="focus-toggle" class="focus-button" aria-label="Focus mode" aria-pressed="false" data-tip="Focus &middot; F|Full-screen canvas for finger and pencil. Esc to leave."><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg><span>Focus</span></button>
+          <div class="toolbar-row">
+            <div class="swatches" id="swatches" role="group" aria-label="Ink colors">
+              <button type="button" class="ink-dot" data-color="#123b38" aria-label="Ink" aria-pressed="true" style="--c:#123b38"></button>
+              <button type="button" class="ink-dot" data-color="#dc2626" aria-label="Red" aria-pressed="false" style="--c:#dc2626"></button>
+              <button type="button" class="ink-dot" data-color="#f97316" aria-label="Orange" aria-pressed="false" style="--c:#f97316"></button>
+              <button type="button" class="ink-dot" data-color="#eab308" aria-label="Yellow" aria-pressed="false" style="--c:#eab308"></button>
+              <button type="button" class="ink-dot" data-color="#16a34a" aria-label="Green" aria-pressed="false" style="--c:#16a34a"></button>
+              <button type="button" class="ink-dot" data-color="#2563eb" aria-label="Blue" aria-pressed="false" style="--c:#2563eb"></button>
+              <button type="button" class="ink-dot" data-color="#ffffff" aria-label="White" aria-pressed="false" style="--c:#ffffff"></button>
+              <label class="swatch" data-tip="Any color"><input type="color" id="ink" value="#123b38" aria-label="Pick any ink color"></label>
+            </div>
+            <label class="fill-control" data-tip="Fill|Fills rectangles and ellipses."><input type="checkbox" id="fill-on" aria-label="Fill shapes"><span>Fill</span><input type="color" id="fill-color" value="#c3f192" aria-label="Fill color"></label>
+            <label class="size-control" data-tip="Size &middot; [ ]"><input id="width" type="range" min="1" max="40" value="6" aria-label="Brush size"><output id="width-value" for="width">6</output></label>
+            <span class="toolbar-spacer"></span>
+            <span id="guide-controls" class="guide-controls" hidden><button type="button" id="guides-toggle" class="icon-button" aria-pressed="true">Guides (0)</button><button type="button" id="guides-clear" class="icon-button" aria-label="Remove trace guides">&times;</button></span>
+            <button type="button" id="undo" class="icon-button" disabled aria-label="Undo" data-tip="Undo &middot; Cmd/Ctrl+Z">&#8630;</button>
+            <button type="button" id="redo" class="icon-button" disabled aria-label="Redo" data-tip="Redo &middot; Shift+Cmd/Ctrl+Z">&#8631;</button>
+            <button type="button" id="clear" class="icon-button" aria-label="Clear canvas" data-tip="Clear|Fresh canvas. Undo brings it back.">&#10005;</button>
+            <button type="button" id="layers-toggle" class="icon-button layers-toggle" aria-expanded="false" aria-controls="layers-panel" data-tip="Layers|Like sheets of tracing paper.">&#9636; <span id="layers-count">1</span></button>
+          </div>
+        </div>
+
+        <div class="canvas-body">
+          <div class="canvas-frame" id="canvas-frame">
+            <canvas id="drawing" width="1000" height="650" aria-label="Drawing canvas. Draw with a pen, finger, or mouse.">Your browser needs canvas support to draw.</canvas>
+            <canvas id="overlay" width="1000" height="650" aria-hidden="true"></canvas>
+            <form id="spark-popover" class="popover" hidden>
+              <label class="sr-only" for="spark-prompt">What should AI fix here?</label>
+              <input id="spark-prompt" maxlength="300" autocomplete="off" placeholder="What's wrong? e.g. &ldquo;make the eye look left&rdquo;">
+              <div class="popover-actions">
+                <button type="submit" id="spark-strokes" class="pill primary" data-tip="Strokes &middot; Enter|A few editable lines in your ink.">&#10022; Fix it</button>
+                <button type="button" id="spark-guide" class="pill" data-tip="Trace guide &middot; Shift+Enter|A faint picture to trace. Never saved.">Trace guide</button>
+                <button type="button" id="spark-cancel" class="pill ghost" aria-label="Cancel">&times;</button>
+              </div>
+            </form>
+            <div id="spark-tray" class="tray" role="status" aria-live="polite" hidden></div>
+            <div id="starter-strip" class="starter-strip" aria-hidden="true">
+              <div class="starter-strip-head"><b>Or start from a scene</b><button type="button" id="starter-skip" class="starter-skip" aria-label="Hide starters">&times;</button></div>
+              <div id="starter-list" class="starter-list" role="list"></div>
+            </div>
+          </div>
+
+          <aside class="layers" id="layers-panel" aria-labelledby="layers-heading">
+            <div class="layers-head"><h3 id="layers-heading">Layers</h3><button type="button" id="layer-add" class="icon-button" aria-label="New layer" data-tip="New layer">+</button></div>
+            <ol id="layer-list" class="layer-list" aria-label="Layers, top to bottom"></ol>
+            <div class="layer-props">
+              <label for="layer-opacity">Opacity <output id="layer-opacity-value" for="layer-opacity">100%</output></label>
+              <input type="range" id="layer-opacity" min="0" max="100" value="100">
+              <div class="layer-actions">
+                <button type="button" id="layer-up" aria-label="Move layer up" data-tip="Move up">&#8593;</button>
+                <button type="button" id="layer-down" aria-label="Move layer down" data-tip="Move down">&#8595;</button>
+                <button type="button" id="layer-delete" data-tip="Delete layer|Undo brings it back.">Delete</button>
+              </div>
+            </div>
+          </aside>
+        </div>
+        <form id="ai-bar" class="ai-bar" autocomplete="off">
+          <div class="ai-modes" role="radiogroup" aria-label="What should AI do?">
+            <button type="button" role="radio" data-mode="sketch" aria-checked="true">Sketch<span class="long"> a layer</span></button>
+            <button type="button" role="radio" data-mode="fix" aria-checked="false">Fix a spot</button>
+            <button type="button" role="radio" data-mode="vary" aria-checked="false"><span class="long">Grow </span>variations</button>
+          </div>
+          <div class="ai-input">
+            <span class="ai-spark" aria-hidden="true">&#10022;</span>
+            <label class="sr-only" for="ai-prompt">Ask AI</label>
+            <input id="ai-prompt" maxlength="200" enterkeyhint="go" placeholder="Describe a starting point">
+            <button type="submit" id="ai-go" class="ai-go" aria-label="Ask AI">&#8594;</button>
+          </div>
+          <div class="examples ai-examples" id="ai-examples"></div>
+          <p id="ai-hint" class="ai-hint"></p>
+        </form>
+        <div class="frames" id="frames">
+          <button type="button" id="frame-play" class="frame-play" aria-label="Play" data-tip="Play &middot; Space|Flip through your frames. Tap the canvas to stop." hidden>&#9654;</button>
+          <ol id="frame-list" class="frame-list" aria-label="Frames"></ol>
+          <button type="button" id="frame-add" class="frame-add" data-tip="New frame &middot; N|Copies this frame, like tracing on a lightbox. Change what moves. , and . step through frames.">+ Frame</button>
+          <span id="frame-tools" class="frame-tools" hidden>
+            <label class="onion" data-tip="Onion skin|The previous frame shows as a faint red ghost, so you can see the motion."><input type="checkbox" id="onion" checked> Onion</label>
+            <select id="fps" aria-label="Speed in frames per second" data-tip="Speed|Frames per second. 12 is classic hand-drawn animation."><option value="4">4 fps</option><option value="6">6 fps</option><option value="8">8 fps</option><option value="12" selected>12 fps</option><option value="24">24 fps</option></select>
+            <button type="button" id="frame-delete" class="icon-button" aria-label="Delete this frame" data-tip="Delete this frame|Undo brings it back.">&#128465;</button>
+          </span>
+        </div>
+        <div class="canvas-foot"><span>Finger, stylus, or mouse. Stylus pressure works.</span><span class="foot-actions"><button type="button" id="starters-open" class="link-button" data-tip="Starters|Beach, mountains, a character sheet, a bouncing ball... Skip the blank page.">&#10024; Starters</button><button type="button" id="breakdown-open" class="link-button" data-tip="Breakdown|Take this canvas apart: frame by frame, layer by layer, asset by asset, and who made what.">&#128269; Breakdown</button><button type="button" id="download" class="link-button">Download PNG</button></span></div>
+      </div>
+
+      <aside class="save-card" aria-labelledby="save-heading">
+        <h2 id="save-heading">Save as</h2>
+        <div class="kind-switch" role="radiogroup" aria-label="Save as">
+          <button type="button" role="radio" data-kind="asset" aria-checked="true">&#9670; Asset</button>
+          <button type="button" role="radio" data-kind="shot" aria-checked="false">&#9635; Scene</button>
+          <button type="button" role="radio" data-kind="idea" aria-checked="false">&#9998; Idea</button>
+        </div>
+        <p id="kind-hint" class="kind-hint"></p>
+        <form id="save-form">
+          <label for="title" id="title-label">Name</label><input id="title" maxlength="80" required>
+          <div class="kind-fields" data-for="asset">
+            <label for="asset-type">Type</label>
+            <select id="asset-type"><option value="character">Character</option><option value="prop" selected>Prop</option><option value="environment">Background</option><option value="fx">Effect</option><option value="other">Other</option></select>
+          </div>
+          <div class="kind-fields" data-for="shot" hidden>
+            <div class="field-row">
+              <div><label for="shot-project">Project</label><input id="shot-project" maxlength="40" value="demo" pattern="[A-Za-z0-9][A-Za-z0-9_.\-]*" title="Letters, numbers, _ . - (no spaces)"></div>
+              <div><label for="shot-sequence">Sequence</label><input id="shot-sequence" maxlength="40" placeholder="SQ010" pattern="[A-Za-z0-9][A-Za-z0-9_.\-]*" title="Letters, numbers, _ . - (no spaces)"></div>
+            </div>
+            <div class="field-row">
+              <div><label for="shot-status">Status</label><select id="shot-status"><option value="todo">To do</option><option value="in_progress">In progress</option><option value="review">In review</option><option value="approved">Approved</option></select></div>
+              <div><label for="shot-assignee">Artist</label><input id="shot-assignee" maxlength="60" placeholder="Who's on it?"></div>
+            </div>
+            <p id="shot-links" class="shot-links"></p>
+          </div>
+          <details class="more-fields">
+            <summary>Notes &amp; tags <span>(optional)</span></summary>
+            <label for="description">Notes</label><textarea id="description" rows="2" maxlength="2000" placeholder="Anything worth remembering"></textarea>
+            <div class="tag-label"><label for="tag-input">Tags</label><button type="button" id="suggest-tags" class="link-button" data-tip="Suggest tags|AI looks at your drawing and suggests a few. Left empty, it tags on save.">&#10022; Suggest</button></div>
+            <div class="tag-editor"><span id="tag-chips" class="chips"></span><input id="tag-input" maxlength="30" autocomplete="off" placeholder="add a tag"></div>
+          </details>
+          <button class="save-button" id="save" type="submit"><span id="save-label">Save asset</span></button>
+          <button type="button" id="save-new" class="link-button save-new" hidden>Save as new instead</button>
+        </form>
+        <p id="drawing-status" class="status" role="status" aria-live="polite"></p>
+        <p class="fine-print" data-tip="Where your art goes|Saves go to MongoDB Atlas and Voyage AI (for search). AI sketches, fixes, and tags use Google Gemini. Only save what you're OK sharing with them.">Saved to MongoDB Atlas &middot; searched with Voyage AI &middot; drafts by Gemini</p>
+      </aside>
+    </section>
+
+    <section class="library" aria-labelledby="library-heading">
+      <div class="library-head">
+        <div><h2 id="library-heading">Find anything</h2><p class="library-sub">Describe it, sketch it, or pick an asset. Every asset, scene, and frame is searchable.</p></div>
+        <button type="button" id="browse" class="link-button">Show all</button>
+      </div>
+      <div class="library-tabs" role="tablist" aria-label="Library">
+        <button type="button" role="tab" id="tab-asset" data-tab="asset" aria-selected="true">&#9670; Assets</button>
+        <button type="button" role="tab" id="tab-shot" data-tab="shot" aria-selected="false">&#9635; Scenes</button>
+        <button type="button" role="tab" id="tab-frame" data-tab="frame" aria-selected="false">&#127902; Frames</button>
+        <button type="button" role="tab" id="tab-idea" data-tab="idea" aria-selected="false">&#9998; Ideas</button>
+      </div>
+      <form id="search-form" class="search-bar" role="search"><label class="sr-only" for="query">Search by describing it</label><input id="query" type="search" maxlength="500" required placeholder="Describe it, e.g. &ldquo;the red rocket&rdquo;"><button type="button" id="search-sketch" class="search-sketch" aria-label="Search with my drawing" data-tip="Search with my drawing|What's on the canvas becomes the query. Doodle a rocket up high, find the frames where it's up high."><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20l4-1L19 8l-3-3L5 16z"/><path d="M14 7l3 3"/></svg></button><button class="search-go" type="submit" aria-label="Search">&#8594;</button></form>
+      <div id="asset-filters" class="filters asset-filters" role="group" aria-label="Filter assets by how they were made"></div>
+      <div id="frame-filters" class="filters frame-filters" hidden><label for="frame-asset">With</label><select id="frame-asset" aria-label="Only frames with this asset"><option value="">any asset</option></select></div>
+      <div id="tag-filters" class="filters" role="group" aria-label="Filter by tag" hidden></div>
+      <div id="status-filters" class="filters" role="group" aria-label="Filter scenes by status" hidden></div>
+      <p id="library-status" class="status" role="status" aria-live="polite">Loading...</p>
+      <div id="results" class="results"></div>
+    </section>
+
+    <dialog id="where-used" class="sheet" aria-labelledby="wu-title">
+      <div class="sheet-head">
+        <img id="wu-thumb" alt="">
+        <div><p class="eyebrow">Where is it used?</p><h2 id="wu-title">Asset</h2><p id="wu-sub" class="muted"></p>
+          <p class="wu-head-actions"><button type="button" id="wu-vary" class="mini ai-mini" data-tip="Variations|Plan lookalikes from it. AI edits its strokes; you keep and finish them.">&#10022; Variations</button><button type="button" id="wu-breakdown" class="mini" data-tip="Breakdown|Its layers, who made which strokes, and its full history.">&#128269; Breakdown</button></p></div>
+        <button type="button" id="wu-close" class="close" aria-label="Close">&times;</button>
+      </div>
+      <div class="wu-summary" id="wu-summary" aria-live="polite"></div>
+      <form id="wu-filters" class="wu-filters">
+        <label>Scenes <select id="wu-status"><option value="open" selected>Not approved yet</option><option value="">All</option><option value="todo">To do</option><option value="in_progress">In progress</option><option value="review">In review</option><option value="approved">Approved</option></select></label>
+        <label>Project <input id="wu-project" maxlength="40" placeholder="all" pattern="[A-Za-z0-9][A-Za-z0-9_.\-]*" title="Letters, numbers, _ . -"></label>
+        <label>Sequence <input id="wu-sequence" maxlength="40" placeholder="all" pattern="[A-Za-z0-9][A-Za-z0-9_.\-]*" title="Letters, numbers, _ . -"></label>
+        <button type="submit" class="pill">Apply</button>
+      </form>
+      <p id="wu-status-line" class="status" role="status" aria-live="polite"></p>
+
+      <section class="wu-group" aria-labelledby="wu-linked-title">
+        <div class="wu-group-head">
+          <h3 id="wu-linked-title">&#128279; Used in <span id="wu-linked-count"></span></h3>
+          <button type="button" id="wu-update-all" class="pill primary" hidden></button>
+        </div>
+        <p class="wu-explain">Scenes where you placed <b class="wu-name">it</b>. Like a shortcut to the original: when you redraw it, outdated scenes update in one tap.</p>
+        <div id="wu-linked" class="wu-grid"></div>
+      </section>
+
+      <section class="wu-group" aria-labelledby="wu-similar-title">
+        <div class="wu-group-head"><h3 id="wu-similar-title">&#128064; Looks like it <span id="wu-similar-count"></span></h3></div>
+        <p class="wu-explain">Scenes with something that looks like <b class="wu-name">it</b>, but isn't linked. Like a reverse image search. Example: someone redrew the rocket in blue.</p>
+        <div id="wu-similar" class="wu-grid"></div>
+      </section>
+
+      <section class="wu-group" aria-labelledby="wu-family-title">
+        <div class="wu-group-head"><h3 id="wu-family-title">&#127793; Family <span id="wu-family-count"></span></h3></div>
+        <p class="wu-explain">Its original and its variations. Exact lineage, recorded when they were made, like a family tree.</p>
+        <div id="wu-family" class="wu-grid"></div>
+      </section>
+
+      <section class="wu-group" aria-labelledby="wu-assets-title">
+        <div class="wu-group-head"><h3 id="wu-assets-title">&#129516; Similar assets <span id="wu-assets-count"></span></h3></div>
+        <p class="wu-explain">Other assets that look like <b class="wu-name">it</b>. Spot duplicates before your library splits in two.</p>
+        <div id="wu-assets" class="wu-grid"></div>
+      </section>
+    </dialog>
+
+    <dialog id="starters-sheet" class="sheet" aria-labelledby="starters-title">
+      <div class="sheet-head"><div><p class="eyebrow">&#10024; Starters</p><h2 id="starters-title">Skip the blank page</h2><p class="muted">Every starter is plain, editable layers with an empty &ldquo;Draw here&rdquo; on top.</p></div><button type="button" id="starters-close" class="close" aria-label="Close">&times;</button></div>
+      <div id="starters-grid" class="starters-grid"></div>
+    </dialog>
+
+    <dialog id="variations" class="sheet" aria-labelledby="var-title">
+      <div class="sheet-head">
+        <img id="var-thumb" alt="">
+        <div><p class="eyebrow">&#10022; Variations</p><h2 id="var-title">Asset</h2><p class="muted">Draw it once. AI edits <b>your</b> strokes into lookalikes. You plan, pick, and finish them.</p></div>
+        <button type="button" id="var-close" class="close" aria-label="Close">&times;</button>
+      </div>
+      <form id="var-goal-form" class="var-step">
+        <p class="var-step-title"><span class="step-dot">1</span> What do you need them for?</p>
+        <div class="var-goal-row">
+          <label class="sr-only" for="var-goal">What are the variations for?</label>
+          <input id="var-goal" minlength="3" maxlength="200" required autocomplete="off" placeholder="e.g. a battle: different weapons and poses">
+          <label class="sr-only" for="var-count">How many</label>
+          <select id="var-count"><option>2</option><option>3</option><option>4</option><option selected>6</option><option>8</option><option>9</option></select>
+          <button type="submit" class="pill primary" id="var-plan">Plan them</button>
+        </div>
+        <div class="examples" id="var-examples">
+          <button type="button" class="example">a battle: different weapons and poses</button>
+          <button type="button" class="example">a crowd: different builds and outfits</button>
+          <button type="button" class="example">expressions: happy, angry, scared</button>
+          <button type="button" class="example">wear and tear: new, dented, wrecked</button>
+        </div>
+      </form>
+      <section id="var-plan-step" class="var-step" hidden>
+        <p class="var-step-title"><span class="step-dot">2</span> The plan. Edit any line. AI follows it exactly.</p>
+        <ol id="var-plan-list" class="var-plan-list"></ol>
+        <div class="var-actions"><button type="button" id="var-plan-add" class="pill">+ Add one</button><button type="button" id="var-draw" class="pill primary">&#10022; Draw them</button></div>
+      </section>
+      <section id="var-results-step" class="var-step" hidden>
+        <div class="var-results-head">
+          <p class="var-step-title"><span class="step-dot">3</span> Keep the ones you like. Finish them by hand.</p>
+          <span class="var-actions"><button type="button" id="var-keep-all" class="pill" hidden>Keep all ready</button><button type="button" id="var-scene" class="pill primary" hidden></button></span>
+        </div>
+        <div id="var-results" class="var-grid"></div>
+      </section>
+      <p id="var-status" class="status" role="status" aria-live="polite"></p>
+    </dialog>
+
+    <dialog id="breakdown" class="sheet" aria-labelledby="bd-title">
+      <div class="sheet-head">
+        <div><p class="eyebrow">&#128269; Breakdown</p><h2 id="bd-title">This canvas</h2><p id="bd-sub" class="muted"></p></div>
+        <button type="button" id="bd-close" class="close" aria-label="Close">&times;</button>
+      </div>
+      <div class="bd-top">
+        <div class="bd-player">
+          <canvas id="bd-canvas" width="1000" height="650" aria-label="Frame preview"></canvas>
+          <div class="bd-player-bar"><button type="button" id="bd-play" class="pill" aria-label="Play frames">&#9654;</button><input type="range" id="bd-scrub" min="1" max="1" value="1" aria-label="Frame"><output id="bd-frame">1 / 1</output></div>
+          <div class="bd-replay-bar"><button type="button" id="bd-replay" class="pill primary" data-tip="Watch it being made|Replays this frame stroke by stroke, in the order it was drawn. AI strokes are called out.">&#9998; Watch it being made</button><button type="button" id="bd-export" class="pill" data-tip="Save replay|A short video of this drawing being made, stroke by stroke, with your hand share at the end. Proof of the hand, ready for a portfolio.">&#11015; Save replay</button><span id="bd-caption" class="bd-caption" aria-live="polite"></span></div>
+        </div>
+        <div class="bd-made">
+          <h3>Who made it</h3>
+          <div id="bd-bar" class="made-bar" role="img"></div>
+          <ul id="bd-legend" class="made-legend"></ul>
+          <p id="bd-origin" class="bd-origin" hidden></p>
+          <h3 class="bd-math-title">&#129518; Art math</h3>
+          <div id="bd-math" class="art-math"></div>
+        </div>
+      </div>
+      <section class="wu-group">
+        <div class="wu-group-head"><h3>&#127902; Frame by frame, layer by layer</h3></div>
+        <p class="wu-explain">Like an animator's exposure sheet: each row is a layer, each column a frame. &#9670; = placed asset, &#10022; = has AI strokes.</p>
+        <div class="xsheet-wrap"><table id="bd-xsheet" class="xsheet"></table></div>
+      </section>
+      <section class="wu-group" id="bd-assets-group">
+        <div class="wu-group-head"><h3>&#9670; Asset by asset</h3></div>
+        <div id="bd-assets" class="bd-assets"></div>
+      </section>
+      <section class="wu-group" id="bd-evolution-group" hidden>
+        <div class="wu-group-head"><h3>&#128200; Evolution</h3></div>
+        <p class="wu-explain">Every saved version, from the first doodle on. Tap one to see it.</p>
+        <div id="bd-evolution" class="evolution"></div>
+      </section>
+      <section class="wu-group">
+        <div class="wu-group-head"><h3>&#128220; How it got here</h3></div>
+        <p class="wu-explain">The audit trail: every AI suggestion you took or skipped, placements, frames, versions, and status changes.</p>
+        <ol id="bd-history" class="timeline"></ol>
+      </section>
+    </dialog>
+
+    <dialog id="gate" class="gate" aria-labelledby="gate-title">
+      <div class="gate-art" aria-hidden="true">
+        <svg viewBox="0 0 400 260"><path class="gate-line" pathLength="1" d="M40 200c30-60 60-120 110-118s40 70 90 62 50-96 100-86 20 90-20 110-90-10-110 30"/><path class="gate-line two" pathLength="1" d="M120 230c40-14 90-14 140 0"/><circle class="gate-dot" cx="300" cy="64" r="7"/></svg>
+      </div>
+      <div class="gate-card">
+        <div class="gate-brand"><svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><path d="M14 4C14 4 6 14 6 19.5a8 8 0 0 0 16 0C22 14 14 4 14 4z"/><path class="brand-spark" d="M25 3l1.3 3.2 3.2 1.3-3.2 1.3-1.3 3.2-1.3-3.2-3.2-1.3 3.2-1.3z"/></svg><span class="wordmark">inkling</span></div>
+        <h2 id="gate-title">Draw it once. <span>Animate it anywhere.</span></h2>
+        <p class="gate-promise">AI drafts. You decide. Every stroke is remembered.</p>
+        <div class="gate-tabs" role="tablist" aria-label="Account">
+          <button type="button" role="tab" id="gate-tab-signup" data-gate="signup" aria-selected="true">Create account</button>
+          <button type="button" role="tab" id="gate-tab-login" data-gate="login" aria-selected="false">Sign in</button>
+        </div>
+        <form id="gate-form" class="gate-form" novalidate>
+          <label for="gate-email">Email</label>
+          <input id="gate-email" type="email" autocomplete="email" inputmode="email" required placeholder="you@studio.com">
+          <label for="gate-password">Password <small id="gate-pw-hint">12+ characters</small></label>
+          <div class="gate-pw">
+            <input id="gate-password" type="password" autocomplete="new-password" required minlength="12" maxlength="72">
+            <button type="button" id="gate-reveal" class="gate-reveal" aria-label="Show password" aria-pressed="false">Show</button>
+          </div>
+          <button type="submit" id="gate-submit" class="gate-submit">Create my studio</button>
+          <p id="gate-status" class="gate-status" role="status" aria-live="polite"></p>
+        </form>
+        <ul class="gate-perks">
+          <li><b>&#9997;</b><span>Your library is <b>private</b> to you</span></li>
+          <li><b>&#10022;</b><span>AI drafts in small steps. Nothing lands without a yes</span></li>
+          <li><b>&#129516;</b><span>Every stroke remembered: replay how anything was made</span></li>
+        </ul>
+        <p class="gate-fine">Accounts by m-stash &middot; drawings in MongoDB Atlas &middot; search by Voyage AI</p>
+      </div>
+    </dialog>
+
+    <dialog id="welcome" class="sheet welcome" aria-labelledby="welcome-title">
+      <div class="sheet-head"><div><p class="eyebrow">&#10024; Your studio is ready</p><h2 id="welcome-title">How do you want to start?</h2><p class="muted">Your library is private: only you can see, search, or change it.</p></div><button type="button" id="welcome-close" class="close" aria-label="Close">&times;</button></div>
+      <div class="welcome-choices">
+        <button type="button" id="welcome-demo" class="welcome-choice primary">
+          <span class="welcome-icon" aria-hidden="true">&#129418;</span>
+          <b>Start with the demo library</b>
+          <span>Little Fox (doodle to finished), Red Rocket and a near-duplicate, and 6 scenes, including a 6-frame liftoff. A private copy: change anything.</span>
+        </button>
+        <button type="button" id="welcome-fresh" class="welcome-choice">
+          <span class="welcome-icon" aria-hidden="true">&#9999;&#65039;</span>
+          <b>Start fresh</b>
+          <span>A blank page, with starters (beach, mountains, a character sheet) one tap away.</span>
+        </button>
+      </div>
+      <p id="welcome-status" class="muted" role="status" aria-live="polite"></p>
+    </dialog>
+
+    <dialog id="help" class="sheet" aria-labelledby="help-title">
+      <div class="sheet-head"><div><p class="eyebrow">How Inkling works</p><h2 id="help-title">Draw it once. Animate it anywhere.</h2><p class="muted">AI drafts. You decide. Every stroke is remembered: who drew it, how, and where it&rsquo;s used.</p></div><button type="button" id="help-close" class="close" aria-label="Close">&times;</button></div>
+      <ol class="help-flow">
+        <li><b>&#9999;&#65039; Draw it once</b><span>Finger, pencil, or mouse; save it as an asset. Grow lookalikes from your strokes.</span><i>&ldquo;Red Rocket&rdquo;, plus 9 for a battle</i></li>
+        <li><b>&#127902; Animate it</b><span>Place it in a scene, add frames, slide or redraw what moves. Tweak any frame.</span><i>The rocket lifts off in 6 frames.</i></li>
+        <li><b>&#128269; Find anything</b><span>Assets, scenes, or single frames: describe it, sketch it, or pick an asset.</span><i>&ldquo;the moment it clears the trees&rdquo;</i></li>
+        <li><b>&#129516; Always know</b><span>Where it's used, what's outdated, what looks like it, and how it was made, stroke by stroke.</span><i>&ldquo;Which frames still show the old rocket?&rdquo; &middot; watch Little Fox go from doodle to v3</i></li>
+      </ol>
+      <dl class="glossary">
+        <div><dt>&#9670; Asset</dt><dd>A rubber stamp. Draw once, use anywhere.</dd></div>
+        <div><dt>&#9635; Scene</dt><dd>One shot of your film, with a status and an artist.</dd></div>
+        <div><dt>&#9636; Layer</dt><dd>Tracing paper. Draw on one without touching the rest.</dd></div>
+        <div><dt>&#10022; AI sketch</dt><dd>A blue-pencil draft. Scaffolding, not the art.</dd></div>
+        <div><dt>&#128279; Used in</dt><dd>A shortcut to the original. Updates in one tap.</dd></div>
+        <div><dt>&#128064; Looks like it</dt><dd>Reverse image search across scenes.</dd></div>
+        <div><dt>&#129516; Similar assets</dt><dd>Near-duplicates in your library.</dd></div>
+        <div><dt>&#10022; Variations</dt><dd>One asset in, lookalikes out. AI edits your strokes; you keep and finish.</dd></div>
+        <div><dt>&#9998; Process</dt><dd>Every stroke keeps its order and time. Replay any drawing, or save the replay as a video.</dd></div>
+        <div><dt>&#128221; Audit trail</dt><dd>Every AI step you took or skipped, saved with the asset. Nothing is a black box.</dd></div>
+        <div><dt>&#127902; Frames</dt><dd>A flipbook. Each new frame copies the last; change only what moves.</dd></div>
+        <div><dt>&#128269; Find</dt><dd>Search pictures and words together: describe it, or sketch it.</dd></div>
+        <div><dt>&#128269; Breakdown</dt><dd>Take a scene apart: frames, layers, assets, and who made what.</dd></div>
+        <div><dt>&#9998; Idea</dt><dd>A loose sketch to find again by describing it.</dd></div>
+      </dl>
+      <div class="help-foot"><button type="button" id="help-demo" class="pill primary">See an example</button><button type="button" id="help-guide" class="pill">Show the steps again</button></div>
+    </dialog>
+
+    <div id="tooltip" class="tooltip" role="tooltip" hidden><strong></strong><span></span></div>
+  </main>
+  <footer><span><b>inkling</b> /&#712;&#618;&#331;kl&#618;&#331;/ a slight hint.</span><a href="/playground">Animation playground &#8599;</a></footer>
+</body>
+</html>
