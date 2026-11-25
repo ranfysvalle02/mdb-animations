@@ -55,9 +55,10 @@ own strokes**. It doesn't repaint from scratch. In our tests, additive briefs li
 stroke is marked as AI, permanently. Keep the ones you like, finish them by hand, and tap **Build a
 scene**.
 
-**The scene.** Assets drop into scenes as *linked* layers. Add frames, slide the rocket, onion-skin
-the last pose, press play. Redraw the rocket as v2, and every scene using v1 can update in one tap.
-Draw once. Reuse everywhere. Never lose track.
+**The scene.** Drop the rocket onto a beach, tap **Animate**, and say *"wobbles, then blasts off to the top
+right."* One AI call returns keyframes, not pixels: anticipation, squash, stretch, an arc. It moves **your**
+drawing; it never redraws it. Preview it, keep it, then grab the rocket on frame 8 and fix the arc yourself.
+Redraw the rocket as v2 later, and every scene using v1 can update in one tap.
 
 **The search.** Now the fun part. Describe it: *"the rocket high above the pine tree."* Or just
 doodle it. Inkling searches every asset, every scene, **every single frame**, and opens the hit at

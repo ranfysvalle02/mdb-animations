@@ -15,7 +15,7 @@
   const TAG_PATTERN = /^[a-z0-9][a-z0-9 -]{0,29}$/;
   const TEXT_INPUTS = new Set(['text', 'search', 'email', 'url', 'tel', 'password', 'number']);
   const SHAPES = new Set(['line', 'rect', 'ellipse']);
-  const TOOL_KEYS = { b: 'pen', p: 'pen', e: 'eraser', l: 'line', r: 'rect', o: 'ellipse', m: 'move', s: 'spark' };
+  const TOOL_KEYS = { b: 'pen', p: 'pen', e: 'eraser', l: 'line', r: 'rect', o: 'ellipse', m: 'move', v: 'move', s: 'spark' };
   const MAX_FRAMES = 24;
 
   let layerSeq = 0;
@@ -337,7 +337,7 @@
     $('frames').classList.toggle('animating', many);
     $('frame-play').hidden = !many;
     $('frame-tools').hidden = !many;
-    $('frame-add').textContent = many ? '+ Frame' : '\ud83c\udf9e Animate it: add frame 2';
+    $('frame-add').textContent = many ? '+ Frame' : '+ Frame by hand';
     $('frame-add').disabled = frames.length >= MAX_FRAMES;
     $('frame-list').replaceChildren(...(many ? frames.map((stack, i) => {
       const item = document.createElement('li');
@@ -499,6 +499,7 @@
     $('layer-add').disabled = layers.length >= MAX_LAYERS;
     $('layers-count').textContent = String(layers.length);
     renderSaveKind(); // the shot panel lists placed assets, which undo/delete can change
+    updateHud();
   }
   function renameLayer(layer, item, nameButton) {
     const input = document.createElement('input');
@@ -619,6 +620,7 @@
     if (busy() || !event.isPrimary || event.button !== 0) return;
     event.preventDefault();
     if (playing) { stopPlay(); return; }
+    if (motionDraft) { flashTray('\ud83c\udfac Keep (Enter) or skip (Esc) the motion first.'); return; }
     if (event.pointerType === 'pen' && !penSeen) {
       penSeen = true;
       flashTray('\u270f\ufe0f Pencil detected: your palm and fingers won\'t draw. Pressure works.');
@@ -644,20 +646,26 @@
       renderOverlay();
       return;
     }
-    const layer = activeLayer();
-    if (!canDrawOn(layer)) return;
     if (tool === 'move') {
-      const bounds = pointBounds(layer.strokes);
-      if (!bounds) {
-        message('drawing-status', `"${layer.name}" is empty. Pick a layer with ink to move it.`, true);
+      // Grab what's under the finger (or the selected layer's resize handle); a miss just says how.
+      const selected = activeLayer();
+      const scaling = selected.visible && onHandle(selected, point);
+      const target = scaling ? selected : pickLayer(point);
+      if (!target) {
+        flashTray('\u2725 Tap something you drew or placed to grab it. Scenery stays put (pick it in Layers to move it).');
         return;
       }
+      activeId = target.id;
+      renderLayersPanel();
+      const b = inkBounds(target.strokes);
       pointer = event.pointerId;
       canvas.setPointerCapture(pointer);
-      pushUndo();
-      moving = { layer, start: point, original: layer.strokes, bounds };
+      moving = { layer: target, start: point, original: target.strokes, bounds: pointBounds(target.strokes), mode: scaling ? 'scale' : 'move',
+        center: { x: b.x + b.w / 2, y: b.y + b.h / 2 }, before: snapshot(), changed: false };
       return;
     }
+    const layer = tool === 'eraser' ? activeLayer() : inkTarget();
+    if (!canDrawOn(layer)) return;
     pointer = event.pointerId;
     canvas.setPointerCapture(pointer);
     if (SHAPES.has(tool)) {
@@ -676,16 +684,29 @@
   canvas.addEventListener('pointermove', event => {
     if (event.pointerId !== pointer) return;
     if (moving) {
-      // Slide the whole layer; the offset is clamped so no point is squashed against the canvas edge.
       const point = normPoint(event);
-      const { bounds } = moving;
-      const dx = Math.max(-bounds.x0, Math.min(1 - bounds.x1, point.x - moving.start.x));
-      const dy = Math.max(-bounds.y0, Math.min(1 - bounds.y1, point.y - moving.start.y));
-      moving.layer.strokes = moving.original.map(stroke => ({
-        ...stroke, points: stroke.points.map(p => ({ ...p, x: p.x + dx, y: p.y + dy }))
-      }));
+      if (!moving.changed) {
+        if (Math.hypot((point.x - moving.start.x) * W, (point.y - moving.start.y) * H) < 2) return;
+        pushUndo(moving.before); // one undo step per drag, and none for a tap that only selects
+        moving.changed = true;
+      }
+      if (moving.mode === 'scale') {
+        const { center } = moving;
+        const from = Math.hypot(moving.start.x * W - center.x, moving.start.y * H - center.y) || 1;
+        const k = Math.max(0.15, Math.min(6, Math.hypot(point.x * W - center.x, point.y * H - center.y) / from));
+        moving.layer.strokes = scaledStrokes(moving.original, center, k);
+      } else {
+        // Slide the whole layer; the offset is clamped so no point is squashed against the canvas edge.
+        const { bounds } = moving;
+        const dx = Math.max(-bounds.x0, Math.min(1 - bounds.x1, point.x - moving.start.x));
+        const dy = Math.max(-bounds.y0, Math.min(1 - bounds.y1, point.y - moving.start.y));
+        moving.layer.strokes = moving.original.map(stroke => ({
+          ...stroke, points: stroke.points.map(p => ({ ...p, x: p.x + dx, y: p.y + dy }))
+        }));
+      }
       renderLayer(moving.layer);
       scheduleComposite();
+      renderOverlay();
     } else if (placeDraft) {
       const point = normPoint(event);
       placeDraft.x1 = point.x;
@@ -709,7 +730,12 @@
     if (event.pointerId !== pointer) return;
     pointer = null;
     if (moving) {
+      const { layer, mode, changed } = moving;
       moving = null;
+      if (changed) {
+        recount();
+        logEvent('artist', mode === 'scale' ? 'Resized' : 'Moved', `${layer.name}${frames.length > 1 ? ` on frame ${frameIndex + 1}` : ''}`);
+      }
       renderLayersPanel();
     } else if (placeDraft) {
       const box = placementBox(placeDraft);
@@ -793,7 +819,7 @@
 
   // Adds finished strokes (a shape or an accepted spark) to the active layer as one undo step.
   function commitStrokes(list) {
-    const layer = activeLayer();
+    const layer = inkTarget();
     if (!canDrawOn(layer)) return false;
     if (allStrokes().length + list.length > MAX_STROKES || pointCount + countPoints(list) > MAX_POINTS) {
       message('drawing-status', 'That would exceed the canvas limits. Undo a few strokes first.', true);
@@ -840,6 +866,8 @@
     document.querySelectorAll('.tool').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.tool === tool)));
     canvas.classList.toggle('spark-mode', tool === 'spark');
     canvas.classList.toggle('eraser-mode', tool === 'eraser');
+    canvas.classList.toggle('move-mode', tool === 'move');
+    updateHud();
     if (tool !== 'spark') pendingFix = null;
     else if (pendingFix === null) flashTray('Drag a box around the stuck spot, or tap it.');
     else if (wasPlacing && next !== 'place') renderTray();
@@ -1213,6 +1241,18 @@
       octx.drawImage(playing.images[playing.at], 0, 0);
       return;
     }
+    if (motionDraft) {
+      const { images } = motionDraft;
+      octx.drawImage(images[Math.min(motionDraft.at, images.length - 1)], 0, 0);
+      octx.save();
+      octx.fillStyle = 'rgba(11, 36, 34, 0.72)';
+      octx.fillRect(12, 12, 122, 30);
+      octx.fillStyle = '#c3f192';
+      octx.font = '600 15px system-ui, sans-serif';
+      octx.fillText(`PREVIEW ${Math.min(motionDraft.at + 1, images.length)}/${images.length}`, 22, 33);
+      octx.restore();
+      return;
+    }
     if (shapeDraft) {
       const preview = shapeStroke(shapeDraft);
       if (preview) {
@@ -1253,6 +1293,25 @@
         revealed(ready.result.strokes, revealProgress(ready)).forEach(stroke => drawStroke(octx, stroke));
       } else {
         octx.drawImage(ready.img, ready.region.x * W, ready.region.y * H, ready.region.w * W, ready.region.h * H);
+      }
+    }
+    if (tool === 'move' && !shapeDraft && !selection) {
+      const layer = activeLayer();
+      const b = layer.visible ? inkBounds(layer.strokes) : null;
+      if (b) {
+        // The selected layer: a dashed box and a resize handle, like any design tool.
+        octx.save();
+        octx.strokeStyle = '#0f766e';
+        octx.lineWidth = 2;
+        octx.setLineDash([7, 5]);
+        octx.strokeRect(b.x, b.y, b.w, b.h);
+        octx.setLineDash([]);
+        octx.fillStyle = '#ffffff';
+        octx.beginPath();
+        octx.arc(b.x + b.w, b.y + b.h, handleRadius() * 0.6, 0, Math.PI * 2);
+        octx.fill();
+        octx.stroke();
+        octx.restore();
       }
     }
     if (placing) {
@@ -1309,7 +1368,7 @@
       points: stroke.points.map(p => ({ x: clamp((ox + (p.x * W - bbox.x) * k) / W), y: clamp((oy + (p.y * H - bbox.y) * k) / H), pressure: p.pressure }))
     }));
   }
-  async function startPlacing(item) {
+  async function startPlacing(item, at = null) {
     try {
       const asset = await api(`/api/assets/${encodeURIComponent(item.id)}`);
       // A placed asset becomes one linked layer: its visible layers flattened bottom-up.
@@ -1318,12 +1377,13 @@
       if (!bbox) throw new Error('This asset has no visible ink to place.');
       if (layers.length >= MAX_LAYERS) throw new Error('A drawing can have 12 layers. Merge or delete one first.');
       placing = { id: asset.id, version: asset.version, name: asset.name, strokes, bbox };
-      setTool('place');
-      if (saveKind === 'idea' && !editing) setSaveKind('shot');
-      canvas.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      clearTimeout(trayTimer);
-      trayTimer = null;
-      renderTray();
+      if (saveKind !== 'shot' && !editing) setSaveKind('shot'); // placing assets means building a scene
+      if (!$('animate-sheet').open) canvas.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      // It lands right away at a friendly size (where it was dropped, else center stage); then you drag it.
+      const k = Math.min(W * 0.34 / bbox.w, H * 0.42 / bbox.h, 1.5);
+      const w = bbox.w * k, h = bbox.h * k;
+      const cx = at ? at.x : W / 2, cy = at ? at.y : H * 0.56;
+      placeAsset({ x: Math.max(0, Math.min(W - w, cx - w / 2)), y: Math.max(0, Math.min(H - h, cy - h / 2)), w, h });
     } catch (error) {
       message('library-status', error.message, true);
     }
@@ -1339,15 +1399,399 @@
     pushUndo();
     const layer = newLayer(placing.name.slice(0, 40), { strokes, asset: { asset_id: placing.id, version: placing.version } });
     layers.splice(layers.indexOf(activeLayer()) + 1, 0, layer);
+    // The blank page's empty "Layer 1" has nothing to offer a scene; don't leave it lying around.
+    const stray = layers.find(other => other !== layer && !other.asset && !other.strokes.length && /^Layer \d+$/.test(other.name));
+    if (stray && frames.length === 1 && layers.filter(other => !other.backdrop).length === 2) layers.splice(layers.indexOf(stray), 1);
     activeId = layer.id;
     const name = placing.name;
-    setTool(drawTool);
+    placing = null;
+    setTool('move');
     recount();
     rebuildAll();
     renderSaveKind();
-    message('drawing-status', `Placed "${name}" as a linked layer. Draw the rest, or animate it: \ud83c\udf9e add frame 2 and slide it with \u2725 Move.`);
+    flashTray(`\u25c6 ${name} is in. Drag it anywhere, pull the corner to resize, then \ud83c\udfac Animate.`);
+    message('drawing-status', `Placed "${name}" as a linked layer (it always knows where it's used). Drag to position it, or \ud83c\udfac Animate it.`);
     logEvent('artist', 'Placed', `${name} v${layer.asset.version}${frames.length > 1 ? ` on frame ${frameIndex + 1}` : ''}`);
   }
+
+  // ---------------------------------------------------------------- direct manipulation: grab what you made
+  // Scenery from a starter (all kit strokes, or ink covering most of the canvas) isn't grabbed by a stray tap:
+  // you grab what you drew or placed. Pick the scenery layer in Layers to move it on purpose.
+  const isScenery = layer => {
+    if (layer.asset) return false;
+    const b = inkBounds(layer.strokes);
+    return !b || b.w * b.h > W * H * 0.6 || layer.strokes.every(stroke => stroke.kit);
+  };
+  function inkAt(layer, point, radius = 7) {
+    const x = Math.round(point.x * W), y = Math.round(point.y * H);
+    const size = radius * 2 + 1;
+    const data = layerCanvas(layer.id).getContext('2d', { willReadFrequently: true })
+      .getImageData(Math.max(0, x - radius), Math.max(0, y - radius), size, size).data;
+    for (let i = 3; i < data.length; i += 4) if (data[i] > 24) return true;
+    return false;
+  }
+  function pickLayer(point) {
+    const candidates = [...layers].reverse().filter(layer => layer.visible && layer.strokes.length);
+    return candidates.find(layer => !isScenery(layer) && inkAt(layer, point))
+      || candidates.find(layer => layer.id === activeId && inkAt(layer, point)) || null;
+  }
+  // Px radius of the resize handle, in canvas units, sized for a fingertip on screen.
+  const handleRadius = () => 16 * W / canvas.getBoundingClientRect().width;
+  function onHandle(layer, point) {
+    const b = inkBounds(layer.strokes);
+    return b && Math.hypot(point.x * W - (b.x + b.w), point.y * H - (b.y + b.h)) <= handleRadius() * 1.4;
+  }
+  function scaledStrokes(strokes, center, k) {
+    const clamp = v => Math.max(0, Math.min(1, v));
+    return strokes.map(stroke => ({
+      ...stroke, width: Math.max(1, Math.min(40, stroke.width * k)),
+      points: stroke.points.map(p => ({ ...p, x: clamp((center.x + (p.x * W - center.x) * k) / W), y: clamp((center.y + (p.y * H - center.y) * k) / H) }))
+    }));
+  }
+  // Linked assets stay clean: new ink goes on a plain layer just above, never into the placed asset.
+  function inkTarget() {
+    const layer = activeLayer();
+    if (!layer.asset) return layer;
+    const at = layers.indexOf(layer);
+    const above = layers[at + 1];
+    if (above && !above.asset && above.visible) { activeId = above.id; }
+    else if (layers.length < MAX_LAYERS) {
+      const fresh = newLayer('Ink');
+      layers.splice(at + 1, 0, fresh);
+      activeId = fresh.id;
+    } else return layer;
+    renderLayersPanel();
+    flashTray(`\u270e Your ink goes on "${activeLayer().name}", above ${layer.name}. Linked assets stay clean.`);
+    return activeLayer();
+  }
+  function updateHud() {
+    const hud = $('layer-hud');
+    const layer = activeLayer();
+    hud.hidden = canvasIsBlank() || !!motionDraft || !!playing;
+    hud.textContent = `${tool === 'move' ? '\u2725' : '\u270e'} ${layer.asset ? '\u25c6 ' : ''}${layer.name}${frames.length > 1 ? `  \u00b7  frame ${frameIndex + 1}/${frames.length}` : ''}`;
+    hud.classList.toggle('asset', !!layer.asset);
+    renderOverlay();
+  }
+  $('layer-hud').addEventListener('click', () => {
+    if (matchMedia('(max-width: 899px)').matches) setLayersOpen(true);
+    else pulse('#layers-panel .layer.active');
+  });
+
+  // ---------------------------------------------------------------- motion: keyframes that move your own strokes
+  const MOTION_FPS = 8;
+  const MOTION_EXAMPLES = ['wobbles, then blasts off to the top right', 'hops twice to the right and lands with a squash',
+    'drifts in from the left and settles', 'spins once, grows, then bows'];
+  let motionDraft = null; // { spec, stacks, images, at, timer }
+  let motionSeconds = 2;
+  const K = (t, x = 0, y = 0, sx = 1, sy = 1, r = 0) => ({ t, x, y, sx, sy, r });
+  // Each preset gets the subject's box (canvas fractions) and returns keys. Free: no AI, no wait.
+  const PRESETS = [
+    { id: 'liftoff', icon: '\ud83d\ude80', name: 'Lift off', hint: 'Squat, stretch, and launch up and away.',
+      keys: b => { const up = -Math.min(0.95, b.y + b.h + 0.05); return [K(0), K(0.15, 0, 0.01, 1.08, 0.9), K(0.3, 0, -0.01, 0.94, 1.1), K(0.6, 0, up * 0.3, 0.9, 1.15), K(1, 0, up, 0.85, 1.2)]; } },
+    { id: 'hop', icon: '\ud83d\udc07', name: 'Hop across', hint: 'Two hops toward the open side, squash on landing.',
+      keys: b => { const d = (b.x + b.w / 2 < 0.5 ? 1 : -1) * Math.min(0.4, b.x + b.w / 2 < 0.5 ? 0.95 - b.x - b.w : b.x - 0.05); const hy = -Math.min(0.2, b.y);
+        return [K(0), K(0.08, 0, 0.01, 1.1, 0.9), K(0.25, d * 0.25, hy, 0.95, 1.08), K(0.45, d * 0.5, 0.01, 1.15, 0.85), K(0.55, d * 0.52, 0, 1, 1), K(0.75, d * 0.76, hy, 0.95, 1.08), K(0.92, d, 0.01, 1.15, 0.85), K(1, d, 0, 1, 1)]; } },
+    { id: 'float', icon: '\ud83c\udf88', name: 'Float', hint: 'A gentle bob and sway. Loops nicely.',
+      keys: () => [K(0), K(0.25, 0, -0.035, 1, 1, -3), K(0.5, 0, 0, 1, 1, 0), K(0.75, 0, -0.035, 1, 1, 3), K(1)] },
+    { id: 'walk', icon: '\ud83d\udeb6', name: 'Walk across', hint: 'Steady steps with a little bob.',
+      keys: b => { const d = (b.x + b.w / 2 < 0.5 ? 1 : -1) * 0.35; return Array.from({ length: 9 }, (_, i) => K(i / 8, d * i / 8, i % 2 ? -0.015 : 0, 1, i % 2 ? 1.02 : 0.98, i % 2 ? 2 : -2)); } },
+    { id: 'spin', icon: '\ud83c\udf00', name: 'Spin', hint: 'One full turn, easing in and out.',
+      keys: () => [K(0), K(0.15, 0, 0, 1, 1, -12), K(0.5, 0, 0, 1, 1, 180), K(0.9, 0, 0, 1, 1, 372), K(1, 0, 0, 1, 1, 360)] },
+    { id: 'pop', icon: '\u2728', name: 'Pop in', hint: 'Appears from nothing with an overshoot.',
+      keys: () => [K(0, 0, 0, 0.05, 0.05), K(0.45, 0, 0, 1.18, 1.18), K(0.7, 0, 0, 0.94, 0.94), K(0.85, 0, 0, 1.03, 1.03), K(1)] },
+    { id: 'zoom', icon: '\ud83d\udd0d', name: 'Push in', hint: 'Grows toward the camera.',
+      keys: () => [K(0), K(0.2, 0, 0, 1.04, 1.04), K(1, 0, 0, 1.55, 1.55)] },
+    { id: 'shake', icon: '\u26a1', name: 'Shake', hint: 'Nervous jitter: fear, cold, or an engine warming up.',
+      keys: () => Array.from({ length: 11 }, (_, i) => K(i / 10, i % 10 ? (i % 2 ? 0.012 : -0.012) : 0, 0, 1, 1, i % 10 ? (i % 2 ? 3 : -3) : 0)) }
+  ];
+  // Catmull-Rom through the keys: smooth arcs, no stop-and-go at every key.
+  function sampleKeys(keys, t) {
+    if (t <= keys[0].t) return keys[0];
+    const last = keys[keys.length - 1];
+    if (t >= last.t) return last;
+    let i = 0;
+    while (keys[i + 1].t < t) i++;
+    const p1 = keys[i], p2 = keys[i + 1], p0 = keys[i - 1] || p1, p3 = keys[i + 2] || p2;
+    const u = (t - p1.t) / ((p2.t - p1.t) || 1), u2 = u * u, u3 = u2 * u;
+    const cr = c => 0.5 * ((2 * p1[c]) + (-p0[c] + p2[c]) * u + (2 * p0[c] - 5 * p1[c] + 4 * p2[c] - p3[c]) * u2 + (-p0[c] + 3 * p1[c] - 3 * p2[c] + p3[c]) * u3);
+    return { t, x: cr('x'), y: cr('y'), sx: Math.max(0.03, cr('sx')), sy: Math.max(0.03, cr('sy')), r: cr('r') };
+  }
+  function posedStrokes(strokes, pivot, k, strength) {
+    const s = strength;
+    const sx = 1 + (k.sx - 1) * s, sy = 1 + (k.sy - 1) * s, rad = k.r * s * Math.PI / 180;
+    const cos = Math.cos(rad), sin = Math.sin(rad), ox = pivot.x + k.x * s * W, oy = pivot.y + k.y * s * H;
+    const out = [];
+    for (const stroke of strokes) {
+      const points = stroke.points.map(p => {
+        const X = (p.x * W - pivot.x) * sx, Y = (p.y * H - pivot.y) * sy;
+        return { ...p, x: (ox + X * cos - Y * sin) / W, y: (oy + X * sin + Y * cos) / H };
+      });
+      // Off-canvas strokes leave the frame; the rest are pinned to the edge (where they're out of sight anyway).
+      if (points.every(p => p.x < -0.02 || p.x > 1.02 || p.y < -0.02 || p.y > 1.02)) continue;
+      out.push({ ...stroke, width: Math.max(1, Math.min(40, stroke.width * Math.sqrt(sx * sy))),
+        points: points.map(p => ({ ...p, x: Math.max(0, Math.min(1, p.x)), y: Math.max(0, Math.min(1, p.y)) })) });
+    }
+    return out;
+  }
+  function motionFrames(spec) {
+    const count = Math.max(2, Math.min(MAX_FRAMES, Math.round(spec.seconds * MOTION_FPS)));
+    const base = spec.base;
+    const pivots = new Map(spec.tracks.map(track => {
+      const b = inkBounds(base.find(layer => layer.id === track.layerId)?.strokes || []);
+      return [track.layerId, b ? { x: b.x + b.w / 2, y: b.y + b.h / 2 } : { x: W / 2, y: H / 2 }];
+    }));
+    return Array.from({ length: count }, (_, f) => {
+      const t = f / (count - 1);
+      return base.map(layer => {
+        const track = spec.tracks.find(tr => tr.layerId === layer.id);
+        const strokes = track ? posedStrokes(layer.strokes, pivots.get(layer.id), sampleKeys(track.keys, t), spec.strength) : layer.strokes.slice();
+        return f === 0 && !track ? layer : newLayer(layer.name, { visible: layer.visible, opacity: layer.opacity, strokes, asset: layer.asset, backdrop: layer.backdrop });
+      });
+    });
+  }
+  function previewMotion(spec) {
+    stopPlay();
+    stopMotionPreview();
+    const stacks = motionFrames(spec);
+    motionDraft = { spec, stacks, images: stacks.map(stack => frameImage(stack)), at: 0, timer: null };
+    motionDraft.timer = setInterval(() => {
+      motionDraft.at = (motionDraft.at + 1) % (motionDraft.images.length + 4); // a short hold on the last pose
+      renderOverlay();
+    }, 1000 / MOTION_FPS);
+    updateHud();
+    renderTray();
+    // Closing the sheet hands focus back to the Animate button; Enter must mean "keep", not "reopen".
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+    canvas.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+  function stopMotionPreview() {
+    if (!motionDraft) return;
+    clearInterval(motionDraft.timer);
+    motionDraft = null;
+    renderOverlay();
+    updateHud();
+  }
+  function restrength(delta) {
+    if (!motionDraft) return;
+    const spec = { ...motionDraft.spec, strength: Math.round(Math.max(0.4, Math.min(1.9, motionDraft.spec.strength + delta)) * 10) / 10 };
+    previewMotion(spec);
+  }
+  function keepMotion() {
+    if (!motionDraft) return;
+    const { spec, stacks } = motionDraft;
+    const replaced = frames.length;
+    stopMotionPreview();
+    pushUndo();
+    frames = stacks;
+    frameIndex = 0;
+    layers = frames[0];
+    activeId = (layers.find(layer => layer.name === spec.tracks[0].name) || layers[layers.length - 1]).id;
+    fps = MOTION_FPS;
+    $('fps').value = String(MOTION_FPS);
+    recount();
+    rebuildOnion();
+    rebuildAll();
+    renderFrames();
+    if (saveKind !== 'shot' && !editing) setSaveKind('shot');
+    renderSaveKind();
+    const names = spec.tracks.map(track => track.name).join(', ');
+    const detail = `${spec.by === 'ai' ? `"${spec.prompt}"` : spec.label}: ${frames.length} frames at ${MOTION_FPS} fps, moving ${names}`
+      + `${spec.strength !== 1 ? ` (strength ${spec.strength}\u00d7)` : ''}`;
+    logEvent(spec.by === 'ai' ? 'ai' : 'artist', spec.by === 'ai' ? 'Motion, accepted' : 'Motion preset', detail);
+    markGuide('animate');
+    renderTray();
+    message('drawing-status', `\ud83c\udfac ${frames.length} frames${replaced > 1 ? ` (replacing ${replaced}; Undo brings them back)` : ''}. Every frame is yours to edit: scrub, grab with \u2725, redraw. Space plays.`);
+    setTool('move');
+    play();
+  }
+  function skipMotion() {
+    if (!motionDraft) return;
+    const { spec } = motionDraft;
+    if (spec.by === 'ai') logEvent('ai', 'Motion, skipped', `"${spec.prompt}"`);
+    stopMotionPreview();
+    renderTray();
+  }
+  // What can move: anything visible with ink that isn't scenery. Defaults to what's selected, else the assets.
+  const movable = () => layers.filter(layer => layer.visible && hasInk([layer]) && !isScenery(layer));
+  let animSubjects = new Set();
+  function defaultSubjects() {
+    // What you grabbed (or an asset you're on); otherwise the placed assets; otherwise your latest drawing.
+    const can = movable();
+    const active = can.find(layer => layer.id === activeId && (layer.asset || tool === 'move'));
+    const picks = active ? [active] : can.filter(layer => layer.asset).slice(0, 3);
+    return new Set((picks.length ? picks : can.slice(-1)).map(layer => layer.id));
+  }
+  function renderAnimSubjects() {
+    const can = movable();
+    animSubjects = new Set([...animSubjects].filter(id => can.some(layer => layer.id === id)));
+    if (!animSubjects.size) animSubjects = defaultSubjects();
+    $('anim-subjects').replaceChildren(...(can.length ? can.map(layer => {
+      const chip = el('button', 'anim-chip', `${layer.asset ? '\u25c6 ' : ''}${layer.name}`);
+      chip.type = 'button';
+      chip.setAttribute('aria-pressed', String(animSubjects.has(layer.id)));
+      chip.addEventListener('click', () => {
+        if (animSubjects.has(layer.id)) animSubjects.delete(layer.id);
+        else if (animSubjects.size < 4) animSubjects.add(layer.id);
+        renderAnimSubjects();
+      });
+      return chip;
+    }) : [el('span', 'anim-empty', 'Nothing to move yet. Drop in an asset below, or draw something first.')]));
+    if (!can.length) $('anim-add').open = true;
+    const ready = animSubjects.size > 0;
+    document.querySelectorAll('#anim-presets button').forEach(button => { button.disabled = !ready; });
+    $('anim-go').disabled = !ready;
+  }
+  function chosenTracks(keysFor) {
+    return layers.filter(layer => animSubjects.has(layer.id)).map(layer => {
+      const b = inkBounds(layer.strokes);
+      const box = { x: b.x / W, y: b.y / H, w: b.w / W, h: b.h / H };
+      return { layerId: layer.id, name: layer.name, box, keys: keysFor(box, layer) };
+    });
+  }
+  function runPreset(preset) {
+    const tracks = chosenTracks(box => preset.keys(box));
+    if (!tracks.length) return;
+    $('animate-sheet').close();
+    previewMotion({ by: 'preset', label: `${preset.icon} ${preset.name}`, seconds: motionSeconds, strength: 1, base: layers, tracks });
+  }
+  async function runAIMotion(prompt) {
+    const tracks = chosenTracks(() => []);
+    if (!tracks.length || !prompt) return;
+    const status = $('anim-status');
+    status.textContent = '\u2726 Choreographing your layers\u2026 (one AI call)';
+    status.classList.remove('error');
+    $('anim-go').disabled = true;
+    try {
+      const subjects = tracks.map(track => ({ id: layers.findIndex(layer => layer.id === track.layerId), name: track.name.slice(0, 40),
+        box: { x: Math.max(0, Math.min(1, track.box.x)), y: Math.max(0, Math.min(1, track.box.y)), w: Math.max(0.02, Math.min(1, track.box.w)), h: Math.max(0.02, Math.min(1, track.box.h)) } }));
+      const result = await postJSON('/api/sparks/motion', JSON.stringify({ prompt, seconds: motionSeconds, subjects, layers: docLayers() }));
+      const byIndex = new Map(result.tracks.map(track => [track.subject, track.keys]));
+      const aiTracks = tracks.map((track, i) => ({ ...track, keys: byIndex.get(subjects[i].id) })).filter(track => track.keys?.length);
+      if (!aiTracks.length) throw new Error('AI returned no motion for those layers. Try other words.');
+      status.textContent = '';
+      $('animate-sheet').close();
+      previewMotion({ by: 'ai', label: `\u2726 ${result.note || prompt}`, prompt, seconds: motionSeconds, strength: 1, base: layers, tracks: aiTracks });
+    } catch (error) {
+      status.textContent = error.message;
+      status.classList.add('error');
+    } finally {
+      $('anim-go').disabled = !animSubjects.size;
+    }
+  }
+  // A backdrop from the starters, slid under everything in every frame (replacing a previous one).
+  function setBackdrop(starterId) {
+    const starter = STARTERS.find(s => s.id === starterId);
+    const scenery = starter ? starter.build()[0].filter(layer => layer.name !== 'Draw here') : [];
+    const kept = layers.filter(layer => !layer.backdrop);
+    if (kept.length + scenery.length > MAX_LAYERS) {
+      $('anim-status').textContent = `That backdrop needs ${scenery.length} layers; a drawing can have ${MAX_LAYERS}.`;
+      return;
+    }
+    pushUndo();
+    frames = frames.map(stack => [
+      ...scenery.map(layer => newLayer(layer.name, { backdrop: starterId, opacity: layer.opacity ?? 1,
+        strokes: layer.strokes.map(stroke => ({ ...stroke, points: stroke.points.slice(), kit: true, seq: 0 })) })),
+      ...stack.filter(layer => !layer.backdrop)]);
+    layers = frames[frameIndex];
+    if (!layers.some(layer => layer.id === activeId)) activeId = layers[layers.length - 1].id;
+    recount();
+    rebuildOnion();
+    rebuildAll();
+    renderFrames();
+    if (starter) logEvent('artist', 'Backdrop', `the ${starter.name} starter`);
+    renderBackdrops();
+    renderAnimSubjects();
+  }
+  function renderBackdrops() {
+    const current = layers.find(layer => layer.backdrop)?.backdrop || '';
+    const choices = [['', 'None'], ...STARTERS.filter(s => s.kind === 'shot' && s.id !== 'bounce').map(s => [s.id, `${s.icon} ${s.name}`])];
+    $('anim-backdrops').replaceChildren(...choices.map(([id, label]) => {
+      const chip = el('button', 'anim-chip', label);
+      chip.type = 'button';
+      chip.setAttribute('aria-pressed', String(id === current));
+      chip.addEventListener('click', () => { if (id !== current) setBackdrop(id); });
+      return chip;
+    }));
+  }
+  async function renderAnimAssets() {
+    const box = $('anim-assets');
+    try {
+      const { items } = await api('/api/assets');
+      box.replaceChildren(...(items.length ? items.slice(0, 16).map(item => {
+        const button = el('button', 'anim-asset');
+        button.type = 'button';
+        button.dataset.tip = `${item.name}|Drop it into the scene, ready to move.`;
+        const image = el('img');
+        image.src = item.image_url;
+        image.alt = '';
+        image.loading = 'lazy';
+        button.append(image, el('span', '', item.name));
+        button.addEventListener('click', async () => {
+          await startPlacing(item);
+          animSubjects = new Set([activeId]);
+          renderAnimSubjects();
+          $('anim-status').textContent = `\u25c6 ${item.name} is in. Pick a move.`;
+        });
+        return button;
+      }) : [el('span', 'anim-empty', 'No assets yet. Save a drawing as \u25c6 Asset first.')]));
+    } catch (error) {
+      box.replaceChildren(el('span', 'anim-empty', error.message));
+    }
+  }
+  function openAnimate() {
+    if (busy()) return;
+    stopPlay();
+    stopMotionPreview();
+    animSubjects = defaultSubjects();
+    $('anim-status').textContent = '';
+    $('anim-add').open = !movable().length;
+    renderAnimSubjects();
+    renderBackdrops();
+    renderAnimAssets();
+    $('animate-sheet').showModal();
+  }
+  function buildAnimate() {
+    $('anim-presets').replaceChildren(...PRESETS.map(preset => {
+      const button = el('button', 'anim-preset');
+      button.type = 'button';
+      button.dataset.tip = `${preset.name}|${preset.hint} Free: no AI.`;
+      button.append(el('span', 'anim-icon', preset.icon), el('span', '', preset.name));
+      button.addEventListener('click', () => runPreset(preset));
+      return button;
+    }));
+    $('anim-examples').replaceChildren(...MOTION_EXAMPLES.map(text => {
+      const chip = el('button', 'example', text);
+      chip.type = 'button';
+      chip.dataset.tip = 'Try it|One AI call: keyframes for your layers, previewed before anything changes.';
+      chip.addEventListener('click', () => { $('anim-prompt').value = text; runAIMotion(text); });
+      return chip;
+    }));
+    document.querySelectorAll('.anim-length [data-seconds]').forEach(button => button.addEventListener('click', () => {
+      motionSeconds = Number(button.dataset.seconds);
+      document.querySelectorAll('.anim-length [data-seconds]').forEach(b => b.setAttribute('aria-checked', String(b === button)));
+    }));
+  }
+  $('animate-open').addEventListener('click', openAnimate);
+  $('animate-close').addEventListener('click', () => $('animate-sheet').close());
+  $('animate-sheet').addEventListener('click', event => { if (event.target === $('animate-sheet')) $('animate-sheet').close(); });
+  $('anim-ai').addEventListener('submit', event => { event.preventDefault(); runAIMotion($('anim-prompt').value.trim()); });
+
+  // Drag an asset card's picture onto the canvas: it lands where you drop it (desktop).
+  $('canvas-frame').addEventListener('dragover', event => {
+    if (!event.dataTransfer.types.includes('application/x-inkling-asset')) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'copy';
+    $('canvas-frame').classList.add('drop-ok');
+  });
+  $('canvas-frame').addEventListener('dragleave', () => $('canvas-frame').classList.remove('drop-ok'));
+  $('canvas-frame').addEventListener('drop', event => {
+    $('canvas-frame').classList.remove('drop-ok');
+    const raw = event.dataTransfer.getData('application/x-inkling-asset');
+    if (!raw) return;
+    event.preventDefault();
+    const at = normPoint(event);
+    startPlacing(JSON.parse(raw), { x: at.x * W, y: at.y * H });
+  });
 
   function trayButton(label, title, handler) {
     const button = document.createElement('button');
@@ -1359,6 +1803,24 @@
   }
   function renderTray() {
     renderStarters();
+    $('spark-tray').classList.toggle('motion', !!motionDraft);
+    if (motionDraft) {
+      clearTimeout(trayTimer);
+      trayTimer = null;
+      const tray = $('spark-tray');
+      tray.hidden = false;
+      tray.classList.remove('error');
+      tray.classList.add('motion');
+      const { spec, images } = motionDraft;
+      const note = el('span', 'tray-note', `\ud83c\udfac ${spec.label} \u00b7 ${images.length} frames${spec.strength !== 1 ? ` \u00b7 ${spec.strength}\u00d7` : ''}`);
+      tray.replaceChildren(note,
+        trayButton('Keep <kbd>\u23ce</kbd>', 'Keep \u00b7 Enter|Becomes real frames: scrub, drag, and redraw any of them.', keepMotion),
+        trayButton('Skip <kbd>Esc</kbd>', 'Skip \u00b7 Esc', skipMotion),
+        trayButton('Softer', 'Softer|Same motion, smaller moves. No AI call.', () => restrength(-0.3)),
+        trayButton('Bigger', 'Bigger|Same motion, larger moves. No AI call.', () => restrength(0.3)));
+      if (spec.by === 'ai') tray.append(trayButton('\u21bb', 'Another take|Asks AI again (one more call).', () => { skipMotion(); openAnimate(); }));
+      return;
+    }
     const ready = activeSpark();
     if (trayTimer && !ready) return; // a hint is showing; a ready spark replaces it
     clearTimeout(trayTimer);
@@ -1440,6 +1902,12 @@
     } else if (!mod && (event.key === '[' || event.key === ']')) {
       event.preventDefault();
       setWidth(Number($('width').value) + (event.key === ']' ? 2 : -2));
+    } else if (motionDraft && (event.key === 'Enter' || event.key === 'Escape') && !event.target.closest?.('button, a, [role="button"]')) {
+      event.preventDefault();
+      event.key === 'Enter' ? keepMotion() : skipMotion();
+    } else if (!mod && key === 'a' && !busy()) {
+      event.preventDefault();
+      openAnimate();
     } else if (event.key === 'Enter' && activeSpark() && !event.target.closest?.('button, a, [role="button"]')) {
       // Focused controls (Dismiss, Save, library cards) keep their own Enter behavior.
       event.preventDefault();
@@ -1579,8 +2047,10 @@
       return { path: updating ? `/api/assets/${editing.id}` : '/api/assets', method: updating ? 'PUT' : 'POST', history,
         body: { name, type: $('asset-type').value, ...base, history, ...(pendingOrigin && !updating ? { origin: pendingOrigin } : {}) } };
     }
-    const project = $('shot-project').value.trim();
-    const sequence = $('shot-sequence').value.trim();
+    const project = $('shot-project').value.trim() || 'demo';
+    // Studios name shots SEQ_SHOT (SQ070_0010), so a blank sequence comes from the code.
+    let sequence = $('shot-sequence').value.trim();
+    if (!sequence && /^[A-Za-z0-9.-]+_/.test(name)) $('shot-sequence').value = sequence = name.split('_')[0];
     for (const [label, value] of [['Scene code', name], ['Project', project], ['Sequence', sequence]]) {
       if (!CODE.test(value)) throw new Error(`${label}: letters, numbers, _ . or - only (no spaces). e.g. SQ010_0040`);
     }
@@ -1888,7 +2358,7 @@
     const actions = el('div', 'card-actions');
     const place = el('button', 'mini primary-mini', '\u25c6 Place');
     place.type = 'button';
-    place.dataset.tip = 'Place in a scene|Drag a box on the canvas (or tap). It becomes a linked layer, so it always knows where it\'s used.';
+    place.dataset.tip = 'Place in a scene|Drops it onto the canvas, ready to drag (or drag its picture onto the canvas). It stays linked, so it always knows where it\'s used.';
     place.addEventListener('click', () => startPlacing(item));
     const where = el('button', 'mini where-mini', 'Where used?');
     where.type = 'button';
@@ -1915,7 +2385,13 @@
       text.append(made);
     }
     actions.append(place, where, vary, edit);
-    card.append(thumbButton(item, `Edit asset ${item.name}`, () => openAsset(item.id)), text, actions);
+    const thumb = thumbButton(item, `Edit asset ${item.name}`, () => openAsset(item.id));
+    thumb.draggable = true;
+    thumb.addEventListener('dragstart', event => {
+      event.dataTransfer.setData('application/x-inkling-asset', JSON.stringify({ id: item.id, name: item.name }));
+      event.dataTransfer.effectAllowed = 'copy';
+    });
+    card.append(thumb, text, actions);
     return card;
   }
   function statusSelect(item, onChanged) {
@@ -3257,8 +3733,8 @@
       show: () => { canvas.scrollIntoView({ behavior: 'smooth', block: 'center' }); setAiMode('sketch'); pulse('#ai-bar .ai-input'); flashTray('Draw here, or type in Ask AI below for a blue-pencil start.'); } },
     { id: 'asset', title: 'Save as asset', detail: 'Draw once, reuse anywhere. e.g. "Red Rocket".',
       show: () => { setSaveKind('asset'); $('save-form').scrollIntoView({ behavior: 'smooth', block: 'center' }); $('title').focus({ preventScroll: true }); pulse('.kind-switch [data-kind="asset"]'); } },
-    { id: 'animate', title: 'Animate it', detail: 'Place it in a scene, add frames, move what moves.',
-      show: () => goPlace() },
+    { id: 'animate', title: 'Animate it', detail: 'Tap \ud83c\udfac Animate: pick what moves and how. A free preset, or describe it.',
+      show: () => openAnimate() },
     { id: 'where', title: 'Find anything', detail: 'Any asset, scene, or frame: describe or sketch it.',
       show: () => { setLibraryTab('asset'); $('results').scrollIntoView({ behavior: 'smooth', block: 'start' }); pulse('.asset-card .where-mini'); } }
   ];
@@ -3558,6 +4034,7 @@
     }
   }
   buildStarters();
+  buildAnimate();
   renderAssetFilters();
   rebuildAll();
   renderFrames();

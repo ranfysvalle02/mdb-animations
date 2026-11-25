@@ -671,3 +671,49 @@ body.focus-mode { overflow: hidden; overscroll-behavior: none; }
 }
 
 .bd-player-bar[hidden] { display: none; }
+
+/* ---------- Direct manipulation + Animate ---------- */
+.layer-hud { position: absolute; z-index: 2; top: 8px; left: 8px; max-width: calc(100% - 16px); padding: 5px 11px; border: 0; border-radius: 999px; background: #0b2422c7; color: #e9f2ec; font-size: 12.5px; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; backdrop-filter: blur(6px); animation: popIn .25s var(--ease) both; }
+.layer-hud.asset { background: #0f766ee6; }
+.layer-hud[hidden] { display: none; }
+#drawing.move-mode { cursor: grab; }
+#drawing.move-mode:active { cursor: grabbing; }
+.canvas-frame.drop-ok { outline: 3px dashed var(--green); outline-offset: -3px; }
+.thumb-button[draggable="true"] { cursor: grab; }
+.animate-open { flex: none; min-height: 36px; padding: 0 14px; border: 0; border-radius: 10px; background: linear-gradient(110deg, #0f766e, #6d28d9); color: white; font-size: 13.5px; font-weight: 750; box-shadow: 0 6px 16px #0f766e33; }
+.animate-open:hover { filter: brightness(1.08); }
+.animate-sheet .anim-step { margin-top: 16px; }
+.animate-sheet h3 { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; font-size: 15px; }
+.animate-sheet h3 small { font-weight: 500; color: var(--muted); }
+.anim-num { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: var(--green); color: white; font-size: 12px; }
+.anim-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.anim-chip { min-height: 38px; padding: 0 14px; border: 1.5px solid var(--line); border-radius: 999px; background: white; font-size: 13.5px; font-weight: 650; }
+.anim-chip[aria-pressed="true"] { border-color: var(--green); background: var(--green-soft); color: var(--green); }
+.anim-empty { font-size: 13px; color: var(--muted); }
+.anim-add { margin-top: 10px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 12px; background: #fbfcf8; }
+.anim-add summary { cursor: pointer; font-size: 13.5px; font-weight: 650; color: var(--green); }
+.anim-label { margin: 10px 0 6px; font-size: 12.5px; font-weight: 700; color: var(--muted); }
+.anim-label small { font-weight: 500; }
+.anim-assets { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; }
+.anim-asset { flex: none; display: grid; gap: 4px; width: 92px; padding: 6px; border: 1px solid var(--line); border-radius: 12px; background: white; font-size: 12px; font-weight: 650; text-align: left; }
+.anim-asset img { width: 100%; aspect-ratio: 1000 / 650; object-fit: contain; border-radius: 8px; background: white; }
+.anim-asset span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.anim-presets { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 8px; }
+.anim-preset { display: grid; justify-items: center; gap: 2px; min-height: 66px; padding: 8px 6px; border: 1px solid var(--line); border-radius: 14px; background: white; font-size: 13px; font-weight: 650; }
+.anim-preset:hover:not(:disabled) { border-color: var(--green); box-shadow: var(--shadow); }
+.anim-icon { font-size: 22px; line-height: 1.1; }
+.anim-ai { display: flex; align-items: center; gap: 6px; margin-top: 12px; padding: 4px 4px 4px 12px; border: 2px solid transparent; border-radius: 14px; background: linear-gradient(white, white) padding-box, linear-gradient(110deg, #7c3aed, #4f8fe6) border-box; }
+.anim-ai input { flex: 1; min-width: 0; min-height: 40px; border: 0; background: none; font-size: 16px; outline: none; }
+.anim-ai .ai-spark { color: var(--violet); }
+.anim-length .segmented { display: inline-grid; grid-template-columns: repeat(3, 72px); gap: 3px; padding: 3px; border-radius: 12px; background: #e9efe6; }
+.anim-length .segmented button { min-height: 38px; border: 0; border-radius: 9px; background: none; color: var(--muted); font-weight: 650; }
+.anim-length .segmented button[aria-checked="true"] { background: white; color: var(--ink); box-shadow: 0 1px 3px #0b242222; }
+#anim-status.error { color: #b91c1c; }
+@media (max-width: 639px) { .animate-open { padding: 0 10px; } .anim-presets { grid-template-columns: repeat(4, 1fr); } .anim-preset { min-height: 60px; font-size: 12px; } }
+@media (max-width: 639px) {
+  /* The preview is the point: one slim, scrollable row of controls instead of a slab over the canvas. */
+  .tray.motion { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; gap: 5px; padding: 5px 6px 5px 10px; font-size: 12px; }
+  .tray.motion::-webkit-scrollbar { display: none; }
+  .tray.motion .tray-note { flex: none; max-width: 42vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tray.motion button { flex: none; min-height: 34px; padding: 0 10px; }
+}

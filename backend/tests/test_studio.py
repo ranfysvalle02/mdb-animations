@@ -383,3 +383,26 @@ def test_encode_strokes_simplifies_to_a_budget_and_skips_erasers():
     assert lines[0] == "S0 color #000000 width 4.0 points 0,325 1000,325"  # a straight line needs two points
     assert lines[1].startswith("S2 color #112233 width 3.0 fill #445566 points") and len(lines) == 2
     assert sum(len(line.split(" points ")[1].split()) for line in lines) <= VARIATION_SOURCE_POINTS
+
+
+def test_motion_keys_start_from_the_drawn_pose_and_stay_in_bounds():
+    from backend.ai import IDENTITY_KEY, _Key, clean_track
+    raw = [_Key(t=0.5, x=9, y=-0.3, sx=0, sy=1.2, r=5000), _Key(t=0.2, x=0.1, y=0, sx=1, sy=1, r=0),
+           _Key(t=0.5, x=0.2, y=-0.2, sx=1, sy=1, r=10), _Key(t=0.1, x=0.4, y=0.4, sx=2, sy=2, r=45)]
+    track = clean_track(raw)
+    assert track[0] == IDENTITY_KEY  # whatever the model says, frame 1 is exactly the artist's pose
+    assert [k["t"] for k in track] == [0, 0.1, 0.2, 0.5, 1.0]  # sorted, the duplicate t=0.5 resolved, an end key added
+    assert track[3] == {"t": 0.5, "x": 0.2, "y": -0.2, "sx": 1.0, "sy": 1.0, "r": 10.0}
+    assert track[4] == {**track[3], "t": 1.0}  # holds the last pose
+    assert clean_track([_Key(t=0.3, x=float("nan"), y=0, sx=1, sy=1, r=0)])[1]["x"] == -1.5  # non-finite values clamp
+
+
+def test_motion_endpoint_validates_and_is_metered_as_ai(client):
+    http, _ = client
+    http.ai.motion.return_value = {"kind": "motion", "tracks": []}
+    subject = {"id": 0, "name": "Red Rocket", "box": {"x": 0.4, "y": 0.5, "w": 0.1, "h": 0.3}}
+    body = {"prompt": "blasts off to the top right", "seconds": 2, "subjects": [subject], "layers": [{"strokes": []}]}
+    assert http.post("/api/sparks/motion", json=body).json()["kind"] == "motion"
+    assert http.post("/api/sparks/motion", json={**body, "seconds": 10}).status_code == 422  # short by design
+    assert http.post("/api/sparks/motion", json={**body, "subjects": [subject, subject]}).status_code == 422
+    assert http.post("/api/sparks/motion", json={**body, "subjects": []}).status_code == 422

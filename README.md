@@ -26,7 +26,7 @@ private library per member).
 | | You | Inkling |
 | --- | --- | --- |
 | **1. Draw it once** | Draw (try **Focus**), start from a **starter**, or **Ask AI** to sketch a layer / fix a spot | Pressure, palm rejection, layers. Voyage checks for duplicates before you save. **Grow variations** turns one asset into a cast by editing your strokes |
-| **2. Animate it** | Place the asset in a scene, add frames, slide it with **Move** | Placements stay linked to their asset and version in every frame; onion skin, playback, one-tap updates |
+| **2. Animate it** | Drop the asset in, drag it, tap **🎬 Animate**: a free preset or *"wobbles, then blasts off"* | One AI call returns keyframes that move **your** strokes (never redraws them). Preview, keep, then tweak any frame. Short by design: 1-3 s |
 | **3. Find anything** | Words, **✏️ a doodle**, or "with ◆ asset" | One vector per asset, scene, layer, and **frame**; filters (status, project, hand share, color) run inside Atlas Vector Search |
 | **4. Always know** | **Where used?** and **🔍 Breakdown** | Usage, outdated versions, look-alikes, family, who made what, and **how it was made**: replay, evolution v1 → vN, art math, **⬇ Save replay** as a video |
 

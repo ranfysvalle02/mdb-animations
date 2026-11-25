@@ -298,3 +298,11 @@ def test_ready_explains_a_fresh_boot_instead_of_a_dead_end(client):
     boot.set_phase("ready")
     library.ready.return_value = True
     assert test_client.get("/api/ready").json()["status"] == "ready"
+
+
+def test_ai_motion_counts_against_the_ai_budget():
+    from starlette.requests import Request as Req
+
+    from backend.main import AI_BUDGET, budget_for
+    scope = {"type": "http", "method": "POST", "path": "/api/sparks/motion", "query_string": b"", "headers": []}
+    assert budget_for(Req(scope)) is AI_BUDGET

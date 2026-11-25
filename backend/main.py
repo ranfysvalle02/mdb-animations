@@ -24,7 +24,7 @@ from backend.ai import AIError, AIUnavailable, Sparks
 from backend.auth import DEMO_OWNER, SESSION_COOKIE, AuthError, AuthUnavailable, Budget, MStash, OpenAuth, Throttle, jwt_claims, service_owner
 from backend.library import Library, LibraryError, ink_crop, render_image
 from backend.models import (
-    ASSET_TYPES, CODE_PATTERN, MAX_LAYERS, SHOT_STATUSES, Asset, Drawing, LayersRequest, Shot, ShotUpdate, SketchRequest, SparkRequest, TagRequest,
+    ASSET_TYPES, CODE_PATTERN, MAX_LAYERS, SHOT_STATUSES, Asset, Drawing, LayersRequest, MotionRequest, Shot, ShotUpdate, SketchRequest, SparkRequest, TagRequest,
     SketchSearch, VariationPlanRequest, VariationRequest,
     normalize_tag,
 )
@@ -106,7 +106,7 @@ AI_BUDGET = Budget("ai", "AI drafts", int(os.environ.get("INKLING_AI_PER_HOUR", 
 EMBED_BUDGET = Budget("embeds", "saves and searches", int(os.environ.get("INKLING_EMBEDS_PER_HOUR", "600")))
 _ID = r"[0-9a-fA-F-]{36}"
 METERED = [
-    (AI_BUDGET, "POST", re.compile(r"/api/(sparks/(strokes|sketch|guide)|tags/suggest|assets/" + _ID + r"/variations(/plan)?)")),
+    (AI_BUDGET, "POST", re.compile(r"/api/(sparks/(strokes|sketch|guide|motion)|tags/suggest|assets/" + _ID + r"/variations(/plan)?)")),
     (EMBED_BUDGET, "POST", re.compile(r"/api/(drawings|assets|assets/similar|shots|search/sketch|shots/" + _ID + r"/(sync/" + _ID + r"|link))")),
     (EMBED_BUDGET, "PUT", re.compile(r"/api/(assets|shots)/" + _ID)),
     (EMBED_BUDGET, "GET", re.compile(r"/api/(search|assets/" + _ID + r"/where-used)")),
@@ -439,6 +439,13 @@ async def spark_sketch(request: Request) -> dict:
     """AI drafts a whole layer in blue pencil from a few words. Returned as a preview; never auto-applied."""
     sketch = await read_json(request, SketchRequest)
     return await run_in_threadpool(request.app.state.ai.sketch, sketch)
+
+
+@app.post("/api/sparks/motion")
+async def spark_motion(request: Request) -> dict:
+    """AI choreographs a short clip as keyframes for the artist's own layers. A preview; nothing is applied."""
+    motion = await read_json(request, MotionRequest)
+    return await run_in_threadpool(request.app.state.ai.motion, motion)
 
 
 @app.post("/api/sparks/guide")

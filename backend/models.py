@@ -245,6 +245,30 @@ class SparkRequest(BaseModel):
         return self
 
 
+class MotionSubject(BaseModel):
+    """A layer that should move: its index in the stack, its name, and where its ink sits (canvas fractions)."""
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    id: int = Field(ge=0, lt=MAX_LAYERS)
+    name: str = Field(min_length=1, max_length=40)
+    box: Region
+
+
+class MotionRequest(BaseModel):
+    """Ask AI to choreograph a short clip: keyframes for the artist's own layers, never new drawing."""
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    prompt: str = Field(min_length=3, max_length=200)
+    seconds: float = Field(ge=0.5, le=3, allow_inf_nan=False)
+    subjects: list[MotionSubject] = Field(min_length=1, max_length=4)
+    layers: list[Layer] = Field(default_factory=list, max_length=MAX_LAYERS)
+
+    @model_validator(mode="after")
+    def limits(self) -> "MotionRequest":
+        check_layers(self.layers, require_ink=False)
+        if len({subject.id for subject in self.subjects}) != len(self.subjects):
+            raise ValueError("Each subject may appear once.")
+        return self
+
+
 class SketchRequest(BaseModel):
     """Ask AI for a blue-pencil starting layer; the artist accepts, edits, and draws over it."""
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)

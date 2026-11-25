@@ -15,7 +15,7 @@ from pydantic import BaseModel
 
 from backend.library import CANVAS_HEIGHT, CANVAS_WIDTH, png_bytes, render_image
 from backend.models import (
-    MAX_POINTS, MAX_STROKES, Layer, Region, SketchRequest, SparkRequest, Stroke, TagRequest, VariationPlanRequest,
+    MAX_POINTS, MAX_STROKES, Layer, MotionRequest, Region, SketchRequest, SparkRequest, Stroke, TagRequest, VariationPlanRequest,
     VariationRequest, clean_tags,
 )
 
@@ -50,6 +50,47 @@ class _Stroke(BaseModel):
     color: str
     width: float
     points: list[_Point]
+
+
+class _Key(BaseModel):
+    t: float
+    x: float
+    y: float
+    sx: float
+    sy: float
+    r: float
+
+
+class _Track(BaseModel):
+    subject: int
+    keys: list[_Key]
+
+
+class _Motion(BaseModel):
+    note: str
+    tracks: list[_Track]
+
+
+MAX_MOTION_KEYS = 16
+IDENTITY_KEY = {"t": 0.0, "x": 0.0, "y": 0.0, "sx": 1.0, "sy": 1.0, "r": 0.0}
+
+
+def clean_track(keys: list[_Key]) -> list[dict]:
+    """Keyframes the studio can trust: sorted, de-duplicated, bounded, starting from the pose as drawn."""
+    clamp = lambda v, lo, hi: max(lo, min(hi, float(v))) if math.isfinite(v) else lo  # noqa: E731
+    by_t: dict[float, dict] = {}
+    for key in keys:
+        t = round(clamp(key.t, 0, 1), 4)
+        by_t[t] = {"t": t, "x": round(clamp(key.x, -1.5, 1.5), 4), "y": round(clamp(key.y, -1.5, 1.5), 4),
+                   "sx": round(clamp(key.sx, 0.05, 4), 3), "sy": round(clamp(key.sy, 0.05, 4), 3),
+                   "r": round(clamp(key.r, -1080, 1080), 1)}
+    track = [by_t[t] for t in sorted(by_t)][:MAX_MOTION_KEYS]
+    if not track or track[0]["t"] > 0:
+        track.insert(0, dict(IDENTITY_KEY))
+    track[0] = dict(IDENTITY_KEY)  # the clip starts exactly where the artist put things
+    if track[-1]["t"] < 1:
+        track.append({**track[-1], "t": 1.0})
+    return track
 
 
 # Bounds are enforced after generation: nested schema limits exceed Gemini's constraint budget.
@@ -345,6 +386,35 @@ class Sparks:
         if not strokes:
             raise AIError("Gemini couldn't sketch that. Try simpler words, like \"a house on a hill\".")
         return {"kind": "sketch", "note": result.note.strip()[:80], "prompt": request.prompt, "strokes": strokes}
+
+    def motion(self, request: MotionRequest) -> dict:
+        """Choreography, not drawing: keyframes that move, scale, squash, and turn the artist's own layers."""
+        frames = round(request.seconds * 8)
+        subjects = "\n".join(
+            f"- subject {s.id}: {s.name!r}, center ({s.box.x + s.box.w / 2:.2f}, {s.box.y + s.box.h / 2:.2f}), "
+            f"size {s.box.w:.2f} x {s.box.h:.2f}" for s in request.subjects)
+        result = self._json([
+            types.Part.from_bytes(data=png_bytes(render_image(request.layers)), mime_type="image/png"),
+            f"You are a 2D animator's assistant. The image is the first frame of a {request.seconds:g}-second clip "
+            f"({frames} frames). Animate ONLY these subjects (canvas fractions: (0,0) top-left, (1,1) bottom-right):\n"
+            f"{subjects}\nDirection: {request.prompt}\n"
+            "For each subject return keyframes. t is the time from 0 to 1. x and y are the offset of the subject's "
+            "center from where it is now, in canvas fractions (x right, y down; y=-0.3 moves it up by 30% of the "
+            "canvas height). sx and sy scale it (1 = as drawn; squash = sx 1.2, sy 0.8). r rotates it clockwise in "
+            "degrees. The first key must be t=0, x=0, y=0, sx=1, sy=1, r=0. Use 3-12 keys per subject, placed where "
+            "the motion changes. Use the principles of animation: anticipation, slow in and slow out, squash and "
+            "stretch, arcs, overshoot and settle. Keep subjects mostly on the canvas unless told to leave. Ground "
+            "things that walk or bounce on what's below them in the picture. Also return a note (at most 12 words) "
+            "describing the motion.",
+        ], _Motion)
+        ids = {subject.id for subject in request.subjects}
+        tracks = [{"subject": track.subject, "keys": clean_track(track.keys)}
+                  for track in result.tracks if track.subject in ids and track.keys]
+        tracks = list({track["subject"]: track for track in tracks}.values())
+        if not any(len(track["keys"]) > 2 or track["keys"][-1] != {**IDENTITY_KEY, "t": 1.0} for track in tracks):
+            raise AIError("Gemini couldn't choreograph that. Try a clearer move, like \"hops to the right twice\".")
+        return {"kind": "motion", "note": result.note.strip()[:90], "prompt": request.prompt,
+                "seconds": request.seconds, "tracks": tracks}
 
     def plan_variations(self, asset: dict, request: VariationPlanRequest) -> list[dict]:
         """A short, editable plan: one brief per variation. The artist edits it before anything is drawn."""

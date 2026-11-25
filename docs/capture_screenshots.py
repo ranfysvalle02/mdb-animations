@@ -31,7 +31,7 @@ QUIET = """document.addEventListener('DOMContentLoaded', () => {
 
 def shot(page: Page, name: str) -> None:
     page.wait_for_timeout(400)
-    page.screenshot(path=str(OUT / name))
+    page.screenshot(path=str(OUT / name), animations="disabled")
     print(f"  {name}", flush=True)
 
 
@@ -39,7 +39,7 @@ def studio_shot(page: Page, name: str) -> None:
     """The whole drawing card (tools, canvas, Ask AI, frames) plus the save card, header out of the way."""
     page.evaluate("document.querySelector('.topbar').style.position = 'static'")
     page.wait_for_timeout(1200)  # let the layer list finish sliding in
-    page.locator("section.studio").screenshot(path=str(OUT / name))
+    page.locator("section.studio").screenshot(path=str(OUT / name), animations="disabled")
     page.evaluate("document.querySelector('.topbar').style.position = ''")
     print(f"  {name}", flush=True)
 
@@ -179,9 +179,36 @@ def main() -> None:
         top(page, "#library-heading", 70)
         shot(page, "08-search-by-drawing.png")
 
-        group = card(page, "SQ040_0020")
-        group.locator(".frame-chips button", has_text=re.compile("^5$")).first.click()
-        page.wait_for_timeout(2500)
+        # Animate: drop an asset onto a backdrop, pick a move, keep it, then grab and tweak a frame.
+        page.click("#clear")
+        page.wait_for_timeout(500)
+        page.click("#tab-asset")
+        page.wait_for_timeout(1200)
+        card(page, "Red Rocket").get_by_role("button", name="\u25c6 Place").click()
+        page.wait_for_timeout(1500)
+        page.keyboard.press("a")
+        page.wait_for_selector("#animate-sheet[open]")
+        page.locator("#anim-add summary").click()
+        page.locator("#anim-backdrops button", has_text="Beach").click()
+        page.wait_for_timeout(900)
+        shot(page, "09a-animate-sheet.png")
+        page.locator("#anim-presets button", has_text="Hop across").click()
+        page.wait_for_timeout(1100)
+        studio_shot(page, "09b-motion-preview.png")
+        if args.with_ai:
+            page.keyboard.press("Escape")
+            page.keyboard.press("a")
+            page.wait_for_selector("#animate-sheet[open]")
+            page.fill("#anim-prompt", "wobbles nervously, then blasts off to the top right")
+            page.click("#anim-go")
+            page.wait_for_function("!document.getElementById('animate-sheet').open", timeout=90_000)
+            page.wait_for_timeout(1500)
+            studio_shot(page, "09c-ai-motion.png")
+        page.keyboard.press("Enter")
+        page.wait_for_timeout(1200)
+        page.keyboard.press("Space")  # stop the auto-play on frame 1
+        page.locator('#frame-list [data-frame="5"]').click()
+        page.wait_for_timeout(800)
         studio_shot(page, "09-flipbook.png")
 
         open_breakdown(page, "Little Fox")

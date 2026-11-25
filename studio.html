@@ -63,7 +63,7 @@
             <button type="button" class="tool" data-tool="line" aria-pressed="false" aria-label="Line" data-tip="Line &middot; L|Shift snaps to 45&deg;."><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19L19 5"/></svg></button>
             <button type="button" class="tool" data-tool="rect" aria-pressed="false" aria-label="Rectangle" data-tip="Rectangle &middot; R|Shift for a square."><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="6" width="16" height="12" rx="1"/></svg></button>
             <button type="button" class="tool" data-tool="ellipse" aria-pressed="false" aria-label="Ellipse" data-tip="Ellipse &middot; O|Shift for a circle."><svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="12" rx="8" ry="6"/></svg></button>
-            <button type="button" class="tool" data-tool="move" aria-pressed="false" aria-label="Move layer" data-tip="Move layer &middot; M|Drag to slide the whole selected layer. Animate a placed asset frame by frame."><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18M12 3l-3 3M12 3l3 3M12 21l-3-3M12 21l3-3M3 12l3-3M3 12l3 3M21 12l-3-3M21 12l-3 3"/></svg></button>
+            <button type="button" class="tool" data-tool="move" aria-pressed="false" aria-label="Select and move" data-tip="Select &amp; move &middot; V|Tap anything you drew or placed to grab it. Drag to move; pull the corner to resize."><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18M12 3l-3 3M12 3l3 3M12 21l-3-3M12 21l3-3M3 12l3-3M3 12l3 3M21 12l-3-3M21 12l-3 3"/></svg></button>
             <button type="button" class="tool spark-tool" data-tool="spark" aria-pressed="false" aria-label="Fix a spot with AI" data-tip="Fix a spot &middot; S|Box a stuck spot (an eye, a hand). AI suggests a few strokes. You accept or skip.">&#10022;</button>
           </div>
           <button type="button" id="focus-toggle" class="focus-button" aria-label="Focus mode" aria-pressed="false" data-tip="Focus &middot; F|Full-screen canvas for finger and pencil. Esc to leave."><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg><span>Focus</span></button>
@@ -93,6 +93,7 @@
           <div class="canvas-frame" id="canvas-frame">
             <canvas id="drawing" width="1000" height="650" aria-label="Drawing canvas. Draw with a pen, finger, or mouse.">Your browser needs canvas support to draw.</canvas>
             <canvas id="overlay" width="1000" height="650" aria-hidden="true"></canvas>
+            <button type="button" id="layer-hud" class="layer-hud" data-tip="You're on this layer|New ink lands here. Tap to see every layer." hidden></button>
             <form id="spark-popover" class="popover" hidden>
               <label class="sr-only" for="spark-prompt">What should AI fix here?</label>
               <input id="spark-prompt" maxlength="300" autocomplete="off" placeholder="What's wrong? e.g. &ldquo;make the eye look left&rdquo;">
@@ -141,6 +142,7 @@
         <div class="frames" id="frames">
           <button type="button" id="frame-play" class="frame-play" aria-label="Play" data-tip="Play &middot; Space|Flip through your frames. Tap the canvas to stop." hidden>&#9654;</button>
           <ol id="frame-list" class="frame-list" aria-label="Frames"></ol>
+          <button type="button" id="animate-open" class="animate-open" data-tip="Animate &middot; A|Pick what moves and how: a free preset, or describe it and AI choreographs your own layers. Every frame stays editable.">&#127916; Animate</button>
           <button type="button" id="frame-add" class="frame-add" data-tip="New frame &middot; N|Copies this frame, like tracing on a lightbox. Change what moves. , and . step through frames.">+ Frame</button>
           <span id="frame-tools" class="frame-tools" hidden>
             <label class="onion" data-tip="Onion skin|The previous frame shows as a faint red ghost, so you can see the motion."><input type="checkbox" id="onion" checked> Onion</label>
@@ -252,6 +254,41 @@
         <p class="wu-explain">Other assets that look like <b class="wu-name">it</b>. Spot duplicates before your library splits in two.</p>
         <div id="wu-assets" class="wu-grid"></div>
       </section>
+    </dialog>
+
+    <dialog id="animate-sheet" class="sheet animate-sheet" aria-labelledby="animate-title">
+      <div class="sheet-head"><div><p class="eyebrow">&#127916; Animate</p><h2 id="animate-title">Make it move</h2><p class="muted">Short on purpose: a few seconds at 8 frames a second. AI moves <b>your</b> drawing; it never redraws it. Every frame stays editable.</p></div><button type="button" id="animate-close" class="close" aria-label="Close">&times;</button></div>
+      <section class="anim-step">
+        <h3><span class="anim-num">1</span> What moves?</h3>
+        <div id="anim-subjects" class="anim-chips" role="group" aria-label="Layers that move"></div>
+        <details class="anim-add" id="anim-add">
+          <summary>+ Add an asset or a backdrop</summary>
+          <p class="anim-label">&#9670; Asset <small>tap to drop it in</small></p>
+          <div id="anim-assets" class="anim-assets"></div>
+          <p class="anim-label">Backdrop</p>
+          <div id="anim-backdrops" class="anim-chips"></div>
+        </details>
+      </section>
+      <section class="anim-step">
+        <h3><span class="anim-num">2</span> How? <small>presets are free</small></h3>
+        <div id="anim-presets" class="anim-presets"></div>
+        <form id="anim-ai" class="anim-ai" autocomplete="off">
+          <span class="ai-spark" aria-hidden="true">&#10022;</span>
+          <label class="sr-only" for="anim-prompt">Describe the motion</label>
+          <input id="anim-prompt" maxlength="200" placeholder="Or describe it: &ldquo;wobbles, then blasts off to the top right&rdquo;">
+          <button type="submit" id="anim-go" class="ai-go" aria-label="Choreograph with AI">&#8594;</button>
+        </form>
+        <div id="anim-examples" class="examples ai-examples"></div>
+      </section>
+      <section class="anim-step anim-length">
+        <h3><span class="anim-num">3</span> How long?</h3>
+        <div class="segmented" role="radiogroup" aria-label="Length">
+          <button type="button" role="radio" data-seconds="1" aria-checked="false">1 s</button>
+          <button type="button" role="radio" data-seconds="2" aria-checked="true">2 s</button>
+          <button type="button" role="radio" data-seconds="3" aria-checked="false">3 s</button>
+        </div>
+      </section>
+      <p id="anim-status" class="muted" role="status" aria-live="polite"></p>
     </dialog>
 
     <dialog id="starters-sheet" class="sheet" aria-labelledby="starters-title">
@@ -390,7 +427,7 @@
       <div class="sheet-head"><div><p class="eyebrow">How Inkling works</p><h2 id="help-title">Draw it once. Animate it anywhere.</h2><p class="muted">AI drafts. You decide. Every stroke is remembered: who drew it, how, and where it&rsquo;s used.</p></div><button type="button" id="help-close" class="close" aria-label="Close">&times;</button></div>
       <ol class="help-flow">
         <li><b>&#9999;&#65039; Draw it once</b><span>Finger, pencil, or mouse; save it as an asset. Grow lookalikes from your strokes.</span><i>&ldquo;Red Rocket&rdquo;, plus 9 for a battle</i></li>
-        <li><b>&#127902; Animate it</b><span>Place it in a scene, add frames, slide or redraw what moves. Tweak any frame.</span><i>The rocket lifts off in 6 frames.</i></li>
+        <li><b>&#127916; Animate it</b><span>Drop it into a scene, tap Animate, pick a move (free) or describe one (AI). Then grab and tweak any frame.</span><i>&ldquo;wobbles, then blasts off to the top right&rdquo;</i></li>
         <li><b>&#128269; Find anything</b><span>Assets, scenes, or single frames: describe it, sketch it, or pick an asset.</span><i>&ldquo;the moment it clears the trees&rdquo;</i></li>
         <li><b>&#129516; Always know</b><span>Where it's used, what's outdated, what looks like it, and how it was made, stroke by stroke.</span><i>&ldquo;Which frames still show the old rocket?&rdquo; &middot; watch Little Fox go from doodle to v3</i></li>
       </ol>
@@ -402,6 +439,7 @@
         <div><dt>&#128279; Used in</dt><dd>A shortcut to the original. Updates in one tap.</dd></div>
         <div><dt>&#128064; Looks like it</dt><dd>Reverse image search across scenes.</dd></div>
         <div><dt>&#129516; Similar assets</dt><dd>Near-duplicates in your library.</dd></div>
+        <div><dt>&#127916; Motion</dt><dd>Keyframes that move your own drawing. AI choreographs; it never redraws. Short by design.</dd></div>
         <div><dt>&#10022; Variations</dt><dd>One asset in, lookalikes out. AI edits your strokes; you keep and finish.</dd></div>
         <div><dt>&#9998; Process</dt><dd>Every stroke keeps its order and time. Replay any drawing, or save the replay as a video.</dd></div>
         <div><dt>&#128221; Audit trail</dt><dd>Every AI step you took or skipped, saved with the asset. Nothing is a black box.</dd></div>

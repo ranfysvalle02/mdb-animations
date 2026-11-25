@@ -20,7 +20,7 @@ Every step below has to sharpen **Draw → Animate → Find**, or keep that prom
 | **Draw** | Built for fingers and pencils: pressure, palm rejection, brush-pen feel, 12 layers, shapes, eraser, Move, **Focus**, undo for everything |
 | **Ask AI** | One box, three modes, always previewed: **Sketch a layer** (blue-pencil draft under your ink), **Fix a spot** (a few strokes in a box), **Grow variations** (Gemini edits *your* strokes into lookalikes, from a plan you can edit) |
 | **Assets** | Versioned assets with a duplicate check ("this looks like Rocket Ship"), lineage (🌱 Family), and similar assets |
-| **Animate** | Scenes are flipbooks (24 frames, onion skin, playback). Placed assets stay linked to their version in every frame, with one-tap updates. Production metadata (status, assignee) sits next to the art |
+| **Animate** | **🎬 Animate**: pick what moves, a backdrop, and a free preset or a described motion; one Gemini call returns keyframes (move, squash, turn) for the artist's own layers, previewed, then baked into editable frames (1-3 s at 8 fps). Grab anything on the canvas to move or resize it per frame; ink never lands on a linked asset. Every step is in the audit trail |
 | **Find** | One bar over assets, scenes, **single frames**, and ideas: by words, **by sketch**, or "with ◆ asset". Filters (status, project, hand share, color) run *inside* Atlas vector search |
 | **Remember** | Audit trail of every AI step taken or skipped; **Breakdown** (exposure sheet, who made what); every stroke's order and time; **Watch it being made**, **⬇ Save replay** (video), **Evolution** (v1 → vN), and **art math** stored in Atlas |
 | **Accounts** | m-stash sign-up and sign-in; every query and vector search scoped by `owner`; token kept in an HttpOnly cookie, verified by m-stash; a private copy of the demo library in one tap; guide progress synced as an m-stash record |
@@ -127,9 +127,13 @@ Today's thresholds rest on a handful of synthetic drawings. Before showing a stu
 - **Continuity check**: compare a placed character with its asset and flag drift in costume or colors.
 
 ### 6. Motion, to a point (M-L)
-Animation stays a taste of what's possible; assets are the product.
+Animation stays a taste of what's possible; assets are the product. Shipped: presets and AI keyframes for the
+artist's own layers, previewed and baked into editable frames.
+- **Keep the keyframes**: store motion as editable tracks (not only baked frames), with a curve editor, so a
+  timing tweak doesn't mean redrawing frames; then longer scenes (10 s) without 80 stored frames.
 - **Suggest an in-between**: AI proposes frame N+1 from N and N+2 by moving the artist's own strokes, with
   an onion-skin preview, accepted per layer.
+- **Secondary motion**: let AI animate parts (a waving arm, a tail) once assets keep their own layers (step 3).
 - **Motion-aware frame search**: frame deltas as a second vector, to rank within a scene.
 - Index animatics and dailies with **Cinematlas video**: "the rocket appears at 0:42 in SQ030".
 
