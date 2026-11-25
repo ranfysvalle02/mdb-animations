@@ -1,7 +1,6 @@
 """Gemini-powered sparks (minimal, opt-in drawing assists) and auto-tagging."""
 
 import base64
-import binascii
 import io
 import json
 import math

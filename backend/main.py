@@ -25,7 +25,7 @@ from backend.ai import AIError, AIUnavailable, Sparks
 from backend.auth import DEMO_OWNER, SESSION_COOKIE, AuthError, AuthUnavailable, Budget, MStash, OpenAuth, Throttle, jwt_claims, service_owner
 from backend.library import Library, LibraryError, ink_crop, render_image
 from backend.models import (
-    ASSET_TYPES, CODE_PATTERN, MAX_LAYERS, SHOT_STATUSES, AnimateRequest, Asset, CodeRequest, CodeSearch, DirectRequest, Drawing, Layer, LayersRequest, MotionRequest, RefineIdeasRequest,
+    ASSET_TYPES, CODE_PATTERN, MAX_LAYERS, SHOT_STATUSES, AnimateRequest, Asset, CodeRequest, CodeSearch, DirectRequest, Drawing, LayersRequest, MotionRequest, RefineIdeasRequest,
     RefineRequest, Shot, ShotUpdate, SketchRequest, SparkRequest, TagRequest,
     SketchSearch, VariationPlanRequest, VariationRequest,
     normalize_tag,
