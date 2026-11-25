@@ -2,14 +2,15 @@
 
 Six short tutorials, about two minutes each. Do them in order the first time; each builds on the last.
 Everything here works with a finger, a stylus, or a mouse.
+Screenshots show an earlier layout; follow the current labels in the instructions.
 
 | # | Tutorial | You'll learn |
 | --- | --- | --- |
 | 1 | [Your studio in 30 seconds](#1-your-studio-in-30-seconds) | Sign up, pick the demo library |
 | 2 | [Never start from a blank page](#2-never-start-from-a-blank-page) | Starters, Ask AI |
 | 3 | [Draw it once, grow a cast](#3-draw-it-once-grow-a-cast) | Save an asset, variations, the duplicate check |
-| 4 | [Animate it, then share it](#4-animate-it-then-share-it) | A backdrop, the AI director, how animation works, 80 editable frames, a share link |
-| 5 | [Find any frame](#5-find-any-frame) | Search by words, by doodle, by asset |
+| 4 | [Animate it, then share it](#4-animate-it-then-share-it) | One-tap direction, editable motion, a share link |
+| 5 | [Search by meaning](#5-search-by-meaning) | Find assets and animation moments by words, sketch, or asset |
 | 6 | [Always know: where, and how it was made](#6-always-know-where-and-how-it-was-made) | Where used, Breakdown, replay, evolution |
 
 ---
@@ -39,7 +40,7 @@ moment your pencil touches the page.
 
 ![The beach starter: five layers you can edit](screenshots/03-starter-beach.png)
 
-**Ask AI → Sketch a layer.** Type what you want (*"a lighthouse on a rocky cliff"*) and Gemini drafts
+**AI sparks → Sketch a layer.** Type what you want (*"a lighthouse on a rocky cliff"*) and Gemini drafts
 blue-pencil strokes that draw themselves in. Then choose:
 
 - **Use sketch** (Enter): it lands as a faint layer *under* your ink, as scaffolding to trace, erase, or hide.
@@ -52,7 +53,7 @@ blue-pencil strokes that draw themselves in. Then choose:
 
 ## 3. Draw it once, grow a cast
 
-1. Draw something (try **Focus** for full-screen paper). In **Save as**, pick **◆ Asset**, give it a
+1. Draw something (try **Focus** for full-screen paper). In **Save your art**, pick **◆ Asset**, give it a
    name, and **Save asset**. Saving again later makes v2, v3, and so on.
 2. Before a *new* asset is saved, Voyage checks your library: *"This looks like Rocket Ship. Same thing?"*
    Save it as the next version of that one, or as new.
@@ -62,50 +63,40 @@ blue-pencil strokes that draw themselves in. Then choose:
 
 ![Your library: the original, its variants, and how much of each is your hand](screenshots/05-library.png)
 
-Every card shows its version, where it's used, its lineage (*✦ variant of Red Rocket*), and its art math
-(*✍ 56% hand*, palette dots). **✍ Mostly by hand** and the color dots filter the library, and Voyage search
-too.
+Asset cards show versions, usage, and lineage (*✦ variant of Red Rocket*).
 
 ## 4. Animate it, then share it
 
-Up to 10 seconds at 8 frames a second: 80 frames, long enough for a little story, short enough to try
-ten. And it shows you how animation actually works while it does it.
+Draw something or open an asset. In **Make a little magic**, describe what happens (or leave it blank for a
+surprise) and tap **Make a scene**. If the drawing is new or changed, Inkling saves and tags it first.
+Choose **My strokes** to move the original drawing, or **AI reimagines** to generate a video inspired by
+it. Video generation and each revision are paid Gemini calls, and may change the artwork.
 
-1. **Drop it in.** Tap **◆ Place** on an asset (or drag its picture onto the canvas). It lands center stage,
-   already grabbed: drag it anywhere, pull the corner to resize. The chip on the canvas always says what
-   you're on (*◆ Red Rocket*). Drawing over a placed asset puts your ink on a plain **Ink** layer above it,
-   so the asset stays clean and linked.
-2. **🎬 Animate** (or press `A`). **The cast** is what moves. Under **+ Add**, pick a **backdrop** (beach,
-   mountains, forest, city, space): Voyage AI then ranks your library for that place, comparing the words
-   with your drawings, and marks the best fits with ✦.
+While a take is open, type or speak a change and tap **Change scene**. Original-stroke revisions use the
+previous choreography; video revisions use the previous Gemini take. **Keep** turns a stroke preview into
+editable frames. AI video takes are saved automatically and can be reopened from **Animated scenes**.
+Video search uses the source drawing and directions, not the generated frames.
 
-![Animate: the cast, a backdrop, and Voyage's picks from your library](screenshots/09a-animate-sheet.png)
+Choose **Backdrop** before animating an asset to use a starter or a saved backdrop. To make your own,
+save a drawing as an asset with type **Backdrop**. Its layers are copied into the new scene and remain
+editable; changing the original later does not update that copy. Tap **Variations** to make multiple
+editable ideas from an asset or backdrop.
 
-3. **Direct it.** An AI director looks at your scene and pitches three shots: a title, a one-line story,
-   who moves, and the direction in plain words. Tap **✦ Animate this**, or **Edit first**, or write your
-   own. Not feeling AI? **⚡ Quick moves** (Lift off, Hop across, Float, Bounce...) are free and instant.
+Where your browser supports it, tap the microphone to dictate a prompt or search, then review and submit
+the text yourself. Your browser may send audio to its speech service; otherwise, use your keyboard or
+device dictation.
 
-![The director's pitches for a rocket on a beach](screenshots/09b-director.png)
-
-4. **Watch how it works.** The preview plays on your canvas with the motion drawn on: a dot for every
-   frame along the path, ◆ diamonds on the **keyframes** (labelled *anticipation*, *takeoff*, *settle*...),
-   and a timeline on top. Tap **◆ How it works** for *Animation, demystified*: the poses that matter, the
-   in-betweens the computer fills in, why **spacing is speed**, the numbers behind each pose, and the
-   animation principles in your shot.
-
-![The preview: keyframes, spacing, and a timeline, right on the canvas](screenshots/09c-motion-preview.png)
+For original-stroke animations, open **More tools & frames** to scrub, drag, resize, or redraw frames;
+**Onion** ghosts the previous frame and **Space** plays.
 
 ![Animation, demystified, on your own shot](screenshots/09d-how-it-moves.png)
 
-5. **Make it yours.** **Keep** (Enter), **Skip** (Esc), or **Softer** / **Bigger** (no extra AI call). Kept
-   motion becomes 80 real frames. Scrub to any frame and drag, resize, or redraw: it's your animation now.
-   **Onion** ghosts the previous frame; **Space** plays.
+For hands-on direction, choose **🎬 Direct…** to pick the cast, add a backdrop, edit the prompt, or use a
+free **⚡ Quick move**.
 
-![Frame 13 of 80: grab the rocket and adjust just this frame](screenshots/09-flipbook.png)
-
-6. **Share it.** **🔗 Save & share** saves the scene and gives you a link: a looping GIF and a page that
-   explains how it moves, in plain words. Copy it, **Share…** from your phone, or download the GIF. Edit
-   and share again: same link, new clip. **Stop sharing** turns it off.
+For original-stroke scenes, **🔗 Save & share** gives you a link: a looping GIF and a page that explains how it
+moves. Copy it, **Share…** from your phone, or download the GIF. Edit and share again: same link, new clip.
+**Stop sharing** turns it off.
 
 ![Share: a link, a GIF, and nothing else from your library](screenshots/09e-share.png)
 
@@ -115,9 +106,10 @@ The direction travels with the scene: **🔍 Breakdown → 🎬 How it moves** l
 there), and Voyage embeds it, so you can later search scenes by what happens in them. Placements stay
 linked to their asset and version in *every* frame, so a redraw of the asset updates them all (tutorial 6).
 
-## 5. Find any frame
+## 5. Search by meaning
 
-Open **Find anything** and pick a tab: **◆ Assets**, **▣ Scenes**, **🎞 Frames**, or **✎ Ideas**.
+Open **Find your art**. Search across **Everything**, or narrow results to **Assets**, **Backdrops**, or
+**Animated scenes**. Video matches use their source drawing and directions, not generated frames.
 
 **By words.** Describe the moment: *"the rocket flying high in the sky above the hills"*. Hits are
 grouped by scene, with the best frame first and chips for every frame. **Open frame N** puts it on the
@@ -131,8 +123,7 @@ first.
 
 ![Doodle it, and Inkling finds the frame](screenshots/08-search-by-drawing.png)
 
-**By asset.** On the Frames tab, pick an asset in **With** to list exactly the frames that place it,
-filterable by status (*Not approved*, *In review*...).
+**By asset.** Use **Find similar** on a saved asset to find related art and scenes that use it.
 
 ## 6. Always know: where, and how it was made
 

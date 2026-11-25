@@ -132,6 +132,7 @@ def verify_production(project: str, made: dict) -> None:
         raise RuntimeError(f"Sync and confirm should leave SQ030 current and SQ010_0020 linked: {states}")
     print("One-click fixes: SQ030_0010 updated to v2 (v1 kept hidden); the redrawn rocket confirmed as a linked use.", flush=True)
     check_similar_assets(made)
+    check_director(made)
     check_animation_and_lineage(made, project)
 
 
@@ -242,6 +243,41 @@ def check_similar_assets(made: dict) -> None:
     if rocket_id in {item["id"] for item in twins} or pine_id in {item["id"] for item in twins}:
         raise RuntimeError(f"Similar assets for the pine should exclude itself and the rocket: {twins}")
     print(f"Duplicate check: redrawn rocket matches the saved one ({found[rocket_id]:.3f}); the pine stays separate.", flush=True)
+
+
+def animate(payload: dict) -> list[dict]:
+    """POST /api/animate and collect its NDJSON stream, failing on an in-band error."""
+    from backend.demo import HEADERS
+    req = urllib.request.Request(f"{BASE}/api/animate", data=json.dumps(payload).encode(),
+                                 headers={**HEADERS, "Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=180) as response:
+        if response.headers.get_content_type() != "application/x-ndjson":
+            raise RuntimeError("Animate should stream NDJSON.")
+        events = [json.loads(line) for line in response.read().decode().splitlines() if line.strip()]
+    if not events or events[-1].get("type") != "result":
+        raise RuntimeError(f"Animate did not finish: {events[-1:]}")
+    return events
+
+
+def check_director(made: dict) -> None:
+    """Search and animate a saved asset."""
+    from backend.demo import call, rocket
+
+    rocket_id = made["rocket"]["id"]
+    found = call("GET", "/api/find?q=" + urllib.parse.quote("a spaceship"))
+    if found["timing"]["embeddings"] != 1 or rocket_id not in {item["id"] for item in found["assets"]}:
+        raise RuntimeError(f"Find everything missed the rocket: {[item['name'] for item in found['assets']]}")
+    similar = call("GET", f"/api/assets/{rocket_id}/similar")
+    if similar["timing"]["embeddings"] != 0 or rocket_id in {item["id"] for item in similar["assets"]}:
+        raise RuntimeError("Similar should use the stored vector and leave the asset itself out.")
+    name = f"Smoke Rocket {int(time.time())}"
+    body = {"subjects": [{"id": 0, "name": name, "box": {"x": 0.38, "y": 0.1, "w": 0.24, "h": 0.72}}],
+            "asset_ids": [rocket_id], "layers": [{"name": name, "strokes": rocket()}]}
+    events = animate(body)
+    steps = [event["id"] for event in events[:-1]]
+    if steps != ["pitch", "choreograph"] or not events[-1]["motion"]["tracks"]:
+        raise RuntimeError(f"Unexpected pipeline: {steps}")
+    print("Animation: searchable asset, AI pitch and editable motion.", flush=True)
 
 
 def check_accounts() -> str:
@@ -356,7 +392,8 @@ def main() -> None:
     check_layers()
     check_production()
     print("PASS: m-stash accounts and private libraries, Voyage embeddings, Atlas persistence, layers, auto-tags, tag-filtered search, Gemini sparks, "
-          "AI sketch layers, assets/scenes/where-used/similar assets, frames and frame search, variations, and the audit trail.")
+          "AI sketch layers, assets/scenes/where-used/similar assets, frames and frame search, variations, the audit trail, "
+          "and AI animation.")
 
 
 if __name__ == "__main__":

@@ -1,5 +1,6 @@
 import base64
 import html
+import json
 import logging
 import os
 import re
@@ -12,19 +13,20 @@ from uuid import UUID
 from cinematlas.exceptions import CinematlasError
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 from google.genai.errors import APIError as GeminiError
 from pydantic import BaseModel, Field, ValidationError
 from pymongo.errors import PyMongoError
 from starlette.concurrency import run_in_threadpool
 from voyageai.error import VoyageError
 
-from backend import boot
+from backend import boot, director
 from backend.ai import AIError, AIUnavailable, Sparks
 from backend.auth import DEMO_OWNER, SESSION_COOKIE, AuthError, AuthUnavailable, Budget, MStash, OpenAuth, Throttle, jwt_claims, service_owner
 from backend.library import Library, LibraryError, ink_crop, render_image
 from backend.models import (
-    ASSET_TYPES, CODE_PATTERN, MAX_LAYERS, SHOT_STATUSES, Asset, DirectRequest, Drawing, LayersRequest, MotionRequest, Shot, ShotUpdate, SketchRequest, SparkRequest, TagRequest,
+    ASSET_TYPES, CODE_PATTERN, MAX_LAYERS, SHOT_STATUSES, AnimateRequest, Asset, ClipRequest, DirectRequest, Drawing, Layer, LayersRequest, MotionRequest, RefineIdeasRequest,
+    RefineRequest, Shot, ShotUpdate, SketchRequest, SparkRequest, TagRequest,
     SketchSearch, VariationPlanRequest, VariationRequest,
     normalize_tag,
 )
@@ -104,15 +106,18 @@ def is_https(request: Request) -> bool:
 # Billable work, metered per member per hour (0 = unlimited). Gemini drafts are the expensive kind;
 # Voyage embeds every save and every search by words, by drawing, or for look-alikes.
 AI_BUDGET = Budget("ai", "AI drafts", int(os.environ.get("INKLING_AI_PER_HOUR", "60")))
+VIDEO_BUDGET = Budget("video", "AI videos", int(os.environ.get("INKLING_VIDEO_PER_HOUR", "5")))
 EMBED_BUDGET = Budget("embeds", "saves and searches", int(os.environ.get("INKLING_EMBEDS_PER_HOUR", "600")))
 _ID = r"[0-9a-fA-F-]{36}"
 METERED = [
-    (AI_BUDGET, "POST", re.compile(r"/api/(sparks/(strokes|sketch|guide|motion|direct)|tags/suggest|assets/" + _ID + r"/variations(/plan)?)")),
+    (VIDEO_BUDGET, "POST", re.compile(r"/api/clips")),
+    (AI_BUDGET, "POST", re.compile(r"/api/(animate|sparks/(strokes|sketch|guide|motion|direct|refine|refine/ideas)|tags/suggest|assets/" + _ID + r"/variations(/plan)?)")),
     (EMBED_BUDGET, "POST", re.compile(r"/api/(drawings|assets|assets/similar|shots|search/sketch|shots/" + _ID + r"/(sync/" + _ID + r"|link|share))")),
     (EMBED_BUDGET, "PUT", re.compile(r"/api/(assets|shots)/" + _ID)),
     (EMBED_BUDGET, "GET", re.compile(r"/api/(search|assets/" + _ID + r"/where-used)")),
 ]
-QUERY_SEARCH = re.compile(r"/api/(assets|shots|frames)")  # vector search only when there's a ?q=
+QUERY_SEARCH = re.compile(r"/api/(assets|shots|frames|find)")  # vector search only when there's a ?q=
+ACTIVE_VIDEO_OWNERS: set[str] = set()
 
 
 def budget_for(request: Request) -> Budget | None:
@@ -120,7 +125,7 @@ def budget_for(request: Request) -> Budget | None:
     for budget, verb, pattern in METERED:
         if method == verb and pattern.fullmatch(path):
             return budget
-    if method == "GET" and QUERY_SEARCH.fullmatch(path) and request.query_params.get("q", "").strip():
+    if method == "GET" and (QUERY_SEARCH.fullmatch(path) or path == "/api/clips") and request.query_params.get("q", "").strip():
         return EMBED_BUDGET
     return None
 
@@ -262,7 +267,7 @@ def whoami(request: Request) -> dict:
     owner = request.state.owner
     return {"user": {"id": owner, "email": user.email if user else ""}, "library": production.counts(),
             "demo": production.scoped(DEMO_OWNER).counts()["assets"] > 0,
-            "budget": {budget.name: budget.status(owner) for budget in (AI_BUDGET, EMBED_BUDGET)}}
+            "budget": {budget.name: budget.status(owner) for budget in (AI_BUDGET, VIDEO_BUDGET, EMBED_BUDGET)}}
 
 
 @app.get("/api/auth/config")
@@ -456,11 +461,105 @@ async def spark_motion(request: Request) -> dict:
     return await run_in_threadpool(request.app.state.ai.motion, motion)
 
 
+@app.post("/api/sparks/refine/ideas")
+async def spark_refine_ideas(request: Request) -> dict:
+    """A few short prompts this drawing could use next: the artist taps one, or edits it first."""
+    ideas = await read_json(request, RefineIdeasRequest)
+    return {"ideas": await run_in_threadpool(request.app.state.ai.refine_ideas, ideas)}
+
+
+@app.post("/api/sparks/refine")
+async def spark_refine(request: Request) -> dict:
+    """One layer refined by editing the artist's strokes (kept verbatim) plus a few AI strokes. A preview."""
+    refine = await read_json(request, RefineRequest)
+    return await run_in_threadpool(request.app.state.ai.refine, refine)
+
+
+def failure_text(exc: Exception) -> tuple[int, str]:
+    """The same plain answers the exception handlers give, for errors raised mid-stream."""
+    if isinstance(exc, GeminiError):
+        logger.error("Gemini failure while animating (%s %s)", type(exc).__name__, exc.code)
+        return (429, "Gemini is busy. Wait a moment and try again.") if exc.code == 429 else (
+            503, "Gemini is unavailable. Check GEMINI_API_KEY and service access.")
+    if isinstance(exc, AIError):
+        return (503 if isinstance(exc, AIUnavailable) else 502), str(exc)
+    if isinstance(exc, ProductionError):
+        return 422, str(exc)
+    logger.error("Service failure while animating (%s)", type(exc).__name__)
+    return 503, "Atlas or Voyage is unavailable. Check credentials, indexes, and service access."
+
+
+@app.post("/api/animate")
+async def animate(request: Request) -> StreamingResponse:
+    """Pitch and choreograph an editable preview, streaming progress and errors."""
+    body = await read_json(request, AnimateRequest)
+    ai = request.app.state.ai
+
+    def lines():
+        try:
+            for item in director.run(ai, body):
+                yield json.dumps(item) + "\n"
+        except Exception as exc:  # the response has started: report it in-band
+            status, detail = failure_text(exc)
+            yield json.dumps({"type": "error", "status": status, "detail": detail}) + "\n"
+
+    return StreamingResponse(lines(), media_type="application/x-ndjson",
+                             headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+
+
 @app.post("/api/sparks/guide")
 async def spark_guide(request: Request) -> dict:
     """A refined, transparent trace guide for a region (never saved into the drawing)."""
     spark = await read_json(request, SparkRequest)
     return await run_in_threadpool(request.app.state.ai.guide, spark)
+
+
+def find_clip(request: Request, clip_id: UUID) -> dict:
+    record = prod(request).get_clip(str(clip_id))
+    if record is None:
+        raise HTTPException(404, "Scene not found.")
+    return record
+
+
+@app.post("/api/clips", status_code=201)
+async def create_clip(request: Request) -> dict:
+    """Generate an AI-reimagined video, saving each take as a separate searchable scene."""
+    owner = request.state.owner
+    if owner in ACTIVE_VIDEO_OWNERS:
+        raise HTTPException(429, "A video is already being created. Wait for it to finish.")
+    ACTIVE_VIDEO_OWNERS.add(owner)
+    try:
+        body = await read_json(request, ClipRequest)
+        production = prod(request)
+        previous = find_clip(request, UUID(body.previous_id)) if body.previous_id else None
+        layers = [Layer.model_validate(layer) for layer in previous["layers"]] if previous else body.layers
+        await run_in_threadpool(production.validate_clip_layers, layers)
+        interaction, video = await run_in_threadpool(
+            request.app.state.ai.clip, layers, body.prompt, previous["interaction_id"] if previous else None)
+        try:
+            return await run_in_threadpool(production.save_clip, layers, body.prompt, interaction, video, previous)
+        except (ProductionError, LibraryError, CinematlasError, PyMongoError, VoyageError) as exc:
+            logger.error("Could not save generated video (%s)", type(exc).__name__)
+            raise HTTPException(503, "Video was generated but couldn't be saved. Gemini charges may still apply.") from exc
+    finally:
+        ACTIVE_VIDEO_OWNERS.remove(owner)
+
+
+@app.get("/api/clips")
+def list_clips(request: Request, q: str = Query(default="", max_length=500)) -> dict:
+    return {"items": prod(request).list_clips(q.strip())}
+
+
+@app.get("/api/clips/{clip_id}/image")
+def clip_image(request: Request, clip_id: UUID) -> Response:
+    return png_response(find_clip(request, clip_id))
+
+
+@app.get("/api/clips/{clip_id}/video")
+def clip_video(request: Request, clip_id: UUID) -> Response:
+    record = find_clip(request, clip_id)
+    data = prod(request).clip_media.open_download_stream(record["media_id"]).read()
+    return Response(data, media_type="video/mp4", headers={"Cache-Control": "private, no-store"})
 
 
 @app.get("/api/search")
@@ -502,23 +601,35 @@ async def search_by_sketch(request: Request) -> dict:
     production = prod(request)
     if body.scope == "asset":
         crop = ink_crop(visible)
-        items = await run_in_threadpool(production.search_assets, crop[0])
+        items = await run_in_threadpool(production.search_assets, crop[0], asset_type=body.asset_type)
     else:
         picture = render_image(visible)
-        run = {"shot": production.search_shots, "frame": production.find_frames,
-               "idea": lib(request).search}[body.scope]
-        items = await run_in_threadpool(run, picture)
+        if body.scope == "frame" and body.animated:
+            items = await run_in_threadpool(production.find_frames, picture, animated=True)
+        else:
+            run = {"shot": production.search_shots, "frame": production.find_frames, "clip": production.search_clips,
+                   "idea": lib(request).search}[body.scope]
+            items = await run_in_threadpool(run, picture)
     return {"items": items}
+
+
+@app.get("/api/find")
+def find(request: Request, q: str = Query(min_length=1, max_length=500)) -> dict:
+    """Search everything by meaning: one Voyage embedding, three Atlas vector searches (drawings, animations, frames)."""
+    query = q.strip()
+    if not query:
+        raise HTTPException(422, "Enter a search query.")
+    return prod(request).find_everywhere(query)
 
 
 @app.get("/api/frames")
 def list_frames(request: Request, q: str = Query(default="", max_length=500), asset_id: UUID | None = None,
                 project: str | None = code_query(), sequence: str | None = code_query(),
-                status: str | None = Query(default=None)) -> dict:
+                status: str | None = Query(default=None), animated: bool = False) -> dict:
     """Every frame of every scene: search by words, filter by a placed asset or metadata, or browse the latest."""
     return {"items": prod(request).find_frames(
         q.strip() or None, asset_id=str(asset_id) if asset_id else None,
-        project=project, sequence=sequence, status=status_query(status))}
+        project=project, sequence=sequence, status=status_query(status), **({"animated": True} if animated else {}))}
 
 
 @app.get("/api/drawings/{drawing_id}/image")
@@ -600,6 +711,12 @@ def find_asset(request: Request, asset_id: UUID) -> dict:
 def get_asset(request: Request, asset_id: UUID) -> dict:
     record = find_asset(request, asset_id)
     return editable(record, "name", "type", "description", "tags", "version", "origin", "stats")
+
+
+@app.get("/api/assets/{asset_id}/similar")
+def asset_similar(request: Request, asset_id: UUID) -> dict:
+    """Assets and animation frames that look like this asset, ranked by its stored vector: no new embedding."""
+    return prod(request).similar_everywhere(str(asset_id))
 
 
 @app.get("/api/assets/{asset_id}/versions")

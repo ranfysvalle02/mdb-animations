@@ -185,6 +185,7 @@ def test_copying_a_library_remaps_every_id_so_the_copy_is_independent():
                                   "layers": [{"asset": {"asset_id": asset, "version": 1}}], "created_at": "2026-01-01T00:00:00+00:00"}]),
         "shot_elements": Store("shot_elements", [{"id": f"{shot}:0", "owner": "demo", "shot_id": shot, "asset_id": asset}]),
         "shot_frames": Store("shot_frames", [{"id": f"{shot}:f2", "owner": "demo", "shot_id": shot, "asset_ids": [asset]}]),
+        "clips": Store("clips", []),
     }
     production = Production.__new__(Production)
     production.owner = "u1"
@@ -192,10 +193,11 @@ def test_copying_a_library_remaps_every_id_so_the_copy_is_independent():
     production.library.drawings.mongo = stores["drawings"]
     production.assets, production.shots = Mock(mongo=stores["assets"]), Mock(mongo=stores["shots"])
     production.elements, production.frames = Mock(mongo=stores["shot_elements"]), Mock(mongo=stores["shot_frames"])
+    production.clips = Mock(mongo=stores["clips"])
     production.versions = stores["asset_versions"]
 
     copied = production.copy_library("demo")
-    assert copied == {"drawings": 0, "assets": 1, "asset_versions": 1, "shots": 1, "shot_elements": 1, "shot_frames": 1}
+    assert copied == {"drawings": 0, "assets": 1, "asset_versions": 1, "shots": 1, "shot_elements": 1, "shot_frames": 1, "clips": 0}
     new_asset = stores["assets"].find({"owner": "u1"})[0]
     new_shot = stores["shots"].find({"owner": "u1"})[0]
     assert new_asset["id"] != asset and new_asset["_key"] == new_asset["id"] and new_asset["embedding"] == [0.1, 0.2]

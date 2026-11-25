@@ -1,36 +1,48 @@
-# ✦ Inkling: draw it once, animate it anywhere
+# ✦ Inkling: draw it, watch it move
 
 [![CI](https://github.com/ranfysvalle02/mdb-animations/actions/workflows/ci.yml/badge.svg)](https://github.com/ranfysvalle02/mdb-animations/actions/workflows/ci.yml)
 
 > **inkling** /ˈɪŋklɪŋ/ *n.* a slight hint or suggestion.
 
-**Draw it. Find it. Animate it. Share it.**
-*AI drafts. You decide.*
+**Draw once. Make more. Find it again.**
+*Your art leads. AI gives you creative superpowers.*
 
-Inkling is a 2D studio for fingers, pencils, and mice. Draw characters, props, and backdrops in layers.
-Find any of them again by describing it or by doodling it. Then tap **🎬 Animate**: an AI director looks at
-your scene, pitches three 10-second shots, and choreographs the one you pick as **keyframes that move your
-own drawing** (never redraw it). Before you keep it, Inkling shows you exactly how it works: the poses that
-matter, the in-betweens, and why the spacing makes it feel alive. Every one of the 80 frames stays yours to
-edit. Then send a link: a looping GIF and a page that explains how it moves.
+Inkling is a creative playground for fingers, pencils, and mice. Draw an asset or backdrop, or start with a prompt:
+
+- **✦ Make a scene**: describe what happens or let AI surprise you. **My strokes** moves your original
+  drawing; **AI reimagines** makes a Gemini video inspired by it, which may change the artwork. Type or
+  speak a change to revise the preview. Choose a starter or saved backdrop before making a new scene.
+- **✦ Variations**: build a family of editable ideas from an asset or backdrop, and keep the ones you like.
+- **◎ Find similar**: your drawing is the query. Look-alike assets, and the frames of your animations where
+  they appear. A saved asset searches with the vector already in Atlas: **zero new embeddings**.
+- **✦ Refine with AI**: Gemini looks at the drawing and suggests what it could use next ("add flames under
+  the rocket"). Tap one or type your own; AI edits your strokes, keeps the rest verbatim, and you keep or skip.
+
+AI suggests tags when you save; Voyage AI and MongoDB Atlas make the artwork and scenes searchable.
+Duplicate a layer to make a copy. Original-stroke animations can be kept as editable frames; AI-reimagined
+videos are separate takes, not editable stroke frames.
+
+AI-reimagined videos use Gemini's video model and incur video-generation charges, including on revisions.
+Each successful take is saved privately in Atlas. Search matches its direction and **source drawing**, not
+individual generated video frames. Gemini video access depends on your account and the selected model;
+`GEMINI_VIDEO_MODEL` overrides the default.
+
+On supported browsers in a secure context (HTTPS or localhost), microphone buttons let you dictate AI
+prompts, animation directions, and searches. Your browser may send audio to its speech service; Inkling
+does not submit the resulting text until you do. On other browsers, type or use your device's dictation.
+A saved backdrop is added to a new scene as editable layer copies; later edits to the backdrop do not
+automatically update those copies.
 
 Built on **MongoDB Atlas** (artwork, frames, metadata, and vectors in one place), **Voyage AI** multimodal
 embeddings (one space for drawings and words), **Gemini** (drafts you accept or skip), and **m-stash**
 (accounts, one private library per member).
 
-<p align="center">
-  <img src="docs/screenshots/01-sign-in-phone.png" width="24%" alt="Sign-in screen on a phone">
-  <img src="docs/screenshots/12-studio-phone.png" width="24%" alt="The studio on a phone, with starter scenes over a blank canvas">
-  <img src="docs/screenshots/13-shared-scene-phone.png" width="24%" alt="A shared scene on a phone: the clip, its direction, and its keyframes explained">
-</p>
-<p align="center"><img src="docs/screenshots/09c-motion-preview.png" width="80%" alt="An AI-directed 10-second shot previewing on the canvas, with its keyframes, spacing, and timeline drawn on"></p>
-
 | | You | Inkling |
 | --- | --- | --- |
-| **1. Draw it** | Draw a character, prop, or backdrop in layers (try **Focus** or a **starter**), or **Ask AI** to sketch a layer / fix a spot | Pressure, palm rejection, layers. Save it as a **◆ asset**: Voyage checks for look-alikes first. **Grow variations** turns one asset into a cast |
-| **2. Find it** | Words, **✏️ a doodle**, or "with ◆ asset" | Voyage puts drawings and words in one vector space: search assets, scenes, and single **frames**, filtered inside Atlas Vector Search. Scenes are also found by **what happens** in them |
-| **3. Animate it** | Tap **🎬 Animate**, pick a backdrop (Voyage **casts** your library for it), then a pitch from the **AI director** | One AI call returns keyframes for your layers; the in-betweens are math. **◆ How it works** explains keyframes, in-betweens, and spacing on your own shot. Keep it, then tweak any of the 80 frames |
-| **4. Share it** | **🔗 Save & share** | A public link with a looping GIF and a plain-language "how it moves". Your library stays private |
+| **1. Draw it** | Draw a character, prop, or backdrop in layers (try **Focus** or a **starter**) | Pressure, palm rejection, layers. Save it as a **◆ asset**; other AI drawing tools are available when you want them |
+| **2. Make a scene** | Write a direction or let AI surprise you. Change it with words or voice | Choose original-stroke motion or a Gemini-generated video inspired by your art |
+| **3. Find it** | Search with words or a drawing | Voyage and Atlas find similar assets, backdrops, and scenes. Videos match their source art and direction |
+| **4. Share it** | **🔗 Save & share** an original-stroke scene | A public link with a looping GIF and a plain-language "how it moves". Your library stays private |
 
 **Start here:**
 - **Use it:** [the guided tour](docs/TUTORIALS.md): short tutorials with screenshots.
@@ -40,8 +52,6 @@ embeddings (one space for drawings and words), **Gemini** (drafts you accept or 
 - **Deploy it:** [Render + hosted Atlas, step by step](docs/deploy-render.md) (one Blueprint: [`render.yaml`](render.yaml)).
 - **Why it exists:** [The Calculator Didn't Kill Math](hlog.md) (a 5-minute read).
 - **What's next:** [NEXT-STEPS.md](NEXT-STEPS.md). **Notes on m-stash:** [m-stash-newbie.md](m-stash-newbie.md).
-
-The original three animation demos live at `/playground`.
 
 > Brand note: "Inkling" has been used by other products (e.g. a discontinued Wacom pen). Do a trademark
 > search before any public launch.
@@ -72,10 +82,12 @@ How it's locked down:
 - **Preferences follow you.** Guide progress is a private m-stash `item` record (`inkling-prefs`).
 - **Copies, not shares.** The demo library is copied into your space under fresh ids (vectors included,
   nothing re-embedded), with every link, lineage, element, and frame id remapped.
-- **Hourly budgets per member** for billable calls: 60 Gemini drafts (`INKLING_AI_PER_HOUR`) and 600 Voyage
+- **Hourly budgets per member** for billable calls: 60 Gemini drafts (`INKLING_AI_PER_HOUR`), 5 Gemini videos
+  (`INKLING_VIDEO_PER_HOUR`), and 600 Voyage
   saves and searches (`INKLING_EMBEDS_PER_HOUR`). They're checked before the call, charged only on success,
-  shown in the account menu, and answered with a friendly 429 plus `Retry-After` when spent. Browsing, images,
-  metadata edits, and the demo copy are free.
+  shown in the account menu, and answered with a friendly 429 plus `Retry-After` when spent. Provider charges
+  can still apply if a generation succeeds but saving fails. Browsing, images, metadata edits, and the demo
+  copy are free.
 - Container scripts (seed, backfill, smoke test) act as a named owner with a service key derived from a
   server-side secret, accepted only over loopback.
 
@@ -147,10 +159,10 @@ can't be drawn on. **Clear** resets to one empty layer and is undoable. All
 layers (including hidden ones) are saved and restored; the saved preview,
 embedding, sparks, and PNG export use what's visible, exactly as composed.
 
-### ✦ Ask AI: one text box, three methodical modes
+### ✦ More AI tools: sketch, fix, refine, or grow variations
 
-Under the canvas (and docked at the bottom in Focus), one text box with three modes. Each
-has examples you can tap.
+The canvas keeps **Animate**, **Find similar**, and **Refine with AI** up front. Open **More AI tools** for
+the other drawing workflows; each has examples you can tap.
 
 - **Sketch a layer**: "a dragon curled up asleep". In 5-10 seconds a blue-pencil draft (up
   to 40 strokes) draws itself in. **Use sketch** (Enter) adds it as its own layer at 60%
@@ -160,6 +172,8 @@ has examples you can tap.
   Gemini proposes 1-8 strokes in your colors and weights, previewed until you accept. The
   ✦ tool (S) does the same and also offers a **trace guide** (a faint image to draw over,
   never saved).
+- **Refine**: get suggestions for what the drawing could use next, or write your own prompt.
+  Gemini changes only the target layer; you preview the result and keep or skip it.
 - **Grow variations**: "a battle: different weapons and poses". If the drawing isn't
   saved yet, Inkling asks you to save it first, because a variation links to an exact asset
   version. Then the plan opens (below).
@@ -203,9 +217,14 @@ or scene apart:
   versions, variations with their briefs, one-tap updates, confirmed look-alikes, status
   changes). Capped at the last 300 per asset or scene.
 
-### 🎬 Animate it: an AI director, 10-second shots, explained
+### ✦ Animate with AI
 
-**🎬 Animate** (or **A**) opens three steps:
+**✦ Animate with AI** (or **A**) saves and tags a new or changed drawing, then Gemini imagines a scene
+and chooses key poses. The studio calculates the in-between frames from your own strokes. **Keep** makes
+the frames editable; **Try again** creates another preview. Save the scene to find it in your library.
+Writing your own direction in **🎬 Direct…** skips the pitch.
+
+**🎬 Direct…** (under the canvas) is the hands-on version, in three steps:
 
 1. **The cast.** What moves: placed assets by default, or any drawing on the canvas. **+ Add** drops in a
    backdrop (Beach, Mountains, Forest, City at night, Outer space) and your assets. With a backdrop set,
@@ -239,10 +258,12 @@ and the animation principles in plain words, with **Download GIF** and **Make on
 snapshot: share again after editing and the same link updates. **Stop sharing** turns the link off.
 The token (unguessable, 16 characters) is the only permission; nothing else in your library is public.
 
-### 🔍 Find anything: words, a sketch, or an asset
+### 🔍 Search by meaning: words, a sketch, or an asset
 
-The library (**Find anything**) searches four things with one bar: **◆ Assets**, **▣ Scenes**,
-**🎞 Frames**, and **✎ Ideas**.
+The library opens on **✦ Everything**: one query, embedded **once** by Voyage AI, runs as three Atlas vector
+searches (assets, scenes, and frames share one multimodal space), with the embed and search times shown.
+Try *"a spaceship"* (nothing is named that), *"a cute animal"*, or *"the moment it leaves the ground"*.
+The tabs search one kind at a time: **◆ Assets**, **▣ Scenes**, and **🎞 Frames**.
 
 - **Words**: "the rocket high above the pine tree". Voyage embeds pictures and words into one space.
 - **✏️ Your drawing**: the canvas becomes the query. Assets match the cropped ink. Scenes, frames, and
@@ -353,8 +374,7 @@ several minutes. A missing Voyage or Gemini key fails immediately before
 containers start. Keys are explicitly passed only to setup and the API, never the
 database or browser. Do not share `docker compose config` output: it includes resolved secrets.
 
-Open <http://localhost:8000> (the studio; `/playground` has the original
-animation demos). Interactive API docs:
+Open <http://localhost:8000> (the studio). Interactive API docs:
 <http://localhost:8000/docs>. Stop with `docker compose down`; drawings remain in
 the three named volumes for database data, replica-set configuration, and search
 indexes. Start again with the same one-line command. **Do not add `-v` to `down`**
@@ -449,6 +469,10 @@ surrounding context (so a lone eye is drawn as the face's *other* eye); the
 backend keeps only the selected area and turns white paper transparent. Atlas Local is the default system of record and vector search engine;
 hosted Atlas is optional.
 
+Because every collection shares one Voyage space, `/api/find` reuses a single query vector across
+collections instead of re-embedding per search. It uses Cinematlas collection internals
+(`_query_vector`, `_vector_search`) of the pinned version, so recheck them when upgrading Cinematlas.
+
 Natural-language queries use the same Voyage model and Atlas Vector Search.
 Results are ordered by vector similarity, not confidence percentages. New saves
 appear immediately in the latest-drawings list but can take time to appear in
@@ -526,6 +550,16 @@ thumbnail, the vectors, and the elements) and `fps` (4/6/8/12/24). A frame layer
 `{name, ref, xf?}`: frame 1's layer `ref`, posed by `xf` (`x`, `y`, `sx`, `sy`, `r`, pivot `px`, `py`), so
 the strokes are stored once. Shots may carry `motion` (`by` ai/preset, `prompt`, `note`, `seconds`, `fps`,
 `strength`, `tracks` of labelled keyframes). Shot requests may be up to 8 MiB.
+`POST /api/animate` (`subjects`: `{id, name, box}` 1-8, `layers`, optional `prompt`, `title`, `seconds` 1-10,
+`backdrop`, `asset_ids`) streams `application/x-ndjson`: progress steps (`pitch`, unless directed, and
+`choreograph`), then `{"type": "result", "idea", "motion"}`, or `{"type": "error", "status", "detail"}`.
+`GET /api/find?q=` returns `assets`, `scenes`, `frames`,
+and `timing` (`embed_ms`, `search_ms`, `embeddings`: 1). `GET /api/assets/{uuid}/similar` returns look-alike
+`assets` and `frames` ranked by the asset's stored vector (`embeddings`: 0).
+`POST /api/sparks/refine/ideas` (`title`, `layers`) returns up to four `ideas` (short prompts).
+`POST /api/sparks/refine` (`prompt`, `target` layer index, `title`, `layers`) returns the target layer's
+`strokes`: `keep_indices` (the artist's strokes kept verbatim, in order) followed by the AI's additions.
+Subject boxes that poke past the canvas edge are clipped, not rejected.
 `POST /api/sparks/direct` (`seconds`, `backdrop`, `subjects`: `{id, name, box}`, `layers`) returns up to three
 `ideas` (`title`, `logline`, `prompt`, `movers`). `POST /api/sparks/motion` (`prompt`, `seconds` 0.5-10,
 `subjects`, `layers`) returns `tracks` of labelled keyframes; nothing is applied.

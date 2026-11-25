@@ -86,11 +86,13 @@ def test_metadata_filter_open_means_not_approved():
 def offline_production():
     production = Production.__new__(Production)
     production.owner = "tester"
-    production.assets, production.shots, production.elements, production.frames = Mock(), Mock(), Mock(), Mock()
+    production.assets, production.shots, production.elements, production.frames, production.clips = Mock(), Mock(), Mock(), Mock(), Mock()
+    production.clips.mongo.find.return_value.sort.return_value.limit.return_value = []
+    production.clip_media = Mock()
     production.min_score = 0.72
     production.frames.mongo.find.return_value = []
     production.versions = Mock()
-    for collection in (production.assets, production.shots, production.elements, production.frames):
+    for collection in (production.assets, production.shots, production.elements, production.frames, production.clips):
         collection.add.side_effect = lambda records, retries: SimpleNamespace(added=len(records), failed=0, skipped=0)
     production.assets.mongo.find.return_value = [{"id": ASSET_ID, "name": "Red Rocket", "version": 3}]
     production.shots.mongo.find_one.return_value = None
@@ -406,6 +408,35 @@ def test_frame_search_and_sketch_endpoints(client):
     assert http.get(f"/api/shots/{SHOT_ID}/frames/2/image").status_code == 404
 
 
+def test_animated_and_backdrop_searches_filter_before_ranking(client):
+    http, _ = client
+    production = offline_production()
+    production.frames.search.return_value.rerank.return_value.limit.return_value.where.return_value = []
+    production.find_frames("rocket", animated=True)
+    production.frames.search.return_value.rerank.return_value.limit.return_value.where.assert_called_once_with(
+        owner="tester", frames={"$gte": 2})
+    production.frames.mongo.find.return_value = Mock()
+    production.frames.mongo.find.return_value.sort.return_value.limit.return_value = []
+    production.find_frames(None, animated=True)
+    assert production.frames.mongo.find.call_args.args[0] == {"owner": "tester", "frames": {"$gte": 2}}
+
+    production.assets.search.return_value.rerank.return_value.limit.return_value.where.return_value = []
+    production.shots.mongo.aggregate.return_value = []
+    production.search_assets("picture", asset_type="environment")
+    production.assets.search.return_value.rerank.return_value.limit.return_value.where.assert_called_once_with(
+        owner="tester", type="environment")
+
+    layers = shot_payload()["layers"][:1]
+    http.production.search_assets.return_value = []
+    http.production.find_frames.return_value = []
+    http.post("/api/search/sketch", json={"scope": "asset", "asset_type": "environment", "layers": layers})
+    assert http.production.search_assets.call_args.kwargs == {"asset_type": "environment"}
+    http.post("/api/search/sketch", json={"scope": "frame", "animated": True, "layers": layers})
+    assert http.production.find_frames.call_args.kwargs == {"animated": True}
+    http.get("/api/frames", params={"q": "rocket", "animated": "true"})
+    assert http.production.find_frames.call_args.kwargs["animated"] is True
+
+
 
 def test_search_keeps_hits_close_to_the_best():
     from backend.production import close_to_best
@@ -487,6 +518,48 @@ def test_frames_pose_frame_one_and_expand_exactly():
     frame = shot.all_frames()[1]
     assert frame[0].strokes == shot.layers[0].strokes and frame[0].ref is None
     assert round(frame[1].strokes[0].points[0].x, 6) == 0.4 and frame[1].asset.version == 1
+
+
+def test_backdrop_marker_survives_scene_frames():
+    first = {"name": "Forest", "backdrop": ASSET_ID, "strokes": [ink(0.1, 0.1, 0.9, 0.9)]}
+    shot = Shot.model_validate(shot_payload(layers=[first], frames=[{"layers": [
+        {"name": "Forest", "backdrop": ASSET_ID, "ref": 0}]}]))
+    stored = shot.model_dump()
+    assert stored["layers"][0]["backdrop"] == ASSET_ID
+    assert stored["frames"][0]["layers"][0]["backdrop"] == ASSET_ID
+    assert shot.all_frames()[1][0].backdrop == ASSET_ID
+
+
+def test_similar_finds_linked_animations_and_only_animated_visual_matches():
+    production = offline_production()
+    production.assets.mongo.find_one.return_value = {"id": ASSET_ID, "name": "Rocket", "embedding": [0.1, 0.2]}
+    linked = {"id": f"{SHOT_ID}:f1", "shot_id": SHOT_ID, "frame": 1, "frames": 8, "updated_at": "t"}
+    visual = {"id": "other:f2", "shot_id": "other", "frame": 2, "frames": 8, "updated_at": "t", "score": 0.9}
+    production.frames.mongo.aggregate.return_value = [linked]
+    production._nearest = Mock(side_effect=[[], [linked, visual]])
+    production.usage_counts = Mock(return_value={})
+
+    result = production.similar_everywhere(ASSET_ID)
+    assert [frame["id"] for frame in result["frames"]] == [linked["id"], visual["id"]]
+    assert production.frames.mongo.aggregate.call_args.args[0][0] == {
+        "$match": {"owner": "tester", "asset_ids": ASSET_ID, "frames": {"$gte": 2}}}
+    assert production._nearest.call_args.args[3] == {"owner": "tester", "frames": {"$gte": 2}}
+
+
+def test_generated_clip_is_owner_scoped_and_media_is_removed_if_indexing_fails():
+    from backend.models import Layer
+    production = offline_production()
+    production.assets.mongo.find_one.return_value = {"_id": "owned"}
+    production.clip_media.upload_from_stream.return_value = "media"
+    layers = [Layer.model_validate(layer) for layer in shot_payload()["layers"][:2]]
+    saved = production.save_clip(layers, "explores the moon", "interaction", b"video")
+    record = production.clips.add.call_args.args[0][0]
+    assert record["owner"] == "tester" and record["asset_ids"] == [ASSET_ID]
+    assert record["interaction_id"] == "interaction" and saved["video_url"].startswith("/api/clips/")
+    production.clips.add.side_effect = RuntimeError("index unavailable")
+    with pytest.raises(RuntimeError, match="index unavailable"):
+        production.save_clip(layers, "again", "interaction", b"video")
+    production.clip_media.delete.assert_called_once_with("media")
 
 
 def test_long_shots_get_a_sample_of_frame_vectors():

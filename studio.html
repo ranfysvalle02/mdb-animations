@@ -4,21 +4,21 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#0b2422">
-  <meta name="description" content="Inkling: draw an asset once with your finger or pencil, animate it in scenes frame by frame, and find any asset or frame by describing or sketching it. AI drafts, you decide, and every stroke is remembered.">
-  <title>Inkling: draw it once, animate it anywhere</title>
+  <meta name="description" content="Draw once. Make variations and animated scenes with AI. Find your art again by words or sketch.">
+  <title>Inkling: draw it, watch it move</title>
   <link rel="canonical" href="__ORIGIN__/">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="Inkling">
   <meta property="og:url" content="__ORIGIN__/">
-  <meta property="og:title" content="Inkling: draw it once, animate it anywhere">
-  <meta property="og:description" content="A 2D asset studio where AI drafts and you decide. Replay how any drawing was made, stroke by stroke, and find any frame by describing or doodling it.">
+  <meta property="og:title" content="Inkling: draw it, watch it move">
+  <meta property="og:description" content="Your art leads. Make variations and animated scenes with AI, then find them again by words or sketch.">
   <meta property="og:image" content="__ORIGIN__/og.png">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
   <meta property="og:image:alt" content="Inkling on a phone: the drawing studio, and Little Fox replayed stroke by stroke at 89% your hand">
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:title" content="Inkling: draw it once, animate it anywhere">
-  <meta name="twitter:description" content="AI drafts. You decide. Every stroke is remembered.">
+  <meta name="twitter:title" content="Inkling: draw it, watch it move">
+  <meta name="twitter:description" content="Your art leads. Make variations and animated scenes with AI, then find them again.">
   <meta name="twitter:image" content="__ORIGIN__/og.png">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M14 4C14 4 6 14 6 19.5a8 8 0 0 0 16 0C22 14 14 4 14 4z' fill='%23123b38'/%3E%3Cpath d='M25 3l1.3 3.2 3.2 1.3-3.2 1.3-1.3 3.2-1.3-3.2-3.2-1.3 3.2-1.3z' fill='%237c3aed'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="/studio.css">
@@ -44,13 +44,13 @@
 
   <main>
     <section class="hero">
-      <h1>Draw it once. <span>Animate it anywhere.</span></h1>
-      <p class="lede">Draw characters, props, and backdrops in layers, with a finger or a pencil. Find any of them again by describing or sketching it. Then tap <b>&#127916; Animate</b>: an AI director pitches a 10-second scene, and shows you exactly how animation works. <b>AI drafts. You decide.</b></p>
+      <h1>Your art. <span>Its next adventure.</span></h1>
+      <p class="lede">Draw once. Make variations and scenes with AI. Find them again by words or sketch.</p>
     </section>
 
     <section id="guide" class="guide" aria-label="How it works" hidden>
       <ol id="guide-steps" class="guide-steps"></ol>
-      <div class="guide-foot"><span id="guide-count">0 of 4</span><button type="button" id="guide-hide" class="link-button">Hide</button></div>
+      <div class="guide-foot"><span id="guide-count">0 of 3</span><button type="button" id="guide-hide" class="link-button">Hide</button></div>
     </section>
 
     <section class="studio" aria-labelledby="canvas-heading">
@@ -93,10 +93,14 @@
           <div class="canvas-frame" id="canvas-frame">
             <canvas id="drawing" width="1000" height="650" aria-label="Drawing canvas. Draw with a pen, finger, or mouse.">Your browser needs canvas support to draw.</canvas>
             <canvas id="overlay" width="1000" height="650" aria-hidden="true"></canvas>
+            <div id="video-preview" class="video-preview" hidden>
+              <video id="scene-video" controls playsinline loop></video>
+              <button type="button" id="video-close">Back to drawing</button>
+            </div>
             <button type="button" id="layer-hud" class="layer-hud" data-tip="You're on this layer|New ink lands here. Tap to see every layer." hidden></button>
             <form id="spark-popover" class="popover" hidden>
               <label class="sr-only" for="spark-prompt">What should AI fix here?</label>
-              <input id="spark-prompt" maxlength="300" autocomplete="off" placeholder="What's wrong? e.g. &ldquo;make the eye look left&rdquo;">
+              <div class="voice-input"><input id="spark-prompt" maxlength="300" autocomplete="off" placeholder="What's wrong? e.g. &ldquo;make the eye look left&rdquo;"><button type="button" class="voice-button" data-voice-for="spark-prompt" aria-label="Speak a fix" hidden>&#127908;</button></div>
               <div class="popover-actions">
                 <button type="submit" id="spark-strokes" class="pill primary" data-tip="Strokes &middot; Enter|A few editable lines in your ink.">&#10022; Fix it</button>
                 <button type="button" id="spark-guide" class="pill" data-tip="Trace guide &middot; Shift+Enter|A faint picture to trace. Never saved.">Trace guide</button>
@@ -119,30 +123,76 @@
               <div class="layer-actions">
                 <button type="button" id="layer-up" aria-label="Move layer up" data-tip="Move up">&#8593;</button>
                 <button type="button" id="layer-down" aria-label="Move layer down" data-tip="Move down">&#8595;</button>
+                <button type="button" id="layer-copy" data-tip="Duplicate|Make an editable copy of this layer.">Duplicate</button>
                 <button type="button" id="layer-delete" data-tip="Delete layer|Undo brings it back.">Delete</button>
               </div>
             </div>
           </aside>
         </div>
-        <form id="ai-bar" class="ai-bar" autocomplete="off">
-          <div class="ai-modes" role="radiogroup" aria-label="What should AI do?">
-            <button type="button" role="radio" data-mode="sketch" aria-checked="true">Sketch<span class="long"> a layer</span></button>
-            <button type="button" role="radio" data-mode="fix" aria-checked="false">Fix a spot</button>
-            <button type="button" role="radio" data-mode="vary" aria-checked="false"><span class="long">Grow </span>variations</button>
+        <section class="scene-maker" aria-labelledby="scene-maker-heading">
+          <div class="scene-maker-head">
+            <div><h3 id="scene-maker-heading">Make a little magic</h3><p>What happens next? Tell us, or let AI surprise you.</p></div>
           </div>
-          <div class="ai-input">
-            <span class="ai-spark" aria-hidden="true">&#10022;</span>
-            <label class="sr-only" for="ai-prompt">Ask AI</label>
-            <input id="ai-prompt" maxlength="200" enterkeyhint="go" placeholder="Describe a starting point">
-            <button type="submit" id="ai-go" class="ai-go" aria-label="Ask AI">&#8594;</button>
+          <form id="scene-direct" autocomplete="off">
+            <label class="sr-only" for="scene-prompt">Describe your scene</label>
+            <div class="scene-input">
+              <input id="scene-prompt" maxlength="300" placeholder="A curious fox discovers a tiny planet...">
+              <button type="button" class="voice-button" data-voice-for="scene-prompt" aria-label="Speak your scene" hidden>&#127908;</button>
+              <button type="submit" id="dock-animate" class="scene-go">&#10022; Make a scene</button>
+            </div>
+            <div class="scene-options">
+              <fieldset class="scene-style">
+                <legend class="sr-only">How should your scene be made?</legend>
+                <label><input type="radio" name="scene-style" value="art" checked> <span>My strokes</span></label>
+                <label><input type="radio" name="scene-style" value="video"> <span>AI reimagines</span></label>
+              </fieldset>
+              <details class="backdrop-options">
+                <summary>Choose a backdrop</summary>
+                <label for="scene-backdrop">Backdrop for a new scene</label>
+                <select id="scene-backdrop" aria-describedby="backdrop-status"><option value="">None</option></select>
+                <span id="backdrop-status" class="status" role="status" aria-live="polite"></span>
+              </details>
+            </div>
+            <p id="scene-style-note" class="scene-style-note">Moves your original strokes. No redraws.</p>
+          </form>
+        </section>
+        <div class="action-dock" role="group" aria-label="What next?">
+          <button type="button" id="dock-vary" class="dock-button" data-tip="Make variations|Create new versions from your drawing. You choose what to keep."><span class="dock-icon" aria-hidden="true">&#10024;</span><span class="dock-text"><b>Variations</b><small>One drawing, many ideas</small></span></button>
+          <button type="button" id="dock-similar" class="dock-button" data-tip="Find similar|Find similar art and scenes inspired by similar drawings."><span class="dock-icon" aria-hidden="true">&#9678;</span><span class="dock-text"><b>Find similar</b><small>your drawing is the query</small></span></button>
+          <button type="button" id="dock-refine" class="dock-button" data-tip="Refine with AI|AI looks at your drawing and suggests what it could use. Pick one or write your own; it edits your strokes and you keep or skip."><span class="dock-icon" aria-hidden="true">&#9998;</span><span class="dock-text"><b>Refine with AI</b><small>AI suggests, you decide</small></span></button>
+        </div>
+        <section id="pipeline" class="pipeline" aria-labelledby="pipeline-title" hidden>
+          <div class="pipeline-head">
+            <h3 id="pipeline-title" role="status" aria-live="polite">&#10022; Creating your animation&hellip;</h3>
+            <button type="button" id="pipeline-close" class="link-button" aria-label="Hide animation status">Hide</button>
           </div>
-          <div class="examples ai-examples" id="ai-examples"></div>
-          <p id="ai-hint" class="ai-hint"></p>
-        </form>
+        </section>
+        <details id="ai-tools" class="ai-tools">
+          <summary>&#10022; AI sparks <small>Start with words, or fix your art</small></summary>
+          <form id="ai-bar" class="ai-bar" autocomplete="off">
+            <div class="ai-modes" role="radiogroup" aria-label="What should AI do?">
+              <button type="button" role="radio" data-mode="refine" aria-checked="false">&#10022; Refine</button>
+              <button type="button" role="radio" data-mode="sketch" aria-checked="true">Sketch<span class="long"> a layer</span></button>
+              <button type="button" role="radio" data-mode="fix" aria-checked="false">Fix a spot</button>
+              <button type="button" role="radio" data-mode="vary" aria-checked="false"><span class="long">Grow </span>variations</button>
+            </div>
+            <div class="ai-input">
+              <span class="ai-spark" aria-hidden="true">&#10022;</span>
+              <label class="sr-only" for="ai-prompt">Ask AI</label>
+              <input id="ai-prompt" maxlength="200" enterkeyhint="go" placeholder="Describe a starting point">
+              <button type="button" class="voice-button" data-voice-for="ai-prompt" aria-label="Speak to AI" hidden>&#127908;</button>
+              <button type="submit" id="ai-go" class="ai-go" aria-label="Ask AI">&#8594;</button>
+            </div>
+            <div class="examples ai-examples" id="ai-examples"></div>
+            <p id="ai-hint" class="ai-hint"></p>
+          </form>
+        </details>
+        <details class="advanced-tools" id="advanced-tools">
+        <summary>More tools &amp; frames</summary>
         <div class="frames" id="frames">
           <button type="button" id="frame-play" class="frame-play" aria-label="Play" data-tip="Play &middot; Space|Flip through your frames. Tap the canvas to stop." hidden>&#9654;</button>
           <ol id="frame-list" class="frame-list" aria-label="Frames"></ol>
-          <button type="button" id="animate-open" class="animate-open" data-tip="Animate &middot; A|An AI director pitches a 10-second scene for your drawings, and shows how it works. Every frame stays editable.">&#127916; Animate</button>
+          <button type="button" id="animate-open" class="frame-add direct-open" data-tip="Direct it yourself|Pick who moves, add a backdrop or other assets, read the director's pitches, write your own direction, or use a free quick move.">&#127916; Direct&hellip;</button>
           <button type="button" id="explain-open" class="frame-add explain-open" hidden data-tip="How it moves|Keyframes, in-betweens, and spacing: how this shot works, on your own drawing.">&#9670; How</button>
           <button type="button" id="frame-add" class="frame-add" data-tip="New frame &middot; N|Copies this frame, like tracing on a lightbox. Change what moves. , and . step through frames.">+ Frame</button>
           <span id="frame-tools" class="frame-tools" hidden>
@@ -152,23 +202,26 @@
           </span>
         </div>
         <div class="canvas-foot"><span>Finger, stylus, or mouse. Stylus pressure works.</span><span class="foot-actions"><button type="button" id="starters-open" class="link-button" data-tip="Starters|Beach, mountains, a character sheet, a bouncing ball... Skip the blank page.">&#10024; Starters</button><button type="button" id="breakdown-open" class="link-button" data-tip="Breakdown|Take this canvas apart: frame by frame, layer by layer, asset by asset, and who made what.">&#128269; Breakdown</button><button type="button" id="download" class="link-button">Download PNG</button></span></div>
+        </details>
       </div>
 
       <aside class="save-card" aria-labelledby="save-heading">
-        <h2 id="save-heading">Save as</h2>
+        <h2 id="save-heading">Save your art</h2>
         <div class="kind-switch" role="radiogroup" aria-label="Save as">
           <button type="button" role="radio" data-kind="asset" aria-checked="true">&#9670; Asset</button>
           <button type="button" role="radio" data-kind="shot" aria-checked="false">&#9635; Scene</button>
-          <button type="button" role="radio" data-kind="idea" aria-checked="false">&#9998; Idea</button>
+          <button type="button" role="radio" data-kind="idea" aria-checked="false" hidden>&#9998; Idea</button>
         </div>
         <p id="kind-hint" class="kind-hint"></p>
         <form id="save-form">
           <label for="title" id="title-label">Name</label><input id="title" maxlength="80" required>
           <div class="kind-fields" data-for="asset">
             <label for="asset-type">Type</label>
-            <select id="asset-type"><option value="character">Character</option><option value="prop" selected>Prop</option><option value="environment">Background</option><option value="fx">Effect</option><option value="other">Other</option></select>
+            <select id="asset-type"><option value="character">Character</option><option value="prop" selected>Prop</option><option value="environment">Backdrop</option><option value="fx">Effect</option><option value="other">Other</option></select>
           </div>
           <div class="kind-fields" data-for="shot" hidden>
+            <details class="more-fields">
+              <summary>Scene details <span>(optional)</span></summary>
             <div class="field-row">
               <div><label for="shot-project">Project</label><input id="shot-project" maxlength="40" value="demo" pattern="[A-Za-z0-9][A-Za-z0-9_.\-]*" title="Letters, numbers, _ . - (no spaces)"></div>
               <div><label for="shot-sequence">Sequence</label><input id="shot-sequence" maxlength="40" placeholder="SQ010" pattern="[A-Za-z0-9][A-Za-z0-9_.\-]*" title="Letters, numbers, _ . - (no spaces)"></div>
@@ -177,6 +230,7 @@
               <div><label for="shot-status">Status</label><select id="shot-status"><option value="todo">To do</option><option value="in_progress">In progress</option><option value="review">In review</option><option value="approved">Approved</option></select></div>
               <div><label for="shot-assignee">Artist</label><input id="shot-assignee" maxlength="60" placeholder="Who's on it?"></div>
             </div>
+            </details>
             <p id="shot-links" class="shot-links"></p>
           </div>
           <details class="more-fields">
@@ -196,17 +250,20 @@
 
     <section class="library" aria-labelledby="library-heading">
       <div class="library-head">
-        <div><h2 id="library-heading">Find anything</h2><p class="library-sub">Describe it, sketch it, or pick an asset. Every asset, scene, and frame is searchable.</p></div>
+        <div><h2 id="library-heading">Find your art</h2><p class="library-sub">Search by words or a sketch.</p></div>
         <button type="button" id="browse" class="link-button">Show all</button>
       </div>
       <div class="library-tabs" role="tablist" aria-label="Library">
-        <button type="button" role="tab" id="tab-asset" data-tab="asset" aria-selected="true">&#9670; Assets</button>
-        <button type="button" role="tab" id="tab-shot" data-tab="shot" aria-selected="false">&#9635; Scenes</button>
-        <button type="button" role="tab" id="tab-frame" data-tab="frame" aria-selected="false">&#127902; Frames</button>
-        <button type="button" role="tab" id="tab-idea" data-tab="idea" aria-selected="false">&#9998; Ideas</button>
+        <button type="button" role="tab" id="tab-all" data-tab="all" aria-selected="true">&#10022; Everything</button>
+        <button type="button" role="tab" id="tab-asset" data-tab="asset" aria-selected="false">&#9670; Assets</button>
+        <button type="button" role="tab" id="tab-backdrop" data-tab="backdrop" aria-selected="false">&#9636; Backdrops</button>
+        <button type="button" role="tab" id="tab-frame" data-tab="frame" aria-selected="false">&#127902; Animated scenes</button>
+        <button type="button" role="tab" id="tab-shot" data-tab="shot" aria-selected="false" hidden>&#9635; Scenes</button>
+        <button type="button" role="tab" id="tab-idea" data-tab="idea" aria-selected="false" hidden>&#9998; Ideas</button>
       </div>
-      <form id="search-form" class="search-bar" role="search"><label class="sr-only" for="query">Search by describing it</label><input id="query" type="search" maxlength="500" required placeholder="Describe it, e.g. &ldquo;the red rocket&rdquo;"><button type="button" id="search-sketch" class="search-sketch" aria-label="Search with my drawing" data-tip="Search with my drawing|What's on the canvas becomes the query. Doodle a rocket up high, find the frames where it's up high."><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20l4-1L19 8l-3-3L5 16z"/><path d="M14 7l3 3"/></svg></button><button class="search-go" type="submit" aria-label="Search">&#8594;</button></form>
-      <div id="asset-filters" class="filters asset-filters" role="group" aria-label="Filter assets by how they were made"></div>
+      <form id="search-form" class="search-bar" role="search"><label class="sr-only" for="query">Search by describing it</label><input id="query" type="search" maxlength="500" required placeholder="Describe anything, e.g. &ldquo;a spaceship&rdquo;"><button type="button" class="voice-button" data-voice-for="query" aria-label="Speak a search" hidden>&#127908;</button><button type="button" id="search-sketch" class="search-sketch" aria-label="Search with my drawing" data-tip="Search with my drawing|What's on the canvas becomes the query. Doodle a rocket up high, find the frames where it's up high."><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20l4-1L19 8l-3-3L5 16z"/><path d="M14 7l3 3"/></svg></button><button class="search-go" type="submit" aria-label="Search">&#8594;</button></form>
+      <div id="search-hints" class="search-hints" role="group" aria-label="Try a search"></div>
+      <div id="asset-filters" class="filters asset-filters" role="group" aria-label="Filter assets by how they were made" hidden></div>
       <div id="frame-filters" class="filters frame-filters" hidden><label for="frame-asset">With</label><select id="frame-asset" aria-label="Only frames with this asset"><option value="">any asset</option></select></div>
       <div id="tag-filters" class="filters" role="group" aria-label="Filter by tag" hidden></div>
       <div id="status-filters" class="filters" role="group" aria-label="Filter scenes by status" hidden></div>
@@ -280,6 +337,7 @@
           <span class="ai-spark" aria-hidden="true">&#10022;</span>
           <label class="sr-only" for="anim-prompt">Describe the motion</label>
           <input id="anim-prompt" maxlength="300" placeholder="Or write your own: who moves, where, and what they do">
+          <button type="button" class="voice-button" data-voice-for="anim-prompt" aria-label="Speak animation direction" hidden>&#127908;</button>
           <button type="submit" id="anim-go" class="ai-go" aria-label="Choreograph with AI">&#8594;</button>
         </form>
       </section>
@@ -336,6 +394,7 @@
         <div class="var-goal-row">
           <label class="sr-only" for="var-goal">What are the variations for?</label>
           <input id="var-goal" minlength="3" maxlength="200" required autocomplete="off" placeholder="e.g. a battle: different weapons and poses">
+          <button type="button" class="voice-button" data-voice-for="var-goal" aria-label="Speak a variation idea" hidden>&#127908;</button>
           <label class="sr-only" for="var-count">How many</label>
           <select id="var-count"><option>2</option><option>3</option><option>4</option><option selected>6</option><option>8</option><option>9</option></select>
           <button type="submit" class="pill primary" id="var-plan">Plan them</button>
@@ -415,31 +474,35 @@
       <div class="gate-art" aria-hidden="true">
         <svg viewBox="0 0 400 260"><path class="gate-line" pathLength="1" d="M40 200c30-60 60-120 110-118s40 70 90 62 50-96 100-86 20 90-20 110-90-10-110 30"/><path class="gate-line two" pathLength="1" d="M120 230c40-14 90-14 140 0"/><circle class="gate-dot" cx="300" cy="64" r="7"/></svg>
       </div>
-      <div class="gate-card">
-        <div class="gate-brand"><svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><path d="M14 4C14 4 6 14 6 19.5a8 8 0 0 0 16 0C22 14 14 4 14 4z"/><path class="brand-spark" d="M25 3l1.3 3.2 3.2 1.3-3.2 1.3-1.3 3.2-1.3-3.2-3.2-1.3 3.2-1.3z"/></svg><span class="wordmark">inkling</span></div>
-        <h2 id="gate-title">Draw it once. <span>Animate it anywhere.</span></h2>
-        <p class="gate-promise">Draw it. Find it. Animate it. Share it. AI drafts; you decide.</p>
-        <div class="gate-tabs" role="tablist" aria-label="Account">
-          <button type="button" role="tab" id="gate-tab-signup" data-gate="signup" aria-selected="true">Create account</button>
-          <button type="button" role="tab" id="gate-tab-login" data-gate="login" aria-selected="false">Sign in</button>
-        </div>
-        <form id="gate-form" class="gate-form" novalidate>
-          <label for="gate-email">Email</label>
-          <input id="gate-email" type="email" autocomplete="email" inputmode="email" required placeholder="you@studio.com">
-          <label for="gate-password">Password <small id="gate-pw-hint">12+ characters</small></label>
-          <div class="gate-pw">
-            <input id="gate-password" type="password" autocomplete="new-password" required minlength="12" maxlength="72">
-            <button type="button" id="gate-reveal" class="gate-reveal" aria-label="Show password" aria-pressed="false">Show</button>
-          </div>
-          <button type="submit" id="gate-submit" class="gate-submit">Create my studio</button>
-          <p id="gate-status" class="gate-status" role="status" aria-live="polite"></p>
-        </form>
+      <div class="gate-layout">
+        <section class="gate-story" aria-labelledby="gate-title">
+          <div class="gate-brand"><svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><path d="M14 4C14 4 6 14 6 19.5a8 8 0 0 0 16 0C22 14 14 4 14 4z"/><path class="brand-spark" d="M25 3l1.3 3.2 3.2 1.3-3.2 1.3-1.3 3.2-1.3-3.2-3.2-1.3 3.2-1.3z"/></svg><span class="wordmark">inkling</span></div>
+        <h2 id="gate-title">Draw it. <span>Watch it move.</span></h2>
+        <p class="gate-promise">Your art leads. AI helps you take it further.</p>
         <ul class="gate-perks">
-          <li><b>&#9997;</b><span>Characters, props, and backdrops in layers. Your library is <b>private</b></span></li>
-          <li><b>&#128269;</b><span>Find anything by <b>describing or sketching</b> it</span></li>
-          <li><b>&#127916;</b><span>An AI director pitches <b>10-second scenes</b>, and shows you how animation works</span></li>
+          <li><b>&#10022;</b><span>Turn <b>your art</b> into variations and animated scenes</span></li>
+          <li><b>&#9678;</b><span>Find art and scenes by <b>words or sketch</b></span></li>
+          <li><b>&#9998;</b><span>Shape what happens with words or voice</span></li>
         </ul>
         <p class="gate-fine">Accounts by m-stash &middot; drawings in MongoDB Atlas &middot; search by Voyage AI</p>
+        </section>
+        <div class="gate-card">
+          <div class="gate-tabs" role="tablist" aria-label="Account">
+            <button type="button" role="tab" id="gate-tab-signup" data-gate="signup" aria-selected="true">Create account</button>
+            <button type="button" role="tab" id="gate-tab-login" data-gate="login" aria-selected="false">Sign in</button>
+          </div>
+          <form id="gate-form" class="gate-form" novalidate>
+            <label for="gate-email">Email</label>
+            <input id="gate-email" type="email" autocomplete="email" inputmode="email" required placeholder="you@studio.com">
+            <label for="gate-password">Password <small id="gate-pw-hint">12+ characters</small></label>
+            <div class="gate-pw">
+              <input id="gate-password" type="password" autocomplete="new-password" required minlength="12" maxlength="72">
+              <button type="button" id="gate-reveal" class="gate-reveal" aria-label="Show password" aria-pressed="false">Show</button>
+            </div>
+            <button type="submit" id="gate-submit" class="gate-submit">Create my studio</button>
+            <p id="gate-status" class="gate-status" role="status" aria-live="polite"></p>
+          </form>
+        </div>
       </div>
     </dialog>
 
@@ -449,7 +512,7 @@
         <button type="button" id="welcome-demo" class="welcome-choice primary">
           <span class="welcome-icon" aria-hidden="true">&#129418;</span>
           <b>Start with the demo library</b>
-          <span>Little Fox (doodle to finished), Red Rocket and a near-duplicate, and 6 scenes, including a 6-frame liftoff. A private copy: change anything.</span>
+          <span>Try a private collection of art and scenes. Change anything.</span>
         </button>
         <button type="button" id="welcome-fresh" class="welcome-choice">
           <span class="welcome-icon" aria-hidden="true">&#9999;&#65039;</span>
@@ -461,13 +524,14 @@
     </dialog>
 
     <dialog id="help" class="sheet" aria-labelledby="help-title">
-      <div class="sheet-head"><div><p class="eyebrow">How Inkling works</p><h2 id="help-title">Draw it once. Animate it anywhere.</h2><p class="muted">AI drafts. You decide. Every stroke is remembered: who drew it, how, and where it&rsquo;s used.</p></div><button type="button" id="help-close" class="close" aria-label="Close">&times;</button></div>
+      <div class="sheet-head"><div><p class="eyebrow">How Inkling works</p><h2 id="help-title">Draw it. Watch it move.</h2><p class="muted">Your creativity leads. AI helps you explore.</p></div><button type="button" id="help-close" class="close" aria-label="Close">&times;</button></div>
       <ol class="help-flow">
-        <li><b>&#9999;&#65039; Draw it once</b><span>Finger, pencil, or mouse; save it as an asset. Grow lookalikes from your strokes.</span><i>&ldquo;Red Rocket&rdquo;, plus 9 for a battle</i></li>
-        <li><b>&#127916; Animate it</b><span>Drop it into a scene, tap Animate, pick a move (free) or describe one (AI). Then grab and tweak any frame.</span><i>&ldquo;wobbles, then blasts off to the top right&rdquo;</i></li>
-        <li><b>&#128269; Find anything</b><span>Assets, scenes, or single frames: describe it, sketch it, or pick an asset.</span><i>&ldquo;the moment it clears the trees&rdquo;</i></li>
-        <li><b>&#129516; Always know</b><span>Where it's used, what's outdated, what looks like it, and how it was made, stroke by stroke.</span><i>&ldquo;Which frames still show the old rocket?&rdquo; &middot; watch Little Fox go from doodle to v3</i></li>
+        <li><b>&#9999;&#65039; Draw it</b><span>Make an asset or backdrop. Need a start? Try AI sparks.</span><i>&ldquo;Red Rocket&rdquo;</i></li>
+        <li><b>&#10022; Make a scene</b><span>Move your strokes or reimagine your art as video. Revise it with words.</span><i>Your art leads the way</i></li>
+        <li><b>&#9678; Find your art</b><span>Search your library with words or a sketch. Find similar art with one tap.</span><i>&ldquo;a rocket in the sky&rdquo;</i></li>
       </ol>
+      <details class="more-fields">
+      <summary>More studio tools</summary>
       <dl class="glossary">
         <div><dt>&#9670; Asset</dt><dd>A rubber stamp. Draw once, use anywhere.</dd></div>
         <div><dt>&#9635; Scene</dt><dd>One shot of your film, with a status and an artist.</dd></div>
@@ -476,20 +540,21 @@
         <div><dt>&#128279; Used in</dt><dd>A shortcut to the original. Updates in one tap.</dd></div>
         <div><dt>&#128064; Looks like it</dt><dd>Reverse image search across scenes.</dd></div>
         <div><dt>&#129516; Similar assets</dt><dd>Near-duplicates in your library.</dd></div>
-        <div><dt>&#127916; Motion</dt><dd>Keyframes that move your own drawing. AI choreographs; it never redraws. Short by design.</dd></div>
+        <div><dt>&#127916; My strokes</dt><dd>AI choreographs your original drawing without redrawing it.</dd></div>
+        <div><dt>&#10022; AI reimagines</dt><dd>A generated video inspired by your art. It may change the artwork.</dd></div>
         <div><dt>&#10022; Variations</dt><dd>One asset in, lookalikes out. AI edits your strokes; you keep and finish.</dd></div>
         <div><dt>&#9998; Process</dt><dd>Every stroke keeps its order and time. Replay any drawing, or save the replay as a video.</dd></div>
         <div><dt>&#128221; Audit trail</dt><dd>Every AI step you took or skipped, saved with the asset. Nothing is a black box.</dd></div>
         <div><dt>&#127902; Frames</dt><dd>A flipbook. Each new frame copies the last; change only what moves.</dd></div>
         <div><dt>&#128269; Find</dt><dd>Search pictures and words together: describe it, or sketch it.</dd></div>
         <div><dt>&#128269; Breakdown</dt><dd>Take a scene apart: frames, layers, assets, and who made what.</dd></div>
-        <div><dt>&#9998; Idea</dt><dd>A loose sketch to find again by describing it.</dd></div>
       </dl>
+      </details>
       <div class="help-foot"><button type="button" id="help-demo" class="pill primary">See an example</button><button type="button" id="help-guide" class="pill">Show the steps again</button></div>
     </dialog>
 
     <div id="tooltip" class="tooltip" role="tooltip" hidden><strong></strong><span></span></div>
   </main>
-  <footer><span><b>inkling</b> /&#712;&#618;&#331;kl&#618;&#331;/ a slight hint.</span><a href="/playground">Animation playground &#8599;</a></footer>
+  <footer><span><b>inkling</b> /&#712;&#618;&#331;kl&#618;&#331;/ a slight hint.</span></footer>
 </body>
 </html>

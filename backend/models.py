@@ -2,7 +2,7 @@ import math
 import re
 from typing import Annotated, Literal
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 Unit = Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)]
 MAX_POINTS = 20000
@@ -111,6 +111,7 @@ class Layer(BaseModel):
     strokes: list[Stroke] = Field(default_factory=list, max_length=MAX_STROKES)
     # Only placed layers carry a link; plain layers stay exactly as they were before assets existed.
     asset: AssetLink | None = Field(default=None, exclude_if=lambda value: value is None)
+    backdrop: str | None = Field(default=None, max_length=40, exclude_if=lambda value: value is None)
     # In frames 2..N of a scene: "frame 1's layer number `ref`, posed by `xf`" instead of a copy of its
     # strokes. A 10-second shot stays small, and a new asset version flows into every frame.
     ref: int | None = Field(default=None, ge=0, lt=MAX_LAYERS, exclude_if=lambda value: value is None)
@@ -346,12 +347,39 @@ class MotionRecord(BaseModel):
     tracks: list[MotionTrack] = Field(min_length=1, max_length=4)
 
 
+def fit_box(value):
+    """A subject's ink box, pulled inside the canvas: ink (and its stroke width) can poke past an edge."""
+    if not isinstance(value, dict) or not all(isinstance(value.get(k), (int, float)) for k in ("x", "y", "w", "h")):
+        return value
+    out = {}
+    for pos, size in (("x", "w"), ("y", "h")):
+        start = min(1.0, max(0.0, float(value[pos])))
+        end = min(1.0, max(0.0, float(value[pos]) + float(value[size])))
+        length = max(0.02, end - start)
+        out[pos], out[size] = min(start, 1.0 - length), length
+    return out
+
+
 class MotionSubject(BaseModel):
     """A layer that should move: its index in the stack, its name, and where its ink sits (canvas fractions)."""
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     id: int = Field(ge=0, lt=MAX_LAYERS)
     name: str = Field(min_length=1, max_length=40)
     box: Region
+
+    _fit = field_validator("box", mode="before")(fit_box)
+
+
+class PriorMotionTrack(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    subject: int = Field(ge=0, lt=MAX_LAYERS)
+    keys: list[MotionKey] = Field(min_length=1, max_length=MAX_MOTION_KEYS)
+
+
+class PriorMotion(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    prompt: str = Field(default="", max_length=300)
+    tracks: list[PriorMotionTrack] = Field(min_length=1, max_length=4)
 
 
 class MotionRequest(BaseModel):
@@ -361,12 +389,17 @@ class MotionRequest(BaseModel):
     seconds: float = Field(ge=0.5, le=10, allow_inf_nan=False)
     subjects: list[MotionSubject] = Field(min_length=1, max_length=4)
     layers: list[Layer] = Field(default_factory=list, max_length=MAX_LAYERS)
+    previous: PriorMotion | None = None
 
     @model_validator(mode="after")
     def limits(self) -> "MotionRequest":
         check_layers(self.layers, require_ink=False)
         if len({subject.id for subject in self.subjects}) != len(self.subjects):
             raise ValueError("Each subject may appear once.")
+        if self.previous:
+            ids = [track.subject for track in self.previous.tracks]
+            if len(set(ids)) != len(ids) or any(subject not in {s.id for s in self.subjects} for subject in ids):
+                raise ValueError("Previous motion must match the selected drawings.")
         return self
 
 
@@ -381,6 +414,85 @@ class DirectRequest(BaseModel):
     @model_validator(mode="after")
     def limits(self) -> "DirectRequest":
         check_layers(self.layers, require_ink=False)
+        return self
+
+
+class AnimateRequest(BaseModel):
+    """One tap: AI pitches and choreographs, or follows the artist's prompt."""
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    prompt: str = Field(default="", max_length=300)
+    title: str = Field(default="", max_length=60)
+    seconds: float = Field(default=10, ge=1, le=10, allow_inf_nan=False)
+    backdrop: str = Field(default="", max_length=40)
+    subjects: list[MotionSubject] = Field(min_length=1, max_length=8)
+    asset_ids: list[Annotated[str, Field(pattern=UUID_PATTERN)]] = Field(default_factory=list, max_length=8)
+    layers: list[Layer] = Field(default_factory=list, max_length=MAX_LAYERS)
+    previous: PriorMotion | None = None
+
+    @model_validator(mode="after")
+    def limits(self) -> "AnimateRequest":
+        check_layers(self.layers, require_ink=False)
+        if len({subject.id for subject in self.subjects}) != len(self.subjects):
+            raise ValueError("Each subject may appear once.")
+        if self.prompt and len(self.prompt) < 3:
+            raise ValueError("Describe the motion in a few more words.")
+        if self.prompt and len(self.subjects) > 4:
+            raise ValueError("Pick up to 4 drawings to move.")
+        if self.previous and not self.prompt:
+            raise ValueError("Describe what to change in the animation.")
+        if self.previous and any(track.subject not in {subject.id for subject in self.subjects}
+                                 for track in self.previous.tracks):
+            raise ValueError("Previous motion must belong to the selected drawings.")
+        self.asset_ids = list(dict.fromkeys(self.asset_ids))
+        return self
+
+
+class ClipRequest(BaseModel):
+    """Create or revise an AI-generated video inspired by the artist's scene."""
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    prompt: str = Field(default="", max_length=300)
+    layers: list[Layer] = Field(default_factory=list, max_length=MAX_LAYERS)
+    previous_id: Annotated[str, Field(pattern=UUID_PATTERN)] | None = None
+
+    @model_validator(mode="after")
+    def limits(self) -> "ClipRequest":
+        if not self.previous_id:
+            check_layers(self.layers, require_ink=True)
+        if self.previous_id and len(self.prompt) < 3:
+            raise ValueError("Describe what to change in the scene.")
+        return self
+
+
+class RefineIdeasRequest(BaseModel):
+    """Ask AI what this drawing could use next: a few short, editable prompts."""
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    title: str = Field(default="", max_length=120)
+    layers: list[Layer] = Field(min_length=1, max_length=MAX_LAYERS)
+
+    @model_validator(mode="after")
+    def limits(self) -> "RefineIdeasRequest":
+        check_layers(self.layers, require_ink=True)
+        return self
+
+
+class RefineRequest(BaseModel):
+    """Refine one layer by editing the artist's strokes: keep what the prompt doesn't touch, add what it needs."""
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    prompt: str = Field(min_length=3, max_length=200)
+    title: str = Field(default="", max_length=120)
+    target: int = Field(ge=0, lt=MAX_LAYERS)
+    layers: list[Layer] = Field(min_length=1, max_length=MAX_LAYERS)
+
+    @model_validator(mode="after")
+    def limits(self) -> "RefineRequest":
+        check_layers(self.layers, require_ink=True)
+        if self.target >= len(self.layers):
+            raise ValueError("Pick a layer that exists.")
+        layer = self.layers[self.target]
+        if layer.asset:
+            raise ValueError("Placed assets stay linked; refine the asset itself.")
+        if not any(not stroke.erase for stroke in layer.strokes):
+            raise ValueError("That layer has no ink to refine.")
         return self
 
 
@@ -421,7 +533,9 @@ class VariationRequest(BaseModel):
 class SketchSearch(BaseModel):
     """Search with a drawing: the visible ink is the query."""
     model_config = ConfigDict(extra="forbid")
-    scope: Literal["asset", "shot", "frame", "idea"] = "frame"
+    scope: Literal["asset", "shot", "frame", "clip", "idea"] = "frame"
+    asset_type: AssetType | None = None
+    animated: bool = False
     layers: list[Layer] = Field(min_length=1, max_length=MAX_LAYERS)
 
     @model_validator(mode="after")

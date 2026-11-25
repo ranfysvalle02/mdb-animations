@@ -1,7 +1,9 @@
 """Gemini-powered sparks (minimal, opt-in drawing assists) and auto-tagging."""
 
 import base64
+import binascii
 import io
+import json
 import math
 import os
 import re
@@ -15,7 +17,8 @@ from pydantic import BaseModel
 
 from backend.library import CANVAS_HEIGHT, CANVAS_WIDTH, png_bytes, render_image
 from backend.models import (
-    MAX_MOTION_KEYS, MAX_POINTS, MAX_STROKES, DirectRequest, Layer, MotionRequest, Region, SketchRequest, SparkRequest, Stroke, TagRequest, VariationPlanRequest,
+    MAX_MOTION_KEYS, MAX_POINTS, MAX_STROKES, DirectRequest, Layer, MotionRequest, RefineIdeasRequest, RefineRequest, Region, SketchRequest,
+    SparkRequest, Stroke, TagRequest, VariationPlanRequest,
     VariationRequest, clean_tags,
 )
 
@@ -112,6 +115,10 @@ class _StrokeSpark(BaseModel):
 
 class _Tags(BaseModel):
     tags: list[str]
+
+
+class _Suggestions(BaseModel):
+    ideas: list[str]
 
 
 class _PlanItem(BaseModel):
@@ -305,6 +312,7 @@ class Sparks:
         self.client = genai.Client(api_key=key, http_options=types.HttpOptions(timeout=90_000))
         self.text_model = os.environ.get("GEMINI_TEXT_MODEL", "gemini-3.5-flash")
         self.image_model = os.environ.get("GEMINI_IMAGE_MODEL", "gemini-3.1-flash-image")
+        self.video_model = os.environ.get("GEMINI_VIDEO_MODEL", "gemini-omni-1.2-flash")
 
     def _generate(self, **kwargs):
         try:
@@ -326,6 +334,40 @@ class Sparks:
         if not isinstance(response.parsed, schema):
             raise AIError("Gemini returned no suggestion. Try a different area or wording.")
         return response.parsed
+
+    def clip(self, layers: list[Layer], prompt: str, previous: str | None = None) -> tuple[str, bytes]:
+        """Generate a video, or edit the owner's previous Gemini interaction."""
+        direction = prompt or (
+            "Create a delightful short animated scene inspired by this drawing. Give it a surprising beginning, "
+            "a playful development, and a satisfying ending. Keep the artist's visual character recognizable."
+        )
+        contents = direction if previous else [
+            {"type": "image", "data": base64.b64encode(png_bytes(render_image(layers))).decode("ascii"),
+             "mime_type": "image/png"},
+            {"type": "text", "text": direction},
+        ]
+        try:
+            result = self.client.interactions.create(
+                model=self.video_model, input=contents, previous_interaction_id=previous,
+                response_format={"type": "video", "duration": "8s", "resolution": "720p"},
+                timeout=300,
+            )
+        except genai_errors.APIError:
+            raise
+        except Exception as exc:
+            raise AIUnavailable("Gemini video is unreachable. Please try again.") from exc
+        video = result.output_video
+        if result.status != "completed" or not result.id or not video or not video.data:
+            raise AIError("Gemini did not return a finished video. Try a different direction.")
+        if video.mime_type and video.mime_type != "video/mp4":
+            raise AIError("Gemini returned an unsupported video format.")
+        try:
+            data = base64.b64decode(video.data, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise AIError("Gemini returned an invalid video.") from exc
+        if len(data) < 12 or data[4:8] != b"ftyp" or len(data) > 40 * 1024 * 1024:
+            raise AIError("Gemini returned an invalid or oversized video.")
+        return result.id, data
 
     def suggest_tags(self, request: TagRequest) -> list[str]:
         image = png_bytes(render_image(request.layers))
@@ -405,11 +447,19 @@ class Sparks:
         subjects = "\n".join(
             f"- subject {s.id}: {s.name!r}, center ({s.box.x + s.box.w / 2:.2f}, {s.box.y + s.box.h / 2:.2f}), "
             f"size {s.box.w:.2f} x {s.box.h:.2f}" for s in request.subjects)
+        previous = ""
+        if request.previous:
+            previous = (
+                f"\nThis is a revision of an existing animation. Original direction: {request.previous.prompt}\n"
+                f"Existing choreography: {json.dumps([track.model_dump() for track in request.previous.tracks])}\n"
+                "Apply the new direction as a change to this choreography. Keep the unmentioned beats, "
+                "subjects, and timing wherever possible; return the complete revised tracks."
+            )
         result = self._json([
             types.Part.from_bytes(data=png_bytes(render_image(request.layers)), mime_type="image/png"),
             f"You are a 2D animator's assistant. The image is the first frame of a {request.seconds:g}-second clip "
             f"({frames} frames). Animate ONLY these subjects (canvas fractions: (0,0) top-left, (1,1) bottom-right):\n"
-            f"{subjects}\nDirection: {request.prompt}\n"
+            f"{subjects}\nDirection: {request.prompt}{previous}\n"
             "For each subject return keyframes. t is the time from 0 to 1. x and y are the offset of the subject's "
             "center from where it is now, in canvas fractions (x right, y down; y=-0.3 moves it up by 30% of the "
             "canvas height). sx and sy scale it (1 = as drawn; squash = sx 1.2, sy 0.8). r rotates it clockwise in "
@@ -431,7 +481,7 @@ class Sparks:
                 "seconds": request.seconds, "tracks": tracks}
 
     def direct(self, request: DirectRequest) -> dict:
-        """A storyboard artist's pitch: 3 short shots that show off these drawings, as directions anyone can edit."""
+        """Pitch three short shots that show off these drawings."""
         subjects = "\n".join(
             f"- subject {s.id}: {s.name!r} at center ({s.box.x + s.box.w / 2:.2f}, {s.box.y + s.box.h / 2:.2f}), "
             f"size {s.box.w:.2f} x {s.box.h:.2f}" for s in request.subjects)
@@ -440,7 +490,11 @@ class Sparks:
             f"You are a storyboard artist and animation director. The image is the first frame of a "
             f"{request.seconds:g}-second shot{f' set on a {request.backdrop} backdrop' if request.backdrop else ''}. "
             f"These are the artist's drawings that can move (canvas fractions, (0,0) top-left):\n{subjects}\n"
-            "Pitch 3 different shots that show off these drawings in motion, each fun and readable. Motion can only "
+            "Pitch 3 genuinely different little stories with a setup, a surprise, and a satisfying ending. "
+            "Use what you can actually see in the picture and the setting; make the drawing's personality come "
+            "through its motion. Avoid generic takeoffs, repetitive bouncing, and immediately exiting the screen. "
+            "If a drawing is a rocket, it need not launch: it might explore, dance, get lost, or meet something. "
+            "Motion can only "
             "move, scale, squash and stretch, and turn the existing drawings: no new drawing, no morphing, no camera "
             "cuts. For each, return: a title (2-4 words, Title Case); a logline (at most 18 words: what happens and "
             "why it's fun); a prompt (at most 45 words: plain, vivid words a 10-year-old could read and edit, as 2-4 "
@@ -458,6 +512,53 @@ class Sparks:
         if not ideas:
             raise AIError("Gemini couldn't pitch a shot for this. Try describing one yourself.")
         return {"ideas": ideas}
+
+    def refine_ideas(self, request: RefineIdeasRequest) -> list[str]:
+        """What this drawing could use next: short prompts the artist can tap, or edit before running."""
+        about = f' titled "{request.title}"' if request.title else ""
+        result = self._json([
+            types.Part.from_bytes(data=png_bytes(render_image(request.layers)), mime_type="image/png"),
+            f"An artist drew this{about} and wants AI to refine it by editing their own line art. Suggest 4 "
+            "different, concrete refinements that would make it more finished, expressive, or fun to animate "
+            "(e.g. a detail, an expression, an accessory, cleaner shapes, motion-ready parts). Each is an "
+            "imperative prompt of 3-8 plain words, naming what is drawn (e.g. 'give the fox a curious smile', "
+            "'add flames under the rocket'). Only things you can draw with a few lines; no shading, text, or "
+            "backgrounds.",
+        ], _Suggestions)
+        ideas = list(dict.fromkeys(" ".join(idea.split()).rstrip(".")[:80] for idea in result.ideas))
+        ideas = [idea[0].lower() + idea[1:] for idea in ideas if len(idea) >= 6][:4]
+        if not ideas:
+            raise AIError("Gemini had no ideas for this one. Say what you'd like to change.")
+        return ideas
+
+    def refine(self, request: RefineRequest) -> dict:
+        """One layer, refined by EDITING the artist's strokes (kept verbatim) and adding only what's needed."""
+        strokes = request.layers[request.target].strokes
+        result = self._json([
+            "Image: the artist's whole canvas (1000x650).",
+            types.Part.from_bytes(data=png_bytes(render_image(request.layers)), mime_type="image/png"),
+            f"The strokes of the layer to refine, in drawing order (pixel coordinates; (0,0) is top-left):\n"
+            f"{encode_strokes(strokes)}\n\n"
+            f"You help an artist refine their drawing{f' {request.title!r}' if request.title else ''} by EDITING "
+            f"their line art, never redrawing it from scratch. Refinement: {request.prompt}\n"
+            "Return `keep`: the numbers of every stroke to keep exactly as is (keep as many as possible). Return "
+            "`strokes`: only the new or changed strokes this needs (a changed stroke is left out of keep and "
+            "redrawn here). Match the artist's colors, widths, and style; keep the same size and position. Each "
+            "stroke: color #rrggbb, width in pixels, fill (#rrggbb for a closed filled shape, or empty), and points "
+            f"as a polyline in pen order, pixel coordinates within 0-1000 x 0-650, at most {MAX_VARIATION_POINTS} "
+            "points. Also return a note (at most 12 words) saying what you changed.",
+        ], _Variation)
+        out, kept, added = apply_variation(strokes, result)
+        keep = {i for i in result.keep if 0 <= i < len(strokes)}
+        source = sum(1 for stroke in strokes if not stroke.erase)
+        if not added and kept == source:
+            raise AIError("Gemini left it unchanged. Try a more specific refinement.")
+        if not any(not stroke.get("erase") for stroke in out):
+            raise AIError("Gemini's refinement came back empty. Try again or reword it.")
+        return {"kind": "refine", "note": result.note.strip()[:120], "prompt": request.prompt, "target": request.target,
+                "strokes": out, "kept": kept, "added": added, "source_strokes": source,
+                # out = these source strokes, verbatim and in order, then the AI's: the studio keeps its originals.
+                "keep_indices": [i for i, stroke in enumerate(strokes) if stroke.erase or i in keep]}
 
     def plan_variations(self, asset: dict, request: VariationPlanRequest) -> list[dict]:
         """A short, editable plan: one brief per variation. The artist edits it before anything is drawn."""

@@ -9,6 +9,7 @@ x-studio: &studio
     GEMINI_API_KEY: ${GEMINI_API_KEY:?Set GEMINI_API_KEY in .env to enable sparks and auto-tags}
     GEMINI_TEXT_MODEL: ${GEMINI_TEXT_MODEL:-gemini-3.5-flash}
     GEMINI_IMAGE_MODEL: ${GEMINI_IMAGE_MODEL:-gemini-3.1-flash-image}
+    GEMINI_VIDEO_MODEL: ${GEMINI_VIDEO_MODEL:-gemini-omni-1.2-flash}
     WHERE_USED_MIN_SCORE: ${WHERE_USED_MIN_SCORE:-0.75}
     SIMILAR_ASSET_MIN_SCORE: ${SIMILAR_ASSET_MIN_SCORE:-0.75}
     # Accounts (m-stash). The pk_ key is a publishable, frontend-safe key; never put an sk_ key here.
@@ -16,6 +17,7 @@ x-studio: &studio
     # The setup job builds indexes before the studio starts; the studio seeds the demo library once.
     INKLING_SETUP_ON_START: ${INKLING_SETUP_ON_START:-0}
     INKLING_AI_PER_HOUR: ${INKLING_AI_PER_HOUR:-60}
+    INKLING_VIDEO_PER_HOUR: ${INKLING_VIDEO_PER_HOUR:-5}
     INKLING_EMBEDS_PER_HOUR: ${INKLING_EMBEDS_PER_HOUR:-600}
     PUBLIC_URL: ${PUBLIC_URL:-}
     MSTASH_API: ${MSTASH_API:-https://m-stash.onrender.com}

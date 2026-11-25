@@ -406,3 +406,145 @@ def test_motion_endpoint_validates_and_is_metered_as_ai(client):
     assert http.post("/api/sparks/motion", json={**body, "seconds": 11}).status_code == 422  # 10 s at most, by design
     assert http.post("/api/sparks/motion", json={**body, "subjects": [subject, subject]}).status_code == 422
     assert http.post("/api/sparks/motion", json={**body, "subjects": []}).status_code == 422
+
+
+def test_subject_ink_past_the_canvas_edge_is_clipped_not_rejected(client):
+    # Ink near an edge (plus its line width) gave x + w > 1, and the director refused the whole scene.
+    http, _ = client
+    http.ai.direct.return_value = {"ideas": []}
+    subject = {"id": 0, "name": "BG city", "box": {"x": 0.9, "y": -0.01, "w": 0.2, "h": 1.03}}
+    assert http.post("/api/sparks/direct", json={"subjects": [subject], "layers": [{"strokes": []}]}).status_code == 200
+    clipped = http.ai.direct.call_args.args[0].subjects[0].box
+    assert clipped.x + clipped.w <= 1 and clipped.y == 0 and clipped.h == 1
+
+
+def director_fakes():
+    from backend.ai import IDENTITY_KEY
+    sparks = Mock()
+    sparks.direct.return_value = {"ideas": [
+        {"title": t, "logline": "", "prompt": f"{t} across the sky", "movers": [0]} for t in ("Takeoff", "Moon Hop", "Spin Out")]}
+    sparks.motion.return_value = {"note": "hops", "tracks": [{"subject": 0, "keys": [
+        dict(IDENTITY_KEY), {**IDENTITY_KEY, "t": 0.5, "y": -0.2, "label": "arc"}, {**IDENTITY_KEY, "t": 1.0, "label": "hold"}]}]}
+    return sparks
+
+
+ANIMATE = {"subjects": [{"id": 0, "name": "Red Rocket", "box": {"x": 0.4, "y": 0.5, "w": 0.1, "h": 0.3}}],
+           "asset_ids": ["0b6b6a4e-3f0a-4c55-9e43-7f0f3f1a2b3c"], "layers": [{"strokes": []}]}
+
+
+def test_director_animates_the_first_pitch_without_motion_memory():
+    from backend import director
+    from backend.models import AnimateRequest
+    sparks = director_fakes()
+    events = list(director.run(sparks, AnimateRequest.model_validate(ANIMATE)))
+    assert [e["id"] for e in events[:-1]] == ["pitch", "choreograph"]
+    assert events[-1]["idea"]["title"] == "Takeoff"
+    assert sparks.motion.call_args.args[0].prompt == "Takeoff across the sky"
+
+
+def test_director_follows_the_artists_direction_without_pitching():
+    from backend import director
+    from backend.models import AnimateRequest
+    sparks = director_fakes()
+    events = list(director.run(sparks, AnimateRequest.model_validate({**ANIMATE, "prompt": "spins twice and bows"})))
+    assert "pitch" not in [e.get("id") for e in events] and not sparks.direct.called
+    assert sparks.motion.call_args.args[0].prompt == "spins twice and bows"
+    assert events[-1]["idea"]["prompt"] == "spins twice and bows"
+
+
+def test_motion_revision_passes_previous_choreography_to_the_director():
+    from backend import director
+    from backend.ai import IDENTITY_KEY
+    from backend.models import AnimateRequest
+    previous = {"prompt": "The rocket dances", "tracks": [{"subject": 0, "keys": [
+        IDENTITY_KEY, {**IDENTITY_KEY, "t": 1, "x": 0.3}]}]}
+    sparks = director_fakes()
+    list(director.run(sparks, AnimateRequest.model_validate({**ANIMATE, "prompt": "make it slower", "previous": previous})))
+    assert sparks.motion.call_args.args[0].previous.model_dump() == previous
+    with pytest.raises(ValidationError, match="Previous motion"):
+        AnimateRequest.model_validate({**ANIMATE, "prompt": "slower", "previous": {
+            **previous, "tracks": [{**previous["tracks"][0], "subject": 1}]}})
+
+
+def test_gemini_video_generation_uses_the_drawing_then_conversation_id():
+    from backend.models import Layer
+    sparks = Sparks.__new__(Sparks)
+    sparks.video_model = "test-video"
+    sparks.client = Mock()
+    video = b"\x00\x00\x00\x18ftypisomfake"
+    sparks.client.interactions.create.return_value = SimpleNamespace(
+        status="completed", id="turn-one", output_video=SimpleNamespace(
+            data=base64.b64encode(video).decode(), mime_type="video/mp4"))
+    layers = [Layer.model_validate(LAYERED["layers"][1])]
+    assert sparks.clip(layers, "make it dance") == ("turn-one", video)
+    first = sparks.client.interactions.create.call_args.kwargs
+    assert first["input"][0]["mime_type"] == "image/png"
+    assert first["input"][1]["text"] == "make it dance"
+    sparks.clip(layers, "now make it snow", "turn-one")
+    revision = sparks.client.interactions.create.call_args.kwargs
+    assert revision["previous_interaction_id"] == "turn-one" and revision["input"] == "now make it snow"
+    sparks.client.interactions.create.return_value.output_video.data = "bad data!"
+    with pytest.raises(AIError, match="invalid video"):
+        sparks.clip(layers, "dance")
+
+
+def test_video_revision_loads_only_the_owners_previous_scene(client):
+    http, _ = client
+    production = http.production
+    production.get_clip.return_value = {
+        "id": DRAWING_ID, "interaction_id": "private-turn", "layers": [LAYERED["layers"][1]]}
+    http.ai.clip.return_value = ("next-turn", b"video")
+    production.save_clip.return_value = {"id": DRAWING_ID, "video_url": "/video"}
+    response = http.post("/api/clips", json={"previous_id": DRAWING_ID, "prompt": "make it snow"})
+    assert response.status_code == 201
+    assert http.ai.clip.call_args.args[1:] == ("make it snow", "private-turn")
+    production.get_clip.return_value = None
+    http.ai.clip.reset_mock()
+    assert http.post("/api/clips", json={"previous_id": DRAWING_ID, "prompt": "make it snow"}).status_code == 404
+    http.ai.clip.assert_not_called()
+
+
+def test_video_save_failure_explains_possible_provider_charge(client):
+    from backend.library import LibraryError
+    http, _ = client
+    http.ai.clip.return_value = ("turn", b"video")
+    http.production.save_clip.side_effect = LibraryError("embedding failed")
+    response = http.post("/api/clips", json={"layers": [LAYERED["layers"][1]], "prompt": "make it dance"})
+    assert response.status_code == 503
+    assert "generated" in response.json()["detail"] and "charges may still apply" in response.json()["detail"]
+
+
+def test_animate_streams_each_step_then_the_result_or_an_in_band_error(client):
+    import json
+    http, _ = client
+    http.ai.direct.return_value = {"ideas": [{"title": "Hop", "logline": "", "prompt": "hops to the right twice", "movers": [0]}]}
+    http.ai.motion.return_value = {"note": "hop", "tracks": [{"subject": 0, "keys": [{"label": "start"}, {"label": "arc"}]}]}
+    response = http.post("/api/animate", json=ANIMATE)
+    lines = [json.loads(line) for line in response.text.splitlines()]
+    assert response.headers["content-type"].startswith("application/x-ndjson")
+    assert [line.get("id") for line in lines[:-1]] == ["pitch", "choreograph"]
+    assert lines[-1]["type"] == "result" and lines[-1]["idea"]["title"] == "Hop"
+    http.ai.direct.side_effect = AIError("Gemini couldn't pitch a shot for this.")
+    lines = [json.loads(line) for line in http.post("/api/animate", json=ANIMATE).text.splitlines()]
+    assert lines[-1] == {"type": "error", "status": 502, "detail": "Gemini couldn't pitch a shot for this."}
+    assert http.post("/api/animate", json={**ANIMATE, "prompt": "go"}).status_code == 422
+
+
+def test_refine_keeps_the_artists_strokes_by_index_and_never_touches_placed_assets():
+    from backend.ai import _VarStroke, _Variation
+    from backend.models import RefineRequest
+    ink = {"name": "Ink", "strokes": [
+        {"color": "#123b38", "width": 6, "points": [{"x": 0.1, "y": 0.1}, {"x": 0.2, "y": 0.2}]},
+        {"color": "#123b38", "width": 6, "points": [{"x": 0.3, "y": 0.3}]},
+        {"color": "#ffffff", "width": 9, "erase": True, "points": [{"x": 0.2, "y": 0.2}]}]}
+    request = RefineRequest.model_validate({"prompt": "add a smile", "target": 0, "layers": [ink]})
+    sparks = Sparks.__new__(Sparks)
+    sparks._json = Mock(return_value=_Variation(note="smiles", keep=[0], strokes=[
+        _VarStroke(color="#123b38", width=4, fill="", points=[_Point(x=500, y=300), _Point(x=520, y=310)])]))
+    result = sparks.refine(request)
+    assert result["keep_indices"] == [0, 2]  # stroke 1 was redrawn; the eraser always stays
+    assert result["strokes"][:2] == [s.model_dump() for s in (request.layers[0].strokes[0], request.layers[0].strokes[2])]
+    assert result["strokes"][2]["ai"] is True and (result["kept"], result["added"]) == (1, 1)
+    placed = {**ink, "asset": {"asset_id": "0b6b6a4e-3f0a-4c55-9e43-7f0f3f1a2b3c", "version": 1}}
+    with pytest.raises(ValidationError, match="linked"):
+        RefineRequest.model_validate({"prompt": "add a smile", "target": 0, "layers": [placed]})

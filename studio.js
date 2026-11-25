@@ -31,7 +31,7 @@
   let motionDraft = null; // { spec, stacks, at, timer, paths } while a motion previews
   let motionSeconds = 10;
   let sceneMotion = null; // the accepted direction behind this scene's frames, saved with the scene
-  let showMath = true;
+  let showMath = false;
   let shareAfterSave = false; // "Share" on an unsaved scene saves it first
   let moving = null; // { layer, start, original, bounds } while the Move tool drags a layer
   // The audit trail for this canvas: what the artist and the AI did since it was opened. Sent with the
@@ -110,7 +110,8 @@
     }
     return x1 >= x0 ? { x0, y0, x1, y1 } : null;
   }
-  const docStack = stack => stack.map(({ name, visible, opacity, strokes, asset }) => ({ name, visible, opacity, strokes, ...(asset ? { asset } : {}) }));
+  const docStack = stack => stack.map(({ name, visible, opacity, strokes, asset, backdrop }) => ({
+    name, visible, opacity, strokes, ...(asset ? { asset } : {}), ...(backdrop ? { backdrop } : {}) }));
   const docLayers = () => docStack(layers);
   const copyStack = stack => stack.map(layer => ({ ...layer, strokes: layer.strokes.slice() }));
   const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
@@ -520,6 +521,7 @@
     $('layer-down').disabled = index === 0;
     $('layer-delete').disabled = layers.length === 1;
     $('layer-add').disabled = layers.length >= MAX_LAYERS;
+    $('layer-copy').disabled = layers.length >= MAX_LAYERS;
     $('layers-count').textContent = String(layers.length);
     renderSaveKind(); // the shot panel lists placed assets, which undo/delete can change
     updateHud();
@@ -560,6 +562,23 @@
     layers.splice(layers.indexOf(activeLayer()) + 1, 0, layer);
     activeId = layer.id;
     rebuildAll();
+  });
+  $('layer-copy').addEventListener('click', () => {
+    const source = activeLayer();
+    if (layers.length >= MAX_LAYERS || allStrokes().length + source.strokes.length > MAX_STROKES
+      || pointCount + countPoints(source.strokes) > MAX_POINTS) {
+      message('drawing-status', 'Duplicating this layer would exceed the canvas limits.', true);
+      return;
+    }
+    pushUndo();
+    const copy = newLayer(`${source.name.slice(0, 33)} copy`, { visible: source.visible, opacity: source.opacity,
+      strokes: source.strokes.map(stroke => ({ ...stroke, points: stroke.points.map(point => ({ ...point })) })),
+      asset: source.asset ? { ...source.asset } : null, ...(source.backdrop ? { backdrop: source.backdrop } : {}) });
+    layers.splice(layers.indexOf(source) + 1, 0, copy);
+    activeId = copy.id;
+    recount();
+    rebuildAll();
+    message('drawing-status', `Duplicated "${source.name}". Move or edit the copy.`);
   });
   $('layer-delete').addEventListener('click', () => {
     if (layers.length === 1) return;
@@ -954,20 +973,119 @@
     }
   });
 
-  async function api(path, options = {}) {
-    const response = await fetch(path, options);
+  async function failed(response, path) {
     // A session that ends mid-flow (expired, signed out elsewhere) brings back the sign-in, not a dead end.
     if (response.status === 401 && !path.startsWith('/api/session') && !path.startsWith('/api/auth/')) showGate('Your session ended. Sign in again to keep going; your drawing is still here.');
-    if (!response.ok) {
-      const contentType = response.headers.get('content-type') || '';
-      const body = contentType.includes('application/json') ? await response.json() : null;
-      const detail = typeof body?.detail === 'string' ? body.detail
-        : Array.isArray(body?.detail) && body.detail[0]?.msg ? `${body.detail[0].msg.replace(/^Value error, /, '')}` : null;
-      throw new Error(detail || `Request failed (${response.status}). Check the API and try again.`);
-    }
+    const contentType = response.headers.get('content-type') || '';
+    const body = contentType.includes('application/json') ? await response.json() : null;
+    const detail = typeof body?.detail === 'string' ? body.detail
+      : Array.isArray(body?.detail) && body.detail[0]?.msg ? `${body.detail[0].msg.replace(/^Value error, /, '')}` : null;
+    return new Error(detail || `Request failed (${response.status}). Check the API and try again.`);
+  }
+  async function api(path, options = {}) {
+    const response = await fetch(path, options);
+    if (!response.ok) throw await failed(response, path);
     return response.status === 204 ? null : response.json();
   }
+  // Newline-delimited JSON, one event per line, handed over as each arrives (the director's pipeline, live).
+  async function streamEvents(path, body, onEvent) {
+    const response = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
+    if (!response.ok) throw await failed(response, path);
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    for (;;) {
+      const { value, done } = await reader.read();
+      buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+      let end;
+      while ((end = buffer.indexOf('\n')) >= 0) {
+        const line = buffer.slice(0, end).trim();
+        buffer = buffer.slice(end + 1);
+        if (line) onEvent(JSON.parse(line));
+      }
+      if (done) break;
+    }
+    if (buffer.trim()) onEvent(JSON.parse(buffer));
+  }
   const postJSON = (path, body) => api(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
+
+  // Speech is handled by the browser's speech service; the transcript is editable and never submitted automatically.
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  let listening = null;
+  if (SpeechRecognition && window.isSecureContext) {
+    document.querySelectorAll('[data-voice-for]').forEach(button => {
+      const input = $(button.dataset.voiceFor);
+      const form = input.closest('form');
+      const status = document.createElement('p');
+      status.className = 'voice-status';
+      status.setAttribute('role', 'status');
+      status.setAttribute('aria-live', 'polite');
+      status.hidden = true;
+      if (form.id === 'spark-popover') form.append(status);
+      else form.insertAdjacentElement('afterend', status);
+      button.hidden = false;
+      button.setAttribute('aria-pressed', 'false');
+      button.title = 'Voice uses your browser’s speech service; speech may be sent to its provider.';
+      button.addEventListener('click', () => {
+        if (listening?.button === button) { listening.recognition.stop(); return; }
+        if (listening) return;
+        const recognition = new SpeechRecognition();
+        recognition.lang = document.documentElement.lang || navigator.language;
+        recognition.continuous = false;
+        recognition.interimResults = false;
+        let failed = false;
+        let heard = false;
+        listening = { recognition, button, input };
+        document.querySelectorAll('[data-voice-for]').forEach(other => { if (other !== button) other.disabled = true; });
+        button.setAttribute('aria-pressed', 'true');
+        button.setAttribute('aria-label', 'Stop listening');
+        status.hidden = false;
+        status.classList.remove('error');
+        status.textContent = 'Listening… Your browser may send audio to its speech service. Tap again to stop.';
+        recognition.onresult = event => {
+          for (let i = event.resultIndex; i < event.results.length; i++) {
+            if (!event.results[i].isFinal || !input.getClientRects().length) continue;
+            const text = event.results[i][0].transcript.trim();
+            if (!text) continue;
+            const separator = input.value && !/\s$/.test(input.value) ? ' ' : '';
+            const next = `${input.value}${separator}${text}`;
+            input.value = next.slice(0, input.maxLength > 0 ? input.maxLength : undefined);
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            heard = true;
+            status.textContent = next.length > input.value.length ? 'Text reached the field limit. Review it before submitting.' : 'Added your words. Review them before submitting.';
+          }
+        };
+        recognition.onerror = event => {
+          failed = true;
+          status.classList.add('error');
+          status.textContent = ({ 'not-allowed': 'Microphone permission was denied. Allow it in your browser or type instead.',
+            'service-not-allowed': 'Voice input is blocked by your browser. Type instead.',
+            'audio-capture': 'No microphone found. Check your device or type instead.',
+            'no-speech': 'No speech heard. Try again or type instead.',
+            'network': 'The browser speech service is unavailable. Try again or type instead.',
+            'aborted': 'Voice input stopped.' })[event.error] || `Voice input failed (${event.error}). Try again or type instead.`;
+        };
+        recognition.onend = () => {
+          listening = null;
+          button.setAttribute('aria-pressed', 'false');
+          button.setAttribute('aria-label', button.dataset.voiceLabel);
+          document.querySelectorAll('[data-voice-for]').forEach(other => { other.disabled = false; });
+          if (!failed && !heard) status.textContent = 'No words added. Try again or type instead.';
+        };
+        try { recognition.start(); } catch (error) {
+          failed = true;
+          status.classList.add('error');
+          status.textContent = `Could not start voice input: ${error.message}`;
+          recognition.onend();
+        }
+      });
+      button.dataset.voiceLabel = button.getAttribute('aria-label');
+      form.closest('dialog')?.addEventListener('close', () => { if (listening?.input === input) listening.recognition.abort(); });
+    });
+    $('ai-tools').addEventListener('toggle', () => {
+      if (!$('ai-tools').open && listening?.input === $('ai-prompt')) listening.recognition.abort();
+    });
+  }
 
   // ---------------------------------------------------------------- sparks
   function openPopover(region) {
@@ -985,6 +1103,7 @@
   }
   function closePopover() {
     if ($('spark-popover').hidden) return;
+    if (listening?.input === $('spark-prompt')) listening.recognition.abort();
     if ($('spark-popover').contains(document.activeElement)) document.activeElement.blur();
     $('spark-popover').hidden = true;
     $('spark-prompt').value = '';
@@ -1006,9 +1125,14 @@
     if (event.key === 'Enter' && event.shiftKey) { event.preventDefault(); fireSpark('guide'); }
   });
 
-  // ---------------------------------------------------------------- Ask AI: one text box, three methodical modes
+  // ---------------------------------------------------------------- Ask AI: previewed drawing tools
   // Every mode previews first and changes nothing until the artist says so; every step lands in the audit trail.
   const AI_MODES = {
+    refine: {
+      placeholder: 'What should change? e.g. give it a curious smile', go: 'Refine it',
+      hint: 'AI edits your strokes on one layer: it keeps all it can and adds only what this needs. You see it first.',
+      examples: []
+    },
     sketch: {
       placeholder: 'Describe a starting point', go: 'Sketch it',
       hint: 'A faint blue-pencil layer under your ink: plain strokes you can erase, redraw, or hide.',
@@ -1026,6 +1150,7 @@
     }
   };
   let aiMode = 'sketch';
+  let refineIdeas = { revision: -1, items: [], loading: false, error: '' }; // Gemini's suggestions for this drawing
   let pendingFix = null; // a "Fix a spot" prompt waiting for the artist to pick the spot
   let pendingVary = null; // a variations goal waiting for the asset to be saved first
   function setAiMode(mode) {
@@ -1035,13 +1160,30 @@
     $('ai-prompt').placeholder = text.placeholder;
     $('ai-go').setAttribute('aria-label', text.go);
     $('ai-hint').textContent = text.hint;
-    $('ai-examples').replaceChildren(...text.examples.map(example => {
+    renderAiExamples();
+    $('ai-bar').dataset.mode = mode;
+  }
+  function renderAiExamples() {
+    const chip = example => {
       const button = el('button', 'example', example);
       button.type = 'button';
       button.addEventListener('click', () => { $('ai-prompt').value = example; askAI(); });
       return button;
-    }));
-    $('ai-bar').dataset.mode = mode;
+    };
+    if (aiMode !== 'refine') {
+      $('ai-examples').replaceChildren(...AI_MODES[aiMode].examples.map(chip));
+      return;
+    }
+    if (refineIdeas.loading) {
+      $('ai-examples').replaceChildren(el('span', 'example pending', '\u2726 Gemini is looking at your drawing\u2026'));
+    } else if (refineIdeas.items.length) {
+      $('ai-examples').replaceChildren(...refineIdeas.items.map(chip));
+    } else {
+      const ask = el('button', 'example', refineIdeas.error ? '\u21bb Suggest again' : '\u2726 Suggest what it needs');
+      ask.type = 'button';
+      ask.addEventListener('click', () => suggestRefinements(true));
+      $('ai-examples').replaceChildren(ask, ...(refineIdeas.error ? [el('span', 'example-note', refineIdeas.error)] : []));
+    }
   }
   function currentAsset() {
     if (editing?.kind !== 'asset') return null;
@@ -1050,7 +1192,13 @@
   }
   function askAI() {
     const prompt = $('ai-prompt').value.trim().replace(/\s+/g, ' ');
-    if (aiMode === 'sketch') {
+    if (aiMode === 'refine') {
+      if (!hasInk()) { flashTray('Draw something first, then refine it with AI.', true); return; }
+      if (prompt.length < 3) { $('ai-prompt').focus(); flashTray('Say what should change, or tap a suggestion.', true); return; }
+      $('ai-prompt').value = '';
+      startSpark('refine', null, prompt.slice(0, 200));
+      canvas.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    } else if (aiMode === 'sketch') {
       if (prompt.length < 3) { $('ai-prompt').focus(); flashTray('Describe what to sketch, e.g. "a fox under a tree".', true); return; }
       $('ai-prompt').value = '';
       startSketch(prompt.slice(0, 200));
@@ -1083,7 +1231,11 @@
       }
     }
   }
-  document.querySelectorAll('.ai-modes [data-mode]').forEach(b => b.addEventListener('click', () => { setAiMode(b.dataset.mode); $('ai-prompt').focus(); }));
+  document.querySelectorAll('.ai-modes [data-mode]').forEach(b => b.addEventListener('click', () => {
+    setAiMode(b.dataset.mode);
+    $('ai-prompt').focus();
+    if (b.dataset.mode === 'refine') suggestRefinements();
+  }));
   $('ai-bar').addEventListener('submit', event => { event.preventDefault(); askAI(); });
 
   // ---------------------------------------------------------------- Focus mode: the whole screen is paper
@@ -1133,12 +1285,19 @@
       return;
     }
     const title = $('title').value.trim().slice(0, 120);
-    const body = JSON.stringify(kind === 'sketch' ? { prompt, title, layers: docLayers() } : { region, prompt, title, layers: docLayers() });
+    const target = kind === 'refine' ? refineTarget() : null;
+    if (kind === 'refine' && !target) {
+      flashTray('Nothing of yours to refine here: placed assets stay linked (refine the asset itself).', true);
+      return;
+    }
+    const body = JSON.stringify(kind === 'sketch' ? { prompt, title, layers: docLayers() }
+      : kind === 'refine' ? { prompt, title, target: layers.indexOf(target), layers: docLayers() }
+      : { region, prompt, title, layers: docLayers() });
     if (new Blob([body]).size > 2 * 1024 * 1024) {
       flashTray('This drawing is too big to send to AI (2 MiB limit).', true);
       return;
     }
-    const spark = { kind, region, prompt, status: 'pending' };
+    const spark = { kind, region, prompt, status: 'pending', layerId: target?.id, source: target?.strokes.slice() };
     sparks.push(spark);
     clearTimeout(trayTimer);
     trayTimer = null;
@@ -1189,10 +1348,51 @@
     return true;
   }
 
+  // The layer refine works on: the one you're on if it's your own ink, else your topmost drawing.
+  function refineTarget() {
+    const own = layer => layer.visible && !layer.asset && !layer.backdrop && layer.strokes.some(stroke => !stroke.erase);
+    const active = activeLayer();
+    if (own(active)) return active;
+    const mine = [...layers].reverse().filter(own);
+    return mine.find(layer => !isScenery(layer)) || mine[0] || null;
+  }
+  // Refined strokes: your originals (the very same objects) where AI kept them, its additions, and anything
+  // you drew while it was working.
+  function refinedStrokes(spark, layer) {
+    const { keep_indices: keep, strokes } = spark.result;
+    const added = strokes.slice(keep.length);
+    const since = layer.strokes.filter(stroke => !spark.source.includes(stroke));
+    return { kept: keep.map(i => spark.source[i]).filter(Boolean), added, since };
+  }
+  function acceptRefine(spark) {
+    const layer = layers.find(l => l.id === spark.layerId);
+    if (!layer) { flashTray('That layer is gone. Try the refinement again.', true); return false; }
+    const { kept, added, since } = refinedStrokes(spark, layer);
+    const next = [...kept, ...added.map(stroke => ({ ...stroke, seq: nextSeq() })), ...since];
+    const others = allStrokes().filter(stroke => !layer.strokes.includes(stroke));
+    if (others.length + next.length > MAX_STROKES || countPoints(others) + countPoints(next) > MAX_POINTS) {
+      flashTray('That would exceed the canvas limits. Undo a few strokes first.', true);
+      return false;
+    }
+    pushUndo();
+    layer.strokes = next;
+    recount();
+    rebuildAll();
+    renderLayersPanel();
+    const r = spark.result;
+    markGuide('refine');
+    logEvent('ai', 'Refine', `"${spark.prompt}" on "${layer.name}": kept ${r.kept} of ${r.source_strokes} strokes, added ${r.added} (${r.note})`);
+    message('drawing-status', `\u2726 Refined "${layer.name}": kept ${r.kept} of your ${r.source_strokes} strokes, added ${r.added}. Undo brings the old one back.`, false, [
+      { label: '\u2726 Animate it', run: () => autoAnimate() }, { label: '\u2726 Refine more', run: () => startRefineFlow() }]);
+    return true;
+  }
+
   function acceptSpark() {
     const spark = activeSpark();
     if (!spark) return;
-    if (spark.kind === 'sketch') {
+    if (spark.kind === 'refine') {
+      if (!acceptRefine(spark)) return;
+    } else if (spark.kind === 'sketch') {
       if (!addSketchLayer(spark)) return;
       logEvent('ai', 'AI sketch', `"${spark.prompt}": ${plural(spark.result.strokes.length, 'blue-pencil stroke')} as their own layer`);
     } else if (spark.kind === 'strokes') {
@@ -1214,7 +1414,7 @@
   function dismissSpark() {
     const spark = activeSpark();
     if (!spark) return;
-    const what = { sketch: 'AI sketch', strokes: 'AI fix', guide: 'trace guide' }[spark.kind];
+    const what = { sketch: 'AI sketch', strokes: 'AI fix', guide: 'trace guide', refine: 'AI refine' }[spark.kind];
     logEvent('artist', 'Skipped AI', `${what}${spark.prompt ? ` "${spark.prompt}"` : ''}`);
     sparks.splice(sparks.indexOf(spark), 1);
     renderOverlay();
@@ -1309,7 +1509,21 @@
     }
     octx.globalAlpha = 1;
     const ready = activeSpark();
-    if (ready) {
+    if (ready?.kind === 'refine') {
+      // The refined layer in place: what you'd keep, what AI adds (drawing itself in, with a glow).
+      const target = layers.find(layer => layer.id === ready.layerId);
+      const { kept, added, since } = target ? refinedStrokes(ready, target) : { kept: [], added: [], since: [] };
+      const fresh = revealed(added, revealProgress(ready));
+      octx.fillStyle = '#ffffff';
+      octx.fillRect(0, 0, W, H);
+      paintStack(octx, layers.map(layer => layer === target ? { ...layer, strokes: [...kept, ...fresh, ...since] } : layer));
+      octx.save();
+      octx.globalAlpha = 0.45;
+      octx.shadowColor = '#a78bfa';
+      octx.shadowBlur = 12;
+      fresh.forEach(stroke => drawStroke(octx, stroke));
+      octx.restore();
+    } else if (ready) {
       if (ready.region) outline(ready.region, []);
       octx.globalAlpha = 0.6;
       if (ready.kind === 'strokes' || ready.kind === 'sketch') {
@@ -1395,9 +1609,9 @@
       points: stroke.points.map(p => ({ x: clamp((ox + (p.x * W - bbox.x) * k) / W), y: clamp((oy + (p.y * H - bbox.y) * k) / H), pressure: p.pressure }))
     }));
   }
-  async function startPlacing(item, at = null) {
+  async function startPlacing(item, at = null, record = null) {
     try {
-      const asset = await api(`/api/assets/${encodeURIComponent(item.id)}`);
+      const asset = record || await api(`/api/assets/${encodeURIComponent(item.id)}`);
       // A placed asset becomes one linked layer: its visible layers flattened bottom-up.
       const strokes = asset.layers.filter(layer => layer.visible).flatMap(layer => layer.strokes);
       const bbox = inkBounds(strokes);
@@ -1436,8 +1650,10 @@
     recount();
     rebuildAll();
     renderSaveKind();
-    flashTray(`\u25c6 ${name} is in. Drag it anywhere, pull the corner to resize, then \ud83c\udfac Animate.`);
-    message('drawing-status', `Placed "${name}" as a linked layer (it always knows where it's used). Drag to position it, or \ud83c\udfac Animate it.`);
+    if (!directing) {
+      flashTray(`\u25c6 ${name} is in. Drag it anywhere, pull the corner to resize, then \u2726 Animate.`);
+      message('drawing-status', `Placed "${name}" as a linked layer (it always knows where it's used). Drag to position it, or \u2726 Animate it.`);
+    }
     logEvent('artist', 'Placed', `${name} v${layer.asset.version}${frames.length > 1 ? ` on frame ${frameIndex + 1}` : ''}`);
   }
 
@@ -1445,6 +1661,7 @@
   // Scenery from a starter (all kit strokes, or ink covering most of the canvas) isn't grabbed by a stray tap:
   // you grab what you drew or placed. Pick the scenery layer in Layers to move it on purpose.
   const isScenery = layer => {
+    if (layer.backdrop) return true;
     if (layer.asset) return false;
     const b = inkBounds(layer.strokes);
     return !b || b.w * b.h > W * H * 0.6 || layer.strokes.every(stroke => stroke.kit);
@@ -1606,7 +1823,8 @@
   const sameStrokes = (a, b) => a === b || (!!a && !!b && a.length === b.length && a.every((s, i) => s === b[i]));
   function compactStack(stack, first) {
     return stack.map(layer => {
-      const meta = { name: layer.name, visible: layer.visible, opacity: layer.opacity, ...(layer.asset ? { asset: layer.asset } : {}) };
+      const meta = { name: layer.name, visible: layer.visible, opacity: layer.opacity,
+        ...(layer.asset ? { asset: layer.asset } : {}), ...(layer.backdrop ? { backdrop: layer.backdrop } : {}) };
       if (layer.xf && sameStrokes(layer.strokes, layer.xfStrokes)) {
         const ref = first.findIndex(base => sameStrokes(base.strokes, layer.xfBase));
         if (ref >= 0) return { ...meta, strokes: [], ref, xf: layer.xf };
@@ -1801,6 +2019,8 @@
     logEvent(spec.by === 'ai' ? 'ai' : 'artist', spec.by === 'ai' ? 'Motion, accepted' : 'Motion preset', detail);
     markGuide('animate');
     renderTray();
+    $('scene-prompt').placeholder = 'A curious fox discovers a tiny planet...';
+    setDockBusy(false);
     message('drawing-status', `\ud83c\udfac ${frames.length} frames, ${(frames.length / MOTION_FPS).toFixed(1)} s${replaced > 1 ? ` (replacing ${replaced}; Undo brings them back)` : ''}. Each one is yours: scrub, grab with \u2725, redraw. Space plays.`, false,
       [{ label: '\u25c6 How it moves', tip: 'How it moves|Keyframes, in-betweens, and spacing, shown on your shot.', run: () => explainScene() }]);
     setTool('move');
@@ -1812,6 +2032,8 @@
     if (spec.by === 'ai') logEvent('ai', 'Motion, skipped', `"${spec.prompt}"`);
     stopMotionPreview();
     renderTray();
+    $('scene-prompt').placeholder = 'A curious fox discovers a tiny planet...';
+    setDockBusy(false);
   }
 
   // ---------------------------------------------------------------- "How it moves": animation, demystified
@@ -1945,36 +2167,23 @@
       return { layerId: layer.id, name: layer.name, box, keys: keysFor(box, layer) };
     });
   }
-  const subjectFor = (layer, box) => ({ id: layers.indexOf(layer), name: layer.name.slice(0, 40),
-    box: { x: Math.max(0, Math.min(1, box.x)), y: Math.max(0, Math.min(1, box.y)), w: Math.max(0.02, Math.min(1, box.w)), h: Math.max(0.02, Math.min(1, box.h)) } });
+  // Ink (plus its line width) can poke past an edge: clip the box as a whole, so x + w never leaves the canvas.
+  function subjectFor(layer, box) {
+    const unit = v => Math.max(0, Math.min(1, v));
+    const x0 = unit(box.x), y0 = unit(box.y);
+    const w = Math.max(0.02, unit(box.x + box.w) - x0), h = Math.max(0.02, unit(box.y + box.h) - y0);
+    return { id: layers.indexOf(layer), name: layer.name.slice(0, 40), box: { x: Math.min(x0, 1 - w), y: Math.min(y0, 1 - h), w, h } };
+  }
   function runPreset(preset) {
     const tracks = chosenTracks(box => preset.keys(box));
     if (!tracks.length) return;
     $('animate-sheet').close();
     previewMotion({ by: 'preset', label: `${preset.icon} ${preset.name}`, note: `${preset.icon} ${preset.name}`, seconds: preset.seconds, strength: 1, base: layers, tracks });
   }
-  async function runAIMotion(prompt, ids = animSubjects, title = '') {
-    const tracks = chosenTracks(() => [], ids);
-    if (!tracks.length || !prompt) return;
-    const status = $('anim-status');
-    status.textContent = `\u2726 Choreographing ${(frameCount(motionSeconds) / MOTION_FPS).toFixed(0)} seconds for ${tracks.map(t => t.name).join(' and ')}\u2026 (one AI call)`;
-    status.classList.remove('error');
-    $('anim-go').disabled = true;
-    try {
-      const subjects = tracks.map(track => subjectFor(layers.find(layer => layer.id === track.layerId), track.box));
-      const result = await postJSON('/api/sparks/motion', JSON.stringify({ prompt, seconds: motionSeconds, subjects, layers: docLayers() }));
-      const byIndex = new Map(result.tracks.map(track => [track.subject, track.keys]));
-      const aiTracks = tracks.map((track, i) => ({ ...track, keys: byIndex.get(subjects[i].id) })).filter(track => track.keys?.length);
-      if (!aiTracks.length) throw new Error('AI returned no motion for those layers. Try other words.');
-      status.textContent = '';
-      $('animate-sheet').close();
-      previewMotion({ by: 'ai', label: `\u2726 ${title || result.note || prompt}`, note: result.note || '', title, prompt, seconds: motionSeconds, strength: 1, base: layers, tracks: aiTracks });
-    } catch (error) {
-      status.textContent = error.message;
-      status.classList.add('error');
-    } finally {
-      $('anim-go').disabled = !animSubjects.size;
-    }
+  // Your own direction uses the same animation preview.
+  function runAIMotion(prompt, ids = animSubjects, title = '') {
+    if (!prompt || !ids.size) return;
+    autoAnimate({ prompt, title, ids: new Set(ids) });
   }
   // Director's ideas: instant ones from the names on the canvas, then (one AI call per new composition) a
   // director's pitch that actually looks at the picture: who moves, where they go, what they do.
@@ -1989,7 +2198,11 @@
       prompt: `${n} sways gently left and right for 4 seconds, bends hard in a sudden gust, springs back past upright, and settles.` })]
   ];
   let ideas = { key: '', items: null };
-  const backdropName = () => STARTERS.find(s => s.id === layers.find(layer => layer.backdrop)?.backdrop)?.name || '';
+  const backdropName = () => {
+    const layer = layers.find(item => item.backdrop);
+    return layer ? STARTERS.find(s => s.id === layer.backdrop)?.name
+      || savedBackdrops.find(item => item.id === layer.backdrop)?.name || layer.name : '';
+  };
   const sceneKey = () => `${movable().map(layer => `${layer.name}:${layer.asset?.asset_id || ''}`).join('|')}#${backdropName()}#${motionSeconds}`;
   function quickIdeas() {
     const can = movable();
@@ -2175,6 +2388,492 @@
   $('anim-ai').addEventListener('submit', event => { event.preventDefault(); runAIMotion($('anim-prompt').value.trim()); });
   $('anim-more').addEventListener('click', () => loadIdeas(true));
 
+  // ---------------------------------------------------------------- one tap: Animate
+  const titleCase = text => text.replace(/(^|\s)\S/g, c => c.toUpperCase());
+  function pipelineStart() {
+    $('pipeline').hidden = false;
+    $('pipeline').classList.remove('failed', 'finished');
+    $('pipeline-title').textContent = '\u2726 Creating your animation\u2026';
+  }
+  function pipelineStep({ id }) {
+    const text = { tag: 'Getting your drawing ready', save: 'Saving your drawing', stage: 'Setting the scene',
+      pitch: 'Imagining a scene', choreograph: 'Making your drawing move' }[id];
+    if (text) $('pipeline-title').textContent = `\u2726 ${text}\u2026`;
+  }
+  function pipelineFinish(text) {
+    $('pipeline').classList.add('finished');
+    $('pipeline-title').textContent = text;
+  }
+  function pipelineFail(text) {
+    $('pipeline').classList.add('failed');
+    $('pipeline-title').textContent = text;
+  }
+  $('pipeline-close').addEventListener('click', () => { $('pipeline').hidden = true; });
+
+  let directing = false;
+  let currentClip = null;
+  const sceneStyle = () => document.querySelector('input[name="scene-style"]:checked').value;
+  function setDockBusy(on) {
+    on = on || directing;
+    $('dock-animate').disabled = on;
+    document.querySelectorAll('input[name="scene-style"]').forEach(input => { input.disabled = on; });
+    $('dock-animate').classList.toggle('busy', on);
+    const revising = sceneStyle() === 'video' ? !!currentClip : !!motionDraft;
+    $('dock-animate').textContent = on ? 'Creating\u2026' : revising ? '\u2726 Change scene' : '\u2726 Make a scene';
+  }
+  // Who can move: what you drew or placed (not scenery); a single big drawing still counts.
+  const castLayers = () => {
+    const can = movable();
+    return can.length ? can : layers.filter(layer => layer.visible && hasInk([layer]) && !layer.backdrop);
+  };
+  // "One thing" on the canvas with unsaved ink: a new drawing, or an asset you've changed. It's saved (a new
+  // asset, or the asset's next version) before it moves, so all its layers move as one and it stays findable.
+  const unsavedThing = () => frames.length === 1 && hasInk() && (editing?.kind === 'asset' ? revision !== savedRevision
+    : !editing && !layers.some(layer => layer.asset || layer.backdrop || layer.strokes.some(stroke => stroke.kit)));
+  let savedBackdrops = [];
+  function renderSceneBackdrops() {
+    const select = $('scene-backdrop');
+    const selected = select.value;
+    const option = (value, label) => {
+      const node = document.createElement('option');
+      node.value = value;
+      node.textContent = label;
+      return node;
+    };
+    const starters = STARTERS.filter(item => item.kind === 'shot' && item.id !== 'bounce');
+    select.replaceChildren(option('', 'None'), ...starters.map(item => option(`starter:${item.id}`, `${item.icon} ${item.name}`)),
+      ...savedBackdrops.map(item => option(`asset:${item.id}`, item.name)));
+    if ([...select.options].some(item => item.value === selected)) select.value = selected;
+  }
+  async function loadSceneBackdrops() {
+    try {
+      const data = await api('/api/assets?type=environment');
+      savedBackdrops = data.items;
+      renderSceneBackdrops();
+      message('backdrop-status', '');
+    } catch (error) {
+      message('backdrop-status', `Couldn't load your backdrops: ${error.message}`, true);
+    }
+  }
+  async function backdropLayers(choice) {
+    if (!choice) return [];
+    const [kind, id] = choice.split(':');
+    if (kind === 'starter') {
+      const starter = STARTERS.find(item => item.id === id && item.kind === 'shot' && item.id !== 'bounce');
+      if (!starter) throw new Error('That backdrop is no longer available.');
+      return starter.build()[0].filter(layer => layer.name !== 'Draw here').map(layer => newLayer(layer.name, {
+        backdrop: id, opacity: layer.opacity ?? 1,
+        strokes: layer.strokes.map(stroke => ({ ...stroke, points: stroke.points.slice(), kit: true, seq: 0 }))
+      }));
+    }
+    if (kind !== 'asset' || !savedBackdrops.some(item => item.id === id)) throw new Error('That backdrop is no longer available.');
+    const record = await api(`/api/assets/${encodeURIComponent(id)}`);
+    return record.layers.map(layer => newLayer(layer.name, {
+      visible: layer.visible, opacity: layer.opacity, backdrop: id, strokes: layer.strokes
+    }));
+  }
+  async function saveAsAsset() {
+    let name = $('title').value.trim().slice(0, 80);
+    let assetTags = tags.slice();
+    if (!assetTags.length || !name) {
+      const started = performance.now();
+      if (!assetTags.length) {
+        assetTags = (await postJSON('/api/tags/suggest', JSON.stringify({ title: name, description: $('description').value.trim(), layers: docLayers() }))).tags;
+      }
+      if (!name) name = titleCase(assetTags[0] || 'My drawing').slice(0, 80);
+      pipelineStep({ id: 'tag', detail: `Named it \u201c${name}\u201d \u00b7 #${assetTags.slice(0, 5).join(' #')}`, ms: performance.now() - started });
+    }
+    const started = performance.now();
+    const savingRevision = revision;
+    const history = pendingEvents();
+    const updating = editing?.kind === 'asset';
+    const saved = await api(updating ? `/api/assets/${encodeURIComponent(editing.id)}` : '/api/assets', {
+      method: updating ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, type: $('asset-type').value, description: $('description').value.trim(), layers: docStack(frames[0]),
+        tags: assetTags, history, ...(pendingOrigin && !updating ? { origin: pendingOrigin } : {}) }) });
+    savedRevision = savingRevision;
+    savedHistory = [...(updating ? savedHistory : []), ...history, { at: new Date().toISOString(), by: 'studio', action: 'Saved', detail: `v${saved.version}` }];
+    journal = [];
+    handStrokes = 0;
+    pendingOrigin = null;
+    editing = { kind: 'asset', id: saved.id, version: saved.version };
+    saveKind = 'asset';
+    $('title').value = saved.name;
+    tags = [...(saved.tags || assetTags)];
+    renderTagChips();
+    renderSaveKind();
+    markGuide('asset');
+    pipelineStep({ id: 'save', detail: updating ? `\u25c6 ${saved.name} v${saved.version} saved; scenes using older versions get flagged`
+      : `\u25c6 ${saved.name} v${saved.version} is in your library, findable by words or by sketch`, ms: performance.now() - started });
+    loadGallery(currentQuery);
+    if (saved.type === 'environment') loadSceneBackdrops();
+    return { id: saved.id, name: saved.name, type: saved.type || $('asset-type').value, tags: saved.tags || assetTags,
+      version: saved.version };
+  }
+  // A fresh scene with just this asset in it, linked: the animation lives in a scene that knows what it uses.
+  async function stageAsset(asset, choice = '') {
+    const startedRevision = revision;
+    const [record, background] = await Promise.all([
+      api(`/api/assets/${encodeURIComponent(asset.id)}`), backdropLayers(choice)
+    ]);
+    if (revision !== startedRevision) throw new Error('The canvas changed while the scene was loading. Try again.');
+    if (background.length + 1 > MAX_LAYERS) throw new Error('This backdrop has too many layers to add the asset.');
+    const assetStrokes = record.layers.filter(layer => layer.visible).flatMap(layer => layer.strokes);
+    if (!inkBounds(assetStrokes)) throw new Error('This asset has no visible ink to animate.');
+    const strokes = [...background.flatMap(layer => layer.strokes), ...assetStrokes];
+    if (strokes.length > MAX_STROKES || countPoints(strokes) > MAX_POINTS) {
+      throw new Error('This asset and backdrop together exceed the canvas limits.');
+    }
+    stopPlay();
+    pushUndo();
+    layers = [...background, newLayer('Layer 1')];
+    frames = [layers];
+    frameIndex = 0;
+    activeId = layers[layers.length - 1].id;
+    sceneMotion = null;
+    pendingOrigin = null;
+    editing = null;
+    sparks.length = 0;
+    guides.length = 0;
+    journal = [];
+    handStrokes = 0;
+    savedHistory = [];
+    tags = [];
+    renderTagChips();
+    $('title').value = '';
+    $('description').value = '';
+    setSaveKind('shot');
+    rebuildOnion();
+    recount();
+    rebuildAll();
+    renderFrames();
+    await startPlacing(asset, null, record);
+    return layers.find(layer => layer.asset?.asset_id === asset.id) || null;
+  }
+  async function autoAnimate({ prompt = '', title = '', ids = null, asset = null } = {}) {
+    if (directing || makingVariations || busy()) return;
+    stopPlay();
+    if (motionDraft) skipMotion();
+    if ($('animate-sheet').open) $('animate-sheet').close();
+    if (!asset && !ids && !hasInk()) {
+      flashTray('Draw something first (or place an asset), then \u2726 Animate it.', true);
+      canvas.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
+    }
+    directing = true;
+    setDockBusy(true);
+    try {
+      const savedAsset = !asset && !ids && editing?.kind === 'asset' && revision === savedRevision && frames.length === 1;
+      const fresh = !asset && !ids && unsavedThing();
+      const choice = $('scene-backdrop').value;
+      const backdropId = choice.split(':')[1];
+      if (choice && !asset && !savedAsset && !fresh && !ids && !layers.some(layer => layer.backdrop === backdropId)) {
+        throw new Error('Choose an asset for a new scene to use this backdrop, or add it in Direct.');
+      }
+      pipelineStart();
+      if (!document.body.classList.contains('focus-mode')) $('pipeline').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      if (savedAsset) asset = { id: editing.id, name: $('title').value.trim() };
+      if (fresh) {
+        asset = await saveAsAsset();
+        if (revision !== savedRevision) throw new Error('Your drawing changed while saving. Animate again to include your changes.');
+      }
+      if (asset) {
+        const started = performance.now();
+        const placed = await stageAsset(asset, choice);
+        if (!placed) throw new Error('Couldn\u2019t set up the scene. Try again.');
+        pipelineStep({ id: 'stage', detail: `A fresh scene with \u25c6 ${asset.name}, linked, so it always knows where it\u2019s used`, ms: performance.now() - started });
+        ids = new Set([placed.id]);
+      }
+      const cast = (ids ? layers.filter(layer => ids.has(layer.id)) : castLayers()).filter(layer => inkBounds(layer.strokes));
+      if (!cast.length) throw new Error('Nothing to move yet. Draw something, or place an asset.');
+      const picks = cast.slice(0, prompt ? 4 : 8);
+      // Subject ids are stack positions now; the canvas may change while the director thinks.
+      const byIndex = new Map(picks.map(layer => [layers.indexOf(layer), layer]));
+      const subjects = picks.map(layer => {
+        const b = inkBounds(layer.strokes);
+        return subjectFor(layer, { x: b.x / W, y: b.y / H, w: b.w / W, h: b.h / H });
+      });
+      const assetIds = [...new Set([...layers.filter(layer => layer.asset).map(layer => layer.asset.asset_id),
+        ...(editing?.kind === 'asset' ? [editing.id] : [])])].slice(0, 8);
+      $('pipeline-title').textContent = '\u2726 Creating your animation\u2026';
+      const seconds = frameCount(motionSeconds) / MOTION_FPS;
+      let result = null;
+      await streamEvents('/api/animate', JSON.stringify({ prompt, title: title.slice(0, 60), seconds, backdrop: backdropName(), subjects, asset_ids: assetIds, layers: docLayers() }), event => {
+        if (event.type === 'step') {
+          pipelineStep(event);
+        } else if (event.type === 'result') result = event;
+        else if (event.type === 'error') throw new Error(event.detail);
+      });
+      if (!result) throw new Error('The director went quiet. Try again.');
+      const keysFor = new Map(result.motion.tracks.map(track => [byIndex.get(track.subject)?.id, track.keys]));
+      const tracks = chosenTracks((box, layer) => keysFor.get(layer.id), new Set([...keysFor.keys()].filter(Boolean)))
+        .filter(track => track.keys?.length);
+      if (!tracks.length) throw new Error('Those drawings changed while the director was working. Try again.');
+      pipelineFinish(`\u2726 \u201c${result.idea.title}\u201d`);
+      previewMotion({ by: 'ai', director: !prompt, label: `\u2726 ${result.idea.title}`, note: result.motion.note || '', title: result.idea.title,
+        prompt: result.idea.prompt, seconds, strength: 1, base: layers, tracks });
+      $('scene-prompt').value = '';
+      $('scene-prompt').placeholder = 'What would you change?';
+      markGuide('animate');
+    } catch (error) {
+      pipelineFail(error.message);
+      flashTray(error.message, true);
+    } finally {
+      directing = false;
+      setDockBusy(false);
+    }
+  }
+
+  async function reviseMotion(prompt) {
+    if (directing || makingVariations || !motionDraft || prompt.length < 3) {
+      if (prompt.length < 3) flashTray('Tell us what you want to change.', true);
+      return;
+    }
+    const draft = motionDraft;
+    const picks = draft.spec.tracks.map(track => layers.find(layer => layer.id === track.layerId)).filter(Boolean);
+    if (!picks.length || picks.length !== draft.spec.tracks.length) {
+      flashTray('The drawing changed. Make a new scene to include your edits.', true);
+      return;
+    }
+    const subjects = picks.map(layer => {
+      const b = inkBounds(layer.strokes);
+      return subjectFor(layer, { x: b.x / W, y: b.y / H, w: b.w / W, h: b.h / H });
+    });
+    const previous = { prompt: draft.spec.prompt || '', tracks: draft.spec.tracks.map(track => ({
+      subject: layers.findIndex(layer => layer.id === track.layerId), keys: track.keys
+    })) };
+    directing = true;
+    setDockBusy(true);
+    pipelineStart();
+    try {
+      let result = null;
+      await streamEvents('/api/animate', JSON.stringify({
+        prompt, title: draft.spec.title || '', seconds: draft.spec.seconds, backdrop: backdropName(), subjects,
+        asset_ids: [...new Set(layers.filter(layer => layer.asset).map(layer => layer.asset.asset_id))].slice(0, 8),
+        layers: docLayers(), previous
+      }), event => {
+        if (event.type === 'step') pipelineStep(event);
+        else if (event.type === 'result') result = event;
+        else if (event.type === 'error') throw new Error(event.detail);
+      });
+      if (!result) throw new Error('The director went quiet. Your previous preview is still here.');
+      if (motionDraft !== draft) throw new Error('Your preview changed. Try again on the current scene.');
+      const keysFor = new Map(result.motion.tracks.map(track => [layers[track.subject]?.id, track.keys]));
+      const tracks = chosenTracks((box, layer) => keysFor.get(layer.id), new Set([...keysFor.keys()].filter(Boolean)))
+        .filter(track => track.keys?.length);
+      if (!tracks.length) throw new Error('Could not revise this scene. Your previous preview is still here.');
+      pipelineFinish('\u2726 Your new take');
+      const direction = `${draft.spec.prompt || ''}; ${prompt}`.replace(/^; /, '').slice(-300);
+      previewMotion({ ...draft.spec, director: false, prompt: direction, note: result.motion.note || '', tracks });
+      $('scene-prompt').value = '';
+    } catch (error) {
+      pipelineFail(error.message);
+      flashTray(error.message, true);
+    } finally {
+      directing = false;
+      setDockBusy(false);
+    }
+  }
+
+  function showClip(clip) {
+    currentClip = clip;
+    document.querySelector('input[name="scene-style"][value="video"]').checked = true;
+    $('scene-style-note').textContent = 'AI reimagines your drawing as video. Each take uses paid Gemini video generation.';
+    $('scene-video').src = clip.video_url;
+    $('scene-video').muted = true;
+    $('video-preview').hidden = false;
+    $('scene-video').play().catch(() => message('drawing-status', 'Your video is ready. Press play to watch it.'));
+    $('scene-prompt').value = '';
+    $('scene-prompt').placeholder = 'What would you change?';
+    setDockBusy(false);
+    $('canvas-frame').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+  function closeClip() {
+    $('scene-video').pause();
+    $('scene-video').removeAttribute('src');
+    $('scene-video').load();
+    $('video-preview').hidden = true;
+    currentClip = null;
+    $('scene-prompt').placeholder = 'A curious fox discovers a tiny planet...';
+    setDockBusy(false);
+  }
+  $('video-close').addEventListener('click', closeClip);
+  document.querySelectorAll('input[name="scene-style"]').forEach(input => input.addEventListener('change', () => {
+    if (sceneStyle() === 'art' && currentClip) closeClip();
+    $('scene-style-note').textContent = sceneStyle() === 'video'
+      ? 'AI reimagines your drawing as video. Each take uses paid Gemini video generation.'
+      : 'Moves your original strokes. No redraws.';
+    setDockBusy(false);
+  }));
+  async function createClip(prompt) {
+    if (directing || makingVariations || busy()) return;
+    if (currentClip && prompt.length < 3) {
+      message('drawing-status', 'Tell us what you want to change.', true);
+      return;
+    }
+    if (!currentClip && !hasInk()) {
+      flashTray('Draw something first, then make a scene.', true);
+      return;
+    }
+    directing = true;
+    const previousClip = currentClip;
+    setDockBusy(true);
+    pipelineStart();
+    $('pipeline-title').textContent = 'Making your video\u2026 this can take a few minutes.';
+    try {
+      if (!previousClip) {
+        stopPlay();
+        const fresh = unsavedThing();
+        let asset = editing?.kind === 'asset' && revision === savedRevision && frames.length === 1
+          ? { id: editing.id, name: $('title').value.trim() } : null;
+        if (fresh) {
+          asset = await saveAsAsset();
+          if (revision !== savedRevision) throw new Error('Your drawing changed while saving. Try again.');
+        }
+        const choice = $('scene-backdrop').value;
+        if (asset) await stageAsset(asset, choice);
+        else if (choice && !layers.some(layer => layer.backdrop === choice.split(':')[1])) {
+          throw new Error('Choose an asset for a new scene to use this backdrop.');
+        }
+      }
+      const body = previousClip ? { prompt, previous_id: previousClip.id } : { prompt, layers: docLayers() };
+      const clip = await postJSON('/api/clips', JSON.stringify(body));
+      pipelineFinish('\u2726 Your scene is ready');
+      if (currentClip === previousClip) showClip(clip);
+      else message('drawing-status', 'Your new scene is ready in your library.');
+      loadGallery(currentQuery);
+    } catch (error) {
+      pipelineFail(error.message);
+      message('drawing-status', error.message, true);
+    } finally {
+      directing = false;
+      setDockBusy(false);
+    }
+  }
+
+  // ---------------------------------------------------------------- Find similar: the drawing is the query
+  function showLibrary() {
+    setFocus(false);
+    document.querySelector('.library').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+  async function findSimilar(item = null) {
+    const asset = item || (editing?.kind === 'asset' && revision === savedRevision && frames.length === 1
+      ? { id: editing.id, name: $('title').value.trim() } : null);
+    if (!asset && !hasInk()) {
+      flashTray('Draw something first: your drawing becomes the search.', true);
+      return;
+    }
+    showLibrary();
+    galleryRequest?.abort();
+    const controller = new AbortController();
+    galleryRequest = controller;
+    setLibraryTab('all', false);
+    try {
+      if (asset) {
+        message('library-status', `Ranking your library against ${asset.name}\u2019s stored vector\u2026`);
+        const data = await api(`/api/assets/${encodeURIComponent(asset.id)}/similar`, { signal: controller.signal });
+        if (controller.signal.aborted) return;
+        renderEverything(data, { receipt: `Similar to ${data.of.name}, plus animations using it.` });
+      } else {
+        message('library-status', 'Voyage AI is embedding your drawing\u2026');
+        const ask = scope => api('/api/search/sketch', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ scope, layers: docLayers(), ...(scope === 'frame' ? { animated: true } : {}) }), signal: controller.signal });
+        const [assets, moments, clips] = await Promise.all([ask('asset'), ask('frame'), ask('clip')]);
+        if (controller.signal.aborted) return;
+        const self = editing?.kind === 'asset' ? editing.id : null;
+        renderEverything({ assets: assets.items.filter(hit => hit.id !== self), frames: moments.items, clips: clips.items },
+          { receipt: '\u25ce Similar art and scenes inspired by a similar drawing.' });
+      }
+      markGuide('where');
+    } catch (error) {
+      if (error.name !== 'AbortError') message('library-status', error.message, true);
+    }
+  }
+
+  // ---------------------------------------------------------------- Refine with AI: suggested, never imposed
+  async function suggestRefinements(force = false) {
+    if (!hasInk()) return;
+    if (!force && refineIdeas.revision === revision && (refineIdeas.loading || refineIdeas.items.length)) return;
+    const asked = revision;
+    refineIdeas = { revision: asked, items: [], loading: true, error: '' };
+    renderAiExamples();
+    try {
+      const result = await postJSON('/api/sparks/refine/ideas', JSON.stringify({ title: $('title').value.trim().slice(0, 120), layers: docLayers() }));
+      if (refineIdeas.revision === asked) refineIdeas.items = result.ideas;
+    } catch (error) {
+      if (refineIdeas.revision === asked) refineIdeas.error = error.message;
+    }
+    if (refineIdeas.revision !== asked) return;
+    refineIdeas.loading = false;
+    if (aiMode !== 'refine') return;
+    renderAiExamples();
+    // A head start: the best suggestion, ready to run (Enter) or to type over.
+    if (refineIdeas.items.length && !$('ai-prompt').value.trim()) {
+      $('ai-prompt').value = refineIdeas.items[0];
+      if (document.activeElement === $('ai-prompt')) $('ai-prompt').select();
+    }
+  }
+  function startRefineFlow() {
+    if (!hasInk()) {
+      flashTray('Draw something first, then refine it with AI.', true);
+      canvas.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
+    }
+    if (motionDraft) skipMotion();
+    setFocus(false);
+    $('ai-tools').open = true;
+    setAiMode('refine');
+    $('ai-bar').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    $('ai-prompt').focus({ preventScroll: true });
+    suggestRefinements();
+  }
+  async function refineAsset(item) {
+    await openAsset(item.id);
+    if (editing?.kind === 'asset' && editing.id === item.id) startRefineFlow();
+  }
+  function animateAsset(item) {
+    if (revision !== savedRevision && hasInk() && !confirm(`Animate ${item.name} in a fresh scene? Your unsaved canvas is replaced (Undo brings it back).`)) return;
+    canvas.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    autoAnimate({ asset: item });
+  }
+  let makingVariations = false;
+  async function varyCurrent() {
+    if (makingVariations || directing || busy()) return;
+    if (!hasInk()) { flashTray('Draw an asset or backdrop first.', true); return; }
+    if (!unsavedThing() && !(editing?.kind === 'asset' && frames.length === 1)) {
+      flashTray('Open an asset or backdrop to make variations.', true);
+      return;
+    }
+    makingVariations = true;
+    $('dock-vary').disabled = true;
+    try {
+      let item = currentAsset();
+      if (unsavedThing()) {
+        pipelineStart();
+        item = await saveAsAsset();
+        if (revision !== savedRevision) throw new Error('Your drawing changed while saving. Try variations again.');
+        $('pipeline').hidden = true;
+      }
+      openVariations(item);
+    } catch (error) {
+      pipelineFail(error.message);
+      flashTray(error.message, true);
+    } finally {
+      makingVariations = false;
+      $('dock-vary').disabled = false;
+    }
+  }
+  $('scene-direct').addEventListener('submit', event => {
+    event.preventDefault();
+    const prompt = $('scene-prompt').value.trim();
+    if (sceneStyle() === 'video') createClip(prompt);
+    else if (motionDraft) reviseMotion(prompt);
+    else autoAnimate({ prompt });
+  });
+  $('dock-vary').addEventListener('click', varyCurrent);
+  $('dock-similar').addEventListener('click', () => findSimilar());
+  $('dock-refine').addEventListener('click', startRefineFlow);
+
   // Drag an asset card's picture onto the canvas: it lands where you drop it (desktop).
   $('canvas-frame').addEventListener('dragover', event => {
     if (!event.dataTransfer.types.includes('application/x-inkling-asset')) return;
@@ -2211,14 +2910,17 @@
       tray.classList.remove('error');
       tray.classList.add('motion');
       const { spec, stacks } = motionDraft;
-      const note = el('span', 'tray-note', `\ud83c\udfac ${spec.label} \u00b7 ${(stacks.length / MOTION_FPS).toFixed(1)} s, ${stacks.length} frames${spec.strength !== 1 ? ` \u00b7 ${spec.strength}\u00d7` : ''}`);
+      const note = el('span', 'tray-note', `${spec.label} \u00b7 Want a change? Tell us below.`);
       tray.replaceChildren(note,
-        trayButton('Keep <kbd>\u23ce</kbd>', 'Keep \u00b7 Enter|Becomes real frames: scrub, drag, and redraw any of them.', keepMotion),
-        trayButton('Skip <kbd>Esc</kbd>', 'Skip \u00b7 Esc', skipMotion),
-        trayButton('\u25c6 How it works', 'How it works|Keyframes, in-betweens, and spacing: the animation, explained on your drawing.', explainScene),
-        trayButton('Softer', 'Softer|Same motion, smaller moves. No AI call.', () => restrength(-0.3)),
-        trayButton('Bigger', 'Bigger|Same motion, larger moves. No AI call.', () => restrength(0.3)));
-      if (spec.by === 'ai') tray.append(trayButton('\u21bb', 'Another take|Asks AI again (one more call).', () => { skipMotion(); openAnimate(); }));
+        trayButton('Keep <kbd>\u23ce</kbd>', 'Keep \u00b7 Enter|Keep this animation.', keepMotion),
+        trayButton('Start over <kbd>Esc</kbd>', 'Start over \u00b7 Esc', skipMotion));
+      if (spec.by === 'ai') {
+        tray.append(trayButton('\u21bb Try again', 'Try again|Create another animation.', () => {
+          const again = spec.director ? {} : { prompt: spec.prompt, title: spec.title, ids: new Set(spec.tracks.map(track => track.layerId)) };
+          skipMotion();
+          autoAnimate(again);
+        }));
+      }
       return;
     }
     const ready = activeSpark();
@@ -2246,8 +2948,10 @@
       note.textContent = `\u2726 ${ready.result.note || 'Spark ready'}`;
       tray.append(
         note,
-        trayButton(`${ready.kind === 'guide' ? 'Pin guide' : ready.kind === 'sketch' ? 'Use sketch' : 'Use it'} <kbd>\u23ce</kbd>`,
-          ready.kind === 'sketch' ? 'Use sketch \u00b7 Enter|Adds it as a faint layer under your ink.' : ready.kind === 'guide' ? 'Pin guide \u00b7 Enter' : `Use it \u00b7 Enter|Adds these lines to "${activeLayer().name}".`, acceptSpark),
+        trayButton(`${ready.kind === 'guide' ? 'Pin guide' : ready.kind === 'sketch' ? 'Use sketch' : ready.kind === 'refine' ? 'Keep it' : 'Use it'} <kbd>\u23ce</kbd>`,
+          ready.kind === 'sketch' ? 'Use sketch \u00b7 Enter|Adds it as a faint layer under your ink.' : ready.kind === 'guide' ? 'Pin guide \u00b7 Enter'
+            : ready.kind === 'refine' ? `Keep it \u00b7 Enter|Kept ${ready.result.kept} of your ${ready.result.source_strokes} strokes exactly, added ${ready.result.added}. Undo brings the old one back.`
+            : `Use it \u00b7 Enter|Adds these lines to "${activeLayer().name}".`, acceptSpark),
         trayButton('Skip <kbd>Esc</kbd>', 'Skip \u00b7 Esc', dismissSpark),
         trayButton('\u21bb', 'Try again', retrySpark)
       );
@@ -2262,7 +2966,9 @@
       const note = document.createElement('span');
       note.className = 'tray-note pending';
       const sketching = sparks.find(spark => spark.status === 'pending' && spark.kind === 'sketch');
-      note.textContent = sketching && pending === 1 ? `\u2726 Sketching "${sketching.prompt}" in blue pencil\u2026 keep drawing`
+      const refining = sparks.find(spark => spark.status === 'pending' && spark.kind === 'refine');
+      note.textContent = refining && pending === 1 ? `\u2726 Refining: "${refining.prompt}"\u2026`
+        : sketching && pending === 1 ? `\u2726 Sketching "${sketching.prompt}" in blue pencil\u2026 keep drawing`
         : `\u2726 AI is on it${pending > 1 ? ` (${pending})` : ''}\u2026 keep drawing`;
       tray.append(note);
     }
@@ -2307,7 +3013,7 @@
       event.key === 'Enter' ? keepMotion() : skipMotion();
     } else if (!mod && key === 'a' && !busy()) {
       event.preventDefault();
-      openAnimate();
+      autoAnimate();
     } else if (event.key === 'Enter' && activeSpark() && !event.target.closest?.('button, a, [role="button"]')) {
       // Focused controls (Dismiss, Save, library cards) keep their own Enter behavior.
       event.preventDefault();
@@ -2388,14 +3094,14 @@
 
   // ---------------------------------------------------------------- save kinds: idea / asset / shot
   const CODE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,39}$/;
-  const TYPE_LABELS = { character: 'Character', prop: 'Prop', environment: 'Background', fx: 'Effect', other: 'Other' };
+  const TYPE_LABELS = { character: 'Character', prop: 'Prop', environment: 'Backdrop', fx: 'Effect', other: 'Other' };
   const typeLabel = type => TYPE_LABELS[type] || type;
   const STATUS_LABELS = { todo: 'To do', in_progress: 'In progress', review: 'In review', approved: 'Approved' };
   const KIND_TEXT = {
     asset: { label: 'Name', placeholder: 'Red Rocket', save: 'Save asset',
-      hint: 'Draw once, reuse anywhere. <i>e.g. a character, a prop, a background.</i>' },
-    shot: { label: 'Scene code', placeholder: 'SQ010_0040', save: 'Save scene',
-      hint: 'Place assets, draw the rest. <i>e.g. SQ010_0040, the launch.</i>' },
+      hint: 'Draw an asset or backdrop. Reuse it anywhere.' },
+    shot: { label: 'Scene name', placeholder: 'Rocket_001', save: 'Save scene',
+      hint: 'Save your animation to find it again.' },
     idea: { label: 'Name', placeholder: 'Chase scene thumbnail', save: 'Save idea',
       hint: 'A loose idea to find later by describing it. <i>e.g. "that moody forest".</i>' }
   };
@@ -2455,7 +3161,8 @@
     // Studios name shots SEQ_SHOT (SQ070_0010), so a blank sequence comes from the code.
     let sequence = $('shot-sequence').value.trim();
     if (!sequence && /^[A-Za-z0-9.-]+_/.test(name)) $('shot-sequence').value = sequence = name.split('_')[0];
-    for (const [label, value] of [['Scene code', name], ['Project', project], ['Sequence', sequence]]) {
+    if (!sequence) $('shot-sequence').value = sequence = 'SCENE';
+    for (const [label, value] of [['Scene name', name], ['Project', project], ['Sequence', sequence]]) {
       if (!CODE.test(value)) throw new Error(`${label}: letters, numbers, _ . or - only (no spaces). e.g. SQ010_0040`);
     }
     return { path: updating ? `/api/shots/${editing.id}` : '/api/shots', method: updating ? 'PUT' : 'POST', history,
@@ -2555,6 +3262,7 @@
         : saved.tags_status === 'unavailable' ? ' Auto-tags were unavailable this time.' : '';
       if (kind === 'asset') {
         editing = { kind, id: saved.id, version: saved.version };
+        loadSceneBackdrops();
         markGuide('asset');
         if (pendingVary) {
           const goal = pendingVary;
@@ -2562,7 +3270,8 @@
           openVariations({ ...saved, type: saved.type || $('asset-type').value, tags: saved.tags || tags }, goal);
         }
         message('drawing-status', `Saved "${saved.name}" v${saved.version}.${note} Next:`, false, [
-          { label: '\ud83c\udf9e Animate it', tip: 'Animate it|Opens a fresh scene with this asset placed. Then add frames and move what moves.', run: () => startShotWith(saved) },
+          { label: '\u2726 Animate it', tip: 'Animate it|Turn your drawing into an editable scene.', run: () => autoAnimate({ asset: saved }) },
+          { label: '\u25ce Find similar', tip: 'Find similar|Look-alikes, ranked by the vector Voyage just stored: no new embedding.', run: () => findSimilar(saved) },
           { label: '\u2726 Make variations', tip: 'Variations|Lookalikes for a crowd or a battle, made by editing your strokes.', run: () => openVariations(saved) },
           { label: 'Where is it used?', run: () => openWhereUsed(saved) }
         ]);
@@ -2601,7 +3310,7 @@
       }
       stopPlay();
       frames = expandRecord(record).map(stack => stack.map(layer => newLayer(layer.name, {
-        visible: layer.visible, opacity: layer.opacity, strokes: layer.strokes, asset: layer.asset || null,
+        visible: layer.visible, opacity: layer.opacity, strokes: layer.strokes, asset: layer.asset || null, backdrop: layer.backdrop || null,
         ...(layer.xf ? { xf: layer.xf, xfBase: layer.xfBase, xfStrokes: layer.xfStrokes } : {})
       })));
       sceneMotion = record.motion || null;
@@ -2669,24 +3378,39 @@
 
   // ---------------------------------------------------------------- library tabs
   const TAB_TEXT = {
+    all: { placeholder: 'Describe anything, e.g. "a spaceship"', noun: 'results' },
     asset: { placeholder: 'Describe it, e.g. "the red rocket"', noun: 'assets' },
-    frame: { placeholder: 'Describe a moment, e.g. "the rocket high above the trees"', noun: 'frames' },
+    backdrop: { placeholder: 'Describe a backdrop, e.g. "a forest at night"', noun: 'backdrops' },
+    frame: { placeholder: 'Describe a scene, e.g. "a rocket taking off"', noun: 'animated scenes' },
     shot: { placeholder: 'Describe it, e.g. "a rocket over the city"', noun: 'scenes' },
     idea: { placeholder: 'Describe it, e.g. "a friendly green character"', noun: 'ideas' }
   };
-  let libraryTab = 'asset';
+  let libraryTab = 'all';
   let shotStatus = '';
-  function setLibraryTab(tab) {
+  function setLibraryTab(tab, load = true) {
     libraryTab = tab;
     document.querySelectorAll('.library-tabs [role="tab"]').forEach(t => t.setAttribute('aria-selected', String(t.dataset.tab === tab)));
     $('tag-filters').hidden = tab !== 'idea';
-    $('status-filters').hidden = tab !== 'shot' && tab !== 'frame';
-    $('frame-filters').hidden = tab !== 'frame';
-    $('asset-filters').hidden = tab !== 'asset';
-    if (tab === 'frame') loadFrameAssets();
+    $('status-filters').hidden = tab !== 'shot';
+    $('frame-filters').hidden = true;
+    $('asset-filters').hidden = true;
     $('query').placeholder = TAB_TEXT[tab].placeholder;
     $('query').value = '';
-    loadGallery();
+    currentQuery = '';
+    if (load) loadGallery();
+  }
+  // Searches that show off meaning, not keywords: none of these words need to be in a name or a tag.
+  const SEARCH_HINTS = ['a spaceship', 'a cute animal', 'something broken', 'the moment it leaves the ground'];
+  function renderSearchHints() {
+    $('search-hints').replaceChildren(el('small', '', 'Try'), ...SEARCH_HINTS.map(hint => {
+      const chip = el('button', 'example', hint);
+      chip.type = 'button';
+      chip.addEventListener('click', () => {
+        $('query').value = hint;
+        loadGallery(hint);
+      });
+      return chip;
+    }));
   }
   document.querySelectorAll('.library-tabs [role="tab"]').forEach(t => t.addEventListener('click', () => setLibraryTab(t.dataset.tab)));
 
@@ -2767,19 +3491,23 @@
     text.append(el('strong', '', item.name),
       el('small', '', `${typeLabel(item.type)} \u00b7 v${item.version} \u00b7 in ${item.uses ?? 0} scene${item.uses === 1 ? '' : 's'}`));
     const actions = el('div', 'card-actions');
-    const place = el('button', 'mini primary-mini', '\u25c6 Place');
+    const animateIt = actionButton('\u2726 Animate', 'primary-mini', 'Animate|Turn your drawing into an editable scene.', () => animateAsset(item));
+    const similar = actionButton('\u25ce Similar', '', 'Find similar|Look-alike assets and the frames they show up in, ranked by its stored vector: no new embedding.', () => findSimilar(item));
+    const refine = actionButton('\u2726 Refine', 'ai-mini', 'Refine with AI|Opens it with AI suggestions for what it could use next. You keep or skip.', () => refineAsset(item));
+    const more = el('div', 'card-more');
+    const place = el('button', 'link-button', '\u25c6 Place');
     place.type = 'button';
     place.dataset.tip = 'Place in a scene|Drops it onto the canvas, ready to drag (or drag its picture onto the canvas). It stays linked, so it always knows where it\'s used.';
     place.addEventListener('click', () => startPlacing(item));
-    const where = el('button', 'mini where-mini', 'Where used?');
+    const where = el('button', 'link-button', 'Where used?');
     where.type = 'button';
     where.dataset.tip = 'Where is it used?|Every scene using it, which are outdated, and look-alikes.';
     where.addEventListener('click', () => openWhereUsed(item));
-    const edit = el('button', 'mini', 'Edit');
+    const edit = el('button', 'link-button', 'Edit');
     edit.type = 'button';
     edit.dataset.tip = 'Edit|Opens it on the canvas. Saving makes a new version; scenes using older ones get flagged.';
     edit.addEventListener('click', () => openAsset(item.id));
-    const vary = el('button', 'mini ai-mini', '\u2726 Variations');
+    const vary = el('button', 'link-button', 'Variations');
     vary.type = 'button';
     vary.dataset.tip = 'Variations|Need 9 of these for a battle? Plan lookalikes, AI edits your strokes, you keep and finish them.';
     vary.addEventListener('click', () => openVariations(item));
@@ -2795,14 +3523,16 @@
       }
       text.append(made);
     }
-    actions.append(place, where, vary, edit);
+    actions.append(animateIt, similar, refine);
+    more.append(place, where, vary, edit);
     const thumb = thumbButton(item, `Edit asset ${item.name}`, () => openAsset(item.id));
     thumb.draggable = true;
     thumb.addEventListener('dragstart', event => {
       event.dataTransfer.setData('application/x-inkling-asset', JSON.stringify({ id: item.id, name: item.name }));
       event.dataTransfer.effectAllowed = 'copy';
     });
-    card.append(thumb, text, actions);
+    if (item.score != null) text.append(el('small', 'score-line', `similarity ${item.score.toFixed(2)}`));
+    card.append(thumb, text, actions, more);
     return card;
   }
   function statusSelect(item, onChanged) {
@@ -2857,6 +3587,17 @@
     return card;
   }
 
+  function clipCard(item) {
+    const card = el('div', 'card shot-card');
+    const text = el('span', 'card-text');
+    text.append(el('strong', '', item.name), el('small', '', 'AI-reimagined video \u00b7 based on your drawing'));
+    if (item.prompt) text.append(el('small', '', item.prompt));
+    const actions = el('div', 'card-actions');
+    actions.append(actionButton('\u25b6 Watch & change', 'primary-mini', null, () => showClip(item)));
+    card.append(thumbButton(item, `Watch ${item.name}`, () => showClip(item)), text, actions);
+    return card;
+  }
+
   // Frame hits come grouped by scene: neighbouring frames of one flipbook look alike, so the best frame
   // leads and the other matching frames are one tap away.
   function groupFrames(items) {
@@ -2892,26 +3633,54 @@
     card.append(thumb, text, actions);
     return card;
   }
-  function renderResults(tab, items, { query = '', filterText = '', sketch = false } = {}) {
+  function renderResults(tab, items, { query = '', filterText = '', sketch = false, clips = [] } = {}) {
     // Browsing (no query): each scene leads with frame 1; searching: with its best match.
     const ranked = query || sketch;
-    const cards = tab === 'frame' ? groupFrames(items).map(group => frameGroupCard(ranked ? group : group.sort((x, y) => x.frame - y.frame)))
-      : items.map(item => tab === 'idea' ? ideaCard(item, query) : tab === 'asset' ? assetCard(item) : shotCard(item));
+    const cards = tab === 'frame' ? [...clips.map(clipCard), ...groupFrames(items).map(group => frameGroupCard(ranked ? group : group.sort((x, y) => x.frame - y.frame)))]
+      : items.map(item => tab === 'idea' ? ideaCard(item, query) : tab === 'asset' || tab === 'backdrop' ? assetCard(item) : shotCard(item));
     cards.forEach((card, i) => card.style.setProperty('--i', Math.min(i, 12)));
     if (!cards.length) {
       cards.push(el('div', 'empty', query || sketch || filterText ? 'No matches. Try other words or another sketch, or give new saves a moment.'
-        : tab === 'asset' ? 'No assets yet. Draw something (or ask AI to sketch a start) and save it as an Asset.'
+        : tab === 'asset' || tab === 'backdrop' ? 'Nothing here yet. Draw something and save it to your library.'
         : tab === 'shot' ? 'No scenes yet. \u25c6 Place an asset, draw the rest, save as Scene.'
-        : tab === 'frame' ? 'No frames yet. Save a scene; add frames with \ud83c\udf9e to animate it.'
+        : tab === 'frame' ? 'No animated scenes yet. Draw something and make a scene.'
         : 'No ideas yet. Save loose sketches here and find them by describing them.'));
     }
+    $('results').classList.remove('sectioned');
     $('results').replaceChildren(...cards);
     if ((query || sketch) && items.length) markGuide('where');
-    const what = tab === 'frame' ? `${items.length} frame${items.length === 1 ? '' : 's'} in ${cards.length} scene${cards.length === 1 ? '' : 's'}` : null;
+    const sceneCount = tab === 'frame' ? groupFrames(items).length + clips.length : 0;
+    const what = tab === 'frame' ? `${sceneCount} animated scene${sceneCount === 1 ? '' : 's'}` : null;
     const matches = what || `${items.length} match${items.length === 1 ? '' : 'es'}`;
     message('library-status', sketch ? `${matches} for your drawing, most similar first.`
       : query ? `${matches}${filterText}, most similar first (Voyage AI).`
       : `${what || `${items.length} ${TAB_TEXT[tab].noun}`}${filterText}.`);
+  }
+  // Everything at once: assets, scenes, and frames, each in its own row, with what it took to find them.
+  function renderEverything({ assets = [], scenes = [], frames: hits = [], clips = [] }, { receipt = '', empty = '' } = {}) {
+    const section = (title, count, cards, kind) => {
+      const wrap = el('section', `results-section ${kind}`);
+      const head = el('h3', 'results-head', title);
+      head.append(el('span', 'results-count', String(count)));
+      const grid = el('div', `results-grid ${kind}`);
+      cards.forEach((card, i) => card.style.setProperty('--i', Math.min(i, 12)));
+      grid.append(...cards);
+      wrap.append(head, grid);
+      return wrap;
+    };
+    const parts = [];
+    const drawings = assets.filter(item => item.type !== 'environment');
+    const backdrops = assets.filter(item => item.type === 'environment');
+    if (drawings.length) parts.push(section('\u25c6 Assets', drawings.length, drawings.map(assetCard), 'found-assets'));
+    if (backdrops.length) parts.push(section('\u25a3 Backdrops', backdrops.length, backdrops.map(assetCard), 'found-assets'));
+    if (scenes.length) parts.push(section('\u25a3 Scenes', scenes.length, scenes.map(shotCard), 'found-scenes'));
+    if (clips.length) parts.push(section('\ud83c\udfac AI-reimagined scenes', clips.length, clips.map(clipCard), 'found-scenes'));
+    const groups = groupFrames(hits);
+    if (groups.length) parts.push(section('\ud83c\udf9e Moments in your animations', hits.length, groups.map(frameGroupCard), 'found-frames'));
+    if (!parts.length) parts.push(el('div', 'empty', empty || 'No matches. Try other words or another sketch, or give new saves a moment.'));
+    $('results').classList.add('sectioned');
+    $('results').replaceChildren(...parts);
+    message('library-status', receipt);
   }
   let frameAsset = '';
   // Search by how things were made: art math is stored on every asset in Atlas and used as vector filters.
@@ -2942,6 +3711,29 @@
     const controller = new AbortController();
     galleryRequest = controller;
     const tab = libraryTab;
+    if (tab === 'all') {
+      message('library-status', query ? `Searching for \u201c${query}\u201d\u2026` : 'Opening your library\u2026');
+      try {
+        if (query) {
+          const data = await api(`/api/find?q=${encodeURIComponent(query)}`, { signal: controller.signal });
+          if (controller.signal.aborted) return;
+          renderEverything(data, { receipt: `Results for \u201c${query}\u201d, most similar first.` });
+          if (data.assets.length || data.scenes.length || data.frames.length) markGuide('where');
+        } else {
+          const [assets, scenes, clips] = await Promise.all([api('/api/assets', { signal: controller.signal }), api('/api/shots', { signal: controller.signal }), api('/api/clips', { signal: controller.signal })]);
+          if (controller.signal.aborted) return;
+          renderEverything({ assets: assets.items.slice(0, 10), scenes: scenes.items.slice(0, 6), clips: clips.items.slice(0, 6) }, {
+            receipt: 'Your latest work. Search above by meaning, or tap \u25ce Find similar under the canvas.',
+            empty: 'Nothing here yet. Draw something above and make a scene.' });
+        }
+      } catch (error) {
+        if (error.name !== 'AbortError') {
+          $('results').replaceChildren();
+          message('library-status', error.message, true);
+        }
+      }
+      return;
+    }
     const params = new URLSearchParams();
     let url;
     if (tab === 'idea') {
@@ -2951,10 +3743,11 @@
     } else {
       if (query) params.set('q', query);
       if ((tab === 'shot' || tab === 'frame') && shotStatus) params.set('status', shotStatus);
-      if (tab === 'frame' && frameAsset) params.set('asset_id', frameAsset);
+      if (tab === 'frame') params.set('animated', 'true');
+      if (tab === 'backdrop') params.set('type', 'environment');
       if (tab === 'asset' && handOnly) params.set('hand_min', '0.8');
       if (tab === 'asset' && assetColor) params.set('color', assetColor);
-      url = `/api/${tab}s?${params}`;
+      url = `/api/${tab === 'backdrop' ? 'asset' : tab}s?${params}`;
     }
     const assetName = tab === 'frame' && frameAsset ? $('frame-asset').selectedOptions[0]?.textContent : '';
     const filterText = (tab === 'idea' && activeTag ? ` tagged #${activeTag}` : '')
@@ -2963,9 +3756,10 @@
       + (tab === 'asset' && handOnly ? ', mostly by hand' : '') + (tab === 'asset' && assetColor ? `, with ${assetColor}` : '');
     message('library-status', query ? `Looking for ${TAB_TEXT[tab].noun}${filterText} with Voyage AI...` : `Opening your ${TAB_TEXT[tab].noun}...`);
     try {
-      const data = await api(url, { signal: controller.signal });
+      const [data, clips] = await Promise.all([api(url, { signal: controller.signal }),
+        tab === 'frame' ? api(`/api/clips${query ? `?q=${encodeURIComponent(query)}` : ''}`, { signal: controller.signal }) : Promise.resolve({ items: [] })]);
       if (controller.signal.aborted) return;
-      renderResults(tab, data.items, { query, filterText });
+      renderResults(tab, data.items, { query, filterText, clips: clips.items });
     } catch (error) {
       if (error.name !== 'AbortError') {
         $('results').replaceChildren();
@@ -2985,12 +3779,21 @@
     const tab = libraryTab;
     $('query').value = '';
     currentQuery = '';
+    if (tab === 'all') {
+      galleryRequest = null;
+      findSimilar();
+      return;
+    }
     message('library-status', `Looking for ${TAB_TEXT[tab].noun} that look like your drawing...`);
     try {
       const data = await api('/api/search/sketch', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ scope: tab, layers: docLayers() }), signal: controller.signal });
+        body: JSON.stringify({ scope: tab === 'backdrop' ? 'asset' : tab, layers: docLayers(),
+          ...(tab === 'backdrop' ? { asset_type: 'environment' } : {}), ...(tab === 'frame' ? { animated: true } : {}) }), signal: controller.signal });
       if (controller.signal.aborted) return;
-      renderResults(tab, data.items, { sketch: true });
+      const clips = tab === 'frame' ? await api('/api/search/sketch', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scope: 'clip', layers: docLayers() }), signal: controller.signal }) : { items: [] };
+      if (controller.signal.aborted) return;
+      renderResults(tab, data.items, { sketch: true, clips: clips.items });
     } catch (error) {
       if (error.name !== 'AbortError') message('library-status', error.message, true);
     }
@@ -3411,8 +4214,9 @@
       }));
       item.status = 'kept';
       markGuide('vary');
+      if (varAsset.type === 'environment') loadSceneBackdrops();
       message('var-status', `Kept "${item.saved.name}". It's in your library, linked to ${varAsset.name}.`);
-      if (libraryTab === 'asset') loadGallery(currentQuery);
+      if (libraryTab === 'asset' || libraryTab === 'all') loadGallery(currentQuery);
     } catch (error) {
       item.status = 'ready';
       message('var-status', error.message, true);
@@ -4214,12 +5018,6 @@
   $('starter-skip').addEventListener('click', () => { startersDismissed = true; renderStarters(); });
 
   // ---------------------------------------------------------------- the natural flow: next steps, guide, help
-  function startShotWith(asset) {
-    clearCanvas();
-    setSaveKind('shot');
-    $('title').value = '';
-    startPlacing(asset);
-  }
   function goPlace() {
     setLibraryTab('asset');
     $('results').scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -4238,16 +5036,12 @@
     try { return { done: {}, hidden: false, ...JSON.parse(localStorage.getItem(GUIDE_KEY) || '{}') }; } catch { return { done: {}, hidden: false }; }
   })();
   const GUIDE_STEPS = [
-    { id: 'draw', title: 'Draw it', detail: 'A character, a prop, or a backdrop, in layers. Stuck? Ask AI for a blue-pencil start.',
-      show: () => { canvas.scrollIntoView({ behavior: 'smooth', block: 'center' }); setAiMode('sketch'); pulse('#ai-bar .ai-input'); flashTray('Draw here, or type in Ask AI below for a blue-pencil start.'); } },
-    { id: 'asset', title: 'Save it as an asset', detail: 'Draw once, reuse it in every scene. e.g. "Red Rocket".',
-      show: () => { setSaveKind('asset'); $('save-form').scrollIntoView({ behavior: 'smooth', block: 'center' }); $('title').focus({ preventScroll: true }); pulse('.kind-switch [data-kind="asset"]'); } },
-    { id: 'where', title: 'Find it', detail: 'Describe it or sketch it: Voyage AI matches words and drawings.',
-      show: () => { setLibraryTab('asset'); $('results').scrollIntoView({ behavior: 'smooth', block: 'start' }); pulse('#query'); } },
-    { id: 'animate', title: 'Animate it', detail: 'Tap \ud83c\udfac Animate: the AI director pitches a 10-second scene. Every frame stays yours.',
-      show: () => openAnimate() },
-    { id: 'share', title: 'Share it', detail: 'Save the scene, then send a link: a looping GIF with how it moves, explained.',
-      show: () => { setSaveKind('shot'); $('save-form').scrollIntoView({ behavior: 'smooth', block: 'center' }); pulse('#share-open:not([hidden]), .kind-switch [data-kind="shot"]'); } }
+    { id: 'draw', title: 'Draw it', detail: 'Draw an asset or backdrop. Need a start? Try AI sparks.',
+      show: () => { $('ai-tools').open = true; canvas.scrollIntoView({ behavior: 'smooth', block: 'center' }); setAiMode('sketch'); pulse('#ai-bar .ai-input'); flashTray('Draw here, or type in Ask AI below for a blue-pencil start.'); } },
+    { id: 'animate', title: 'Make a scene', detail: 'Describe what happens, or let AI surprise you. Change the take with your words.',
+      show: () => { $('dock-animate').scrollIntoView({ behavior: 'smooth', block: 'center' }); pulse('#dock-animate'); } },
+    { id: 'where', title: 'Find your art', detail: 'Search your assets, backdrops, and animated scenes by words or a sketch.',
+      show: () => { showLibrary(); pulse('#query'); } }
   ];
   let prefsTimer = null;
   function saveGuide() {
@@ -4439,11 +5233,16 @@
     $('account-initial').textContent = (email || '?').charAt(0);
     $('account-email').textContent = email || 'Local studio';
     const lib = account.library || {};
-    $('account-counts').textContent = `${plural(lib.assets || 0, 'asset')} \u00b7 ${plural(lib.scenes || 0, 'scene')} \u00b7 ${plural(lib.ideas || 0, 'idea')}`;
+    $('account-counts').textContent = `${plural(lib.assets || 0, 'asset')} \u00b7 ${plural(lib.scenes || 0, 'scene')}${lib.ideas ? ` \u00b7 ${plural(lib.ideas, 'idea')}` : ''}`;
+    // Ideas (loose sketches) are from before assets; only libraries that have some still see them.
+    $('tab-idea').hidden = !lib.ideas;
+    document.querySelector('.kind-switch [data-kind="idea"]').hidden = !lib.ideas;
     const ai = account.budget?.ai;
+    const video = account.budget?.video;
     const embeds = account.budget?.embeds;
     const lines = [];
     if (ai?.limit) lines.push(`\u2726 ${ai.left} of ${ai.limit} AI drafts left this hour`);
+    if (video?.limit) lines.push(`${video.left} of ${video.limit} AI videos left this hour`);
     if (embeds?.limit && embeds.left < embeds.limit * 0.2) lines.push(`${embeds.left} saves & searches left this hour`);
     $('account-budget').textContent = lines.join(' \u00b7 ');
     $('account-budget').hidden = !lines.length;
@@ -4475,6 +5274,7 @@
     renderAccount();
     loadGallery();
     loadTags();
+    loadSceneBackdrops();
     syncGuideWithLibrary();
     api('/api/prefs').then(prefs => {
       if (!Array.isArray(prefs.guide)) return;
@@ -4546,7 +5346,9 @@
   }
   buildStarters();
   buildAnimate();
+  renderSceneBackdrops();
   renderAssetFilters();
+  renderSearchHints();
   rebuildAll();
   renderFrames();
   setAiMode('sketch');
