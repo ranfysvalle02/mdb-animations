@@ -13,6 +13,8 @@ x-studio: &studio
     SIMILAR_ASSET_MIN_SCORE: ${SIMILAR_ASSET_MIN_SCORE:-0.75}
     # Accounts (m-stash). The pk_ key is a publishable, frontend-safe key; never put an sk_ key here.
     INKLING_AUTH: ${INKLING_AUTH:-mstash}
+    # The setup job builds indexes before the studio starts; the studio seeds the demo library once.
+    INKLING_SETUP_ON_START: ${INKLING_SETUP_ON_START:-0}
     INKLING_AI_PER_HOUR: ${INKLING_AI_PER_HOUR:-60}
     INKLING_EMBEDS_PER_HOUR: ${INKLING_EMBEDS_PER_HOUR:-600}
     PUBLIC_URL: ${PUBLIC_URL:-}

@@ -3538,15 +3538,23 @@
     }
   }
 
+  let warming = false;
   async function checkConnection() {
     try {
       await api('/api/ready');
       $('connection').textContent = 'Library online';
+      $('connection').title = '';
       $('connection-dot').classList.add('online');
+      if (warming) { warming = false; message('library-status', 'Search is ready.'); loadGallery(); }
     } catch (error) {
-      $('connection').textContent = 'Offline';
+      // A fresh server builds its search indexes in the background: say so, and check again shortly.
+      const building = /index|minute|demo library/i.test(error.message);
+      $('connection').textContent = building ? 'Warming up\u2026' : 'Offline';
       $('connection').title = error.message;
-      message('library-status', error.message, true);
+      $('connection-dot').classList.remove('online');
+      message('library-status', building ? `${error.message} You can draw meanwhile.` : error.message, !building);
+      warming = true;
+      setTimeout(checkConnection, building ? 8000 : 20000);
     }
   }
   buildStarters();

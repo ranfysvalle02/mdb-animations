@@ -19,6 +19,7 @@ from pymongo.errors import PyMongoError
 from starlette.concurrency import run_in_threadpool
 from voyageai.error import VoyageError
 
+from backend import boot
 from backend.ai import AIError, AIUnavailable, Sparks
 from backend.auth import DEMO_OWNER, SESSION_COOKIE, AuthError, AuthUnavailable, Budget, MStash, OpenAuth, Throttle, jwt_claims, service_owner
 from backend.library import Library, LibraryError, ink_crop, render_image
@@ -82,7 +83,8 @@ PUBLIC = {("GET", "/api/ready"), ("GET", "/api/auth/config"), ("POST", "/api/ses
           ("POST", "/api/auth/signup"), ("POST", "/api/auth/login")}
 SIGN_INS = Throttle()
 # Behind a TLS-terminating proxy (Render, Fly, a load balancer) the app sees plain http.
-TRUST_PROXY = os.environ.get("TRUST_PROXY", "").strip().lower() in ("1", "true", "yes", "on")
+# Render sets RENDER=true and always sits behind its TLS proxy, so trust it there unless told otherwise.
+TRUST_PROXY = os.environ.get("TRUST_PROXY", "1" if os.environ.get("RENDER") else "").strip().lower() in ("1", "true", "yes", "on")
 
 
 def client_ip(request: Request) -> str:
@@ -223,7 +225,7 @@ def optional_tag(tag: str | None) -> str | None:
         raise HTTPException(422, str(exc)) from exc
 
 
-@app.get("/health")
+@app.api_route("/health", methods=["GET", "HEAD"])
 def health() -> dict:
     return {"status": "ok"}
 
@@ -231,8 +233,10 @@ def health() -> dict:
 @app.get("/api/ready")
 def ready(request: Request) -> dict:
     if not request.app.state.library.ready() or not request.app.state.production.ready():
-        raise HTTPException(503, "Vector indexes are not ready. Run the setup command.")
-    return {"status": "ready", "model": "voyage-multimodal-3.5"}
+        state = boot.phase()
+        raise HTTPException(503, state["detail"] if state["phase"] in ("indexing", "failed") and state["detail"]
+                            else "Search indexes aren't ready yet. They're built automatically on start; give it a minute.")
+    return {"status": "ready", "model": "voyage-multimodal-3.5", "phase": boot.phase()["phase"]}
 
 
 class SessionRequest(BaseModel):
@@ -736,8 +740,8 @@ def public_origin(request: Request) -> str:
     return f"{'https' if is_https(request) else 'http'}://{host.split(',')[0].strip()}"
 
 
-@app.get("/", include_in_schema=False)
-@app.get("/studio", include_in_schema=False)
+@app.api_route("/", methods=["GET", "HEAD"], include_in_schema=False)
+@app.api_route("/studio", methods=["GET", "HEAD"], include_in_schema=False)
 def studio(request: Request) -> HTMLResponse:
     page = (ROOT / "studio.html").read_text(encoding="utf-8")
     return HTMLResponse(page.replace("__ORIGIN__", html.escape(public_origin(request), quote=True)), headers=REVALIDATE)

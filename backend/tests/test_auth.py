@@ -280,3 +280,21 @@ def test_link_previews_use_absolute_urls_and_escape_the_host(signed, monkeypatch
     assert '<meta property="og:image" content="https://inkling.onrender.com/og.png">' in page
     image = signed.get("/og.png")
     assert image.status_code == 200 and image.headers["content-type"] == "image/png"
+
+
+def test_hosts_can_probe_with_head(signed):
+    assert signed.head("/").status_code == 200 and signed.head("/health").status_code == 200
+
+
+def test_ready_explains_a_fresh_boot_instead_of_a_dead_end(client):
+    from backend import boot
+
+    test_client, library = client
+    library.ready.return_value = False
+    boot.set_phase("indexing", "Building search indexes. On a new Atlas cluster this takes 1-3 minutes.")
+    assert "Building search indexes" in test_client.get("/api/ready").json()["detail"]
+    boot.set_phase("failed", "Atlas refused the index setup: maximum number of search indexes reached")
+    assert "maximum number" in test_client.get("/api/ready").json()["detail"]
+    boot.set_phase("ready")
+    library.ready.return_value = True
+    assert test_client.get("/api/ready").json()["status"] == "ready"

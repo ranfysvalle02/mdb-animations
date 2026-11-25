@@ -10,11 +10,11 @@ browser ──HTTPS──▶ Render (Docker: FastAPI + the studio) ──▶ Mon
                                                          ──▶ m-stash         (accounts, server to server)
 ```
 
-The image is the same one Docker Compose runs locally. On Render there's no separate setup job, so the
-container does it on boot: `python -m backend.serve` creates the collections and vector indexes
-(`INKLING_SETUP_ON_START=1`), starts the API on Render's `$PORT`, and seeds the shared demo library once in
-the background (`INKLING_SEED_DEMO=1`). We rehearsed exactly this, against an empty database, before writing
-this guide.
+The image is the same one Docker Compose runs locally, and it configures itself: `python -m backend.serve`
+binds Render's `$PORT` within seconds, then, in the background, builds the collections and vector indexes and
+seeds the shared demo library once. `/api/ready` reports each phase ("Building search indexes…"), and the studio
+shows **Warming up…** until search is ready. On Render it also trusts the TLS proxy automatically (secure
+cookies). So a plain **Web Service** works as well as the Blueprint: it only needs the secrets.
 
 ---
 
@@ -39,6 +39,10 @@ this guide.
 | m-stash `pk_` key | already in `render.yaml` | Accounts. Publishable, so it's safe to commit. **Never** use an `sk_` key here |
 
 ## 3. Render (3 clicks, then wait)
+
+**Either** a Blueprint (below), **or** New → Web Service → this repo → Docker, with these environment variables:
+`MONGODB_URI`, `VOYAGE_API_KEY`, `GEMINI_API_KEY`, `MSTASH_APP_KEY` (and optionally `MSTASH_APP_ID`, `MONGODB_DB`).
+Everything else has safe defaults.
 
 1. Push this repo to GitHub (or GitLab).
 2. Render dashboard → **New → Blueprint** → pick the repo. Render reads [`render.yaml`](../render.yaml).
@@ -103,7 +107,9 @@ python -m backend.smoke_test   # signs in through m-stash and exercises everythi
 | Deploy fails, logs say `Set MONGODB_URI and VOYAGE_API_KEY` | A secret is missing | Add it under **Environment**, then redeploy |
 | Logs show `ServerSelectionTimeoutError` | Atlas is blocking Render | Add Render's outbound IPs (or `0.0.0.0/0` to test) in Atlas **Network Access** |
 | `OperationFailure ... search index` / limit reached | M0 cluster (3-index cap) | Use Flex or M10+ |
-| `/api/ready` returns 503 for a few minutes | Vector indexes are still building | Wait; Atlas reports them queryable within minutes |
+| `/api/ready` says "Building search indexes" | First boot on this cluster | Wait 1-3 minutes; the studio reconnects by itself |
+| `/api/ready` says "Atlas refused the index setup: ..." | Usually the M0 limit (3 search indexes) or a user without index rights | Use Flex/M10+, or a user with read/write; then redeploy (setup is idempotent) |
+| `/api/ready` says "Can't reach MongoDB Atlas" | Network Access or a bad URI | Fix it in Atlas, then redeploy |
 | "Start with the demo library" says there's no demo yet | The background seed hasn't finished (or failed) | Check the logs; or run `python -m backend.seed_demo` in the Shell |
 | Sign-in works but you're signed straight out | The cookie isn't marked `Secure` behind the proxy | Make sure `TRUST_PROXY=1` |
 | First sign-in of the day is slow | m-stash wakes from idle | The UI says so after 4 s; later sign-ins are fast |

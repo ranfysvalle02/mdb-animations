@@ -25,9 +25,9 @@ services:
       # Runtime
       - key: MONGODB_DB
         value: inkling
-      - key: INKLING_SETUP_ON_START   # create collections + vector indexes on boot (idempotent)
+      - key: INKLING_SETUP_ON_START   # build collections + vector indexes in the background on boot (default on)
         value: "1"
-      - key: INKLING_SEED_DEMO        # seed the shared demo library once (billable Voyage calls, first boot only)
+      - key: INKLING_SEED_DEMO        # seed the shared demo library once (default on; Voyage calls on first boot only)
         value: "1"
       - key: TRUST_PROXY              # Render terminates TLS: honor X-Forwarded-Proto/For
         value: "1"
