@@ -466,66 +466,6 @@ def test_motion_revision_passes_previous_choreography_to_the_director():
             **previous, "tracks": [{**previous["tracks"][0], "subject": 1}]}})
 
 
-def test_gemini_video_generation_uses_the_drawing_then_conversation_id():
-    from backend.models import Layer
-    sparks = Sparks.__new__(Sparks)
-    sparks.video_model = "test-video"
-    sparks.client = Mock()
-    video = b"\x00\x00\x00\x18ftypisomfake"
-    sparks.client.interactions.create.return_value = SimpleNamespace(
-        status="completed", id="turn-one", output_video=SimpleNamespace(
-            data=base64.b64encode(video).decode(), mime_type="video/mp4"))
-    layers = [Layer.model_validate(LAYERED["layers"][1])]
-    assert sparks.clip(layers, "make it dance", starring="Little Fox", backdrop="Beach") == ("turn-one", video)
-    first = sparks.client.interactions.create.call_args.kwargs
-    assert first["input"][0]["mime_type"] == "image/png"
-    text = first["input"][1]["text"]
-    assert "Little Fox" in text and "Beach" in text and text.endswith("Story: make it dance")
-    sparks.clip(layers, "now make it snow", "turn-one")
-    revision = sparks.client.interactions.create.call_args.kwargs
-    assert revision["previous_interaction_id"] == "turn-one" and revision["input"] == "now make it snow"
-    sparks.client.interactions.create.return_value.output_video.data = "bad data!"
-    with pytest.raises(AIError, match="invalid video"):
-        sparks.clip(layers, "dance")
-
-
-def test_video_revision_loads_only_the_owners_previous_scene(client):
-    http, _ = client
-    production = http.production
-    production.get_clip.return_value = {
-        "id": DRAWING_ID, "interaction_id": "private-turn", "layers": [LAYERED["layers"][1]]}
-    http.ai.clip.return_value = ("next-turn", b"video")
-    production.save_clip.return_value = {"id": DRAWING_ID, "video_url": "/video"}
-    response = http.post("/api/clips", json={"previous_id": DRAWING_ID, "prompt": "make it snow"})
-    assert response.status_code == 201
-    assert http.ai.clip.call_args.args[1:] == ("make it snow", "private-turn")
-    production.get_clip.return_value = None
-    http.ai.clip.reset_mock()
-    assert http.post("/api/clips", json={"previous_id": DRAWING_ID, "prompt": "make it snow"}).status_code == 404
-    http.ai.clip.assert_not_called()
-
-
-def test_new_video_saves_the_exact_brief_gemini_received(client):
-    from backend.ai import clip_brief
-    http, _ = client
-    http.ai.clip.return_value = ("turn", b"video")
-    http.production.save_clip.return_value = {"id": DRAWING_ID, "video_url": "/video"}
-    body = {"layers": [LAYERED["layers"][1]], "prompt": "dance", "starring": "Little Fox", "backdrop": "Beach"}
-    assert http.post("/api/clips", json=body).status_code == 201
-    brief = http.production.save_clip.call_args.kwargs["brief"]
-    assert brief == clip_brief("dance", "Little Fox", "Beach") and "Little Fox" in brief and "Beach" in brief
-
-
-def test_video_save_failure_explains_possible_provider_charge(client):
-    from backend.library import LibraryError
-    http, _ = client
-    http.ai.clip.return_value = ("turn", b"video")
-    http.production.save_clip.side_effect = LibraryError("embedding failed")
-    response = http.post("/api/clips", json={"layers": [LAYERED["layers"][1]], "prompt": "make it dance"})
-    assert response.status_code == 503
-    assert "generated" in response.json()["detail"] and "charges may still apply" in response.json()["detail"]
-
-
 def test_animate_streams_each_step_then_the_result_or_an_in_band_error(client):
     import json
     http, _ = client

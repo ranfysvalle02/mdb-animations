@@ -8,7 +8,7 @@
   <title>Inkling: AI that works for your pencil</title>
   <link rel="canonical" href="__ORIGIN__/">
   <meta name="keywords" content="AI animation, flipbook, drawing app, sketch search, AI art tools for artists, MongoDB Atlas Vector Search, Voyage AI, multimodal embeddings, Gemini">
-  <script type="application/ld+json">{"@context":"https://schema.org","@type":"WebApplication","name":"Inkling","alternateName":"Inkling: AI that works for your pencil","url":"__ORIGIN__/","image":"__ORIGIN__/og.png","applicationCategory":"DesignApplication","operatingSystem":"Any (web browser)","browserRequirements":"A modern browser; works with finger, stylus, or mouse","description":"Keep the pencil. Hand AI the in-betweens. Inkling poses your own strokes into flipbooks, finds your art by sketch with Voyage AI and MongoDB Atlas Vector Search, and shows who made every line.","featureList":["Flipbooks of your exact strokes: Gemini picks the keyframes, math fills the in-betweens","Search your sketchbook by drawing or words (Voyage AI multimodal embeddings + MongoDB Atlas Vector Search)","Every stroke has an author: a live meter of your hand vs AI drafts","Non-destructive AI takes: compare, branch, keep, undo","Free effects (snow, rain, sparkles, confetti, bubbles) drawn by code","AI video starring your doodle (Gemini)"],"isAccessibleForFree":true,"sameAs":["https://github.com/ranfysvalle02/mdb-animations"]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"WebApplication","name":"Inkling","alternateName":"Inkling: AI that works for your pencil","url":"__ORIGIN__/","image":"__ORIGIN__/og.png","applicationCategory":"DesignApplication","operatingSystem":"Any (web browser)","browserRequirements":"A modern browser; works with finger, stylus, or mouse","description":"Keep the pencil. Hand AI the in-betweens. Inkling poses your own strokes into flipbooks, finds your art by sketch with Voyage AI and MongoDB Atlas Vector Search, and shows who made every line.","featureList":["Flipbooks of your exact strokes: Gemini picks the keyframes, math fills the in-betweens","Search your sketchbook by drawing or words (Voyage AI multimodal embeddings + MongoDB Atlas Vector Search)","Every stroke has an author: a live meter of your hand vs AI drafts","Non-destructive AI takes: compare, branch, keep, undo","Free effects (snow, rain, sparkles, confetti, bubbles) drawn by code","The Lab: edit any flipbook as p5.js code, or have AI write a sketch over your strokes"],"isAccessibleForFree":true,"sameAs":["https://github.com/ranfysvalle02/mdb-animations"]}</script>
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="Inkling">
   <meta property="og:url" content="__ORIGIN__/">
@@ -132,10 +132,6 @@
             <button type="button" id="wand" class="wand-fab" aria-label="Magic wand: a nudge to get going" data-tip="Magic wand &middot; W|Stuck, or just starting? A playful prompt, a creative rule, a timer. Your hand does the rest.">&#129668;</button>
             <div id="flow-banner" class="flow-banner" role="status" hidden><span id="flow-text"></span><b id="flow-clock"></b><span id="flow-actions" class="flow-actions"></span><button type="button" id="flow-stop" aria-label="Stop the flow timer">&times;</button><i id="flow-bar" aria-hidden="true"></i></div>
             <p class="rotate-hint" aria-hidden="true">&#10227; Turn your phone sideways for a bigger page</p>
-            <div id="video-preview" class="video-preview" hidden>
-              <video id="scene-video" controls playsinline loop></video>
-              <button type="button" id="video-close">Back to drawing</button>
-            </div>
             <button type="button" id="authorship" class="authorship" hidden data-tip="Who made this|Strokes by your hand vs. AI drafts you accepted. Tap for the full breakdown."></button>
             <button type="button" id="layer-hud" class="layer-hud" data-tip="You're on this layer|New ink lands here. Tap to see every layer." hidden></button>
             <form id="spark-popover" class="popover" hidden>
@@ -155,7 +151,7 @@
           </div>
 
           <aside class="layers" id="layers-panel" aria-labelledby="layers-heading">
-            <div class="layers-head"><h3 id="layers-heading">Layers</h3><button type="button" id="layer-add" class="icon-button" aria-label="New layer" data-tip="New layer">+</button></div>
+            <div class="layers-head"><h3 id="layers-heading">Layers</h3><button type="button" id="layer-scope" class="layer-scope" aria-pressed="true" hidden data-tip="Edit every frame|Show, hide, move, resize, rename, add, or delete a layer in every frame of the animation at once. Tap for this frame only.">All frames</button><button type="button" id="layer-add" class="icon-button" aria-label="New layer" data-tip="New layer">+</button></div>
             <ol id="layer-list" class="layer-list" aria-label="Layers, top to bottom"></ol>
             <div class="layer-props">
               <label for="layer-opacity">Opacity <output id="layer-opacity-value" for="layer-opacity">100%</output></label>
@@ -212,10 +208,9 @@
             <div class="scene-actions">
               <button type="submit" id="dock-animate" class="scene-go primary" hidden>&#10022; Change it</button>
               <button type="submit" id="go-flipbook" class="scene-go" data-style="art" data-tip="Flipbook|In-betweening without redrawing: your exact strokes, posed in motion. Enter does this.">&#127902; Flipbook</button>
-              <button type="submit" id="go-video" data-online class="scene-go" data-style="video" data-tip="AI video|Gemini films your doodle in its backdrop. It may restyle the art. Paid per take.">&#10022; AI video</button>
               <button type="button" id="dock-similar" data-online class="scene-go" data-tip="Find similar|Your drawing is the search, or type words above. Voyage AI embeddings in MongoDB Atlas.">&#9678; Find similar</button>
             </div>
-            <p id="scene-style-note" class="scene-style-note">Flipbook moves your own strokes. AI video is filmed by Gemini.</p>
+            <p id="scene-style-note" class="scene-style-note">AI picks the poses. Math draws the frames. Every frame is your own strokes.</p>
             <p id="pipeline" class="pipeline" role="status" aria-live="polite" hidden><span id="pipeline-title"></span> <button type="button" id="pipeline-close" class="link-button" aria-label="Hide status">&times;</button></p>
             <p id="drawing-status" class="status" role="status" aria-live="polite"></p>
             <span id="backdrop-status" class="status" role="status" aria-live="polite"></span>
@@ -581,7 +576,7 @@
       <div class="sheet-head"><div><p class="eyebrow">How Inkling keeps you in control</p><h2 id="help-title">You draw. AI assists. You decide.</h2><p class="muted">Every AI step is a draft: compare it, keep it, or toss it. Your lines are never the price of admission.</p></div><button type="button" id="help-close" class="close" aria-label="Close">&times;</button></div>
       <ol class="help-flow">
         <li><b>&#9999;&#65039; Draw it once</b><span>A character, prop, or backdrop. It&rsquo;s saved as strokes, not pixels, and tagged so you can find it later.</span><i>&ldquo;Red Rocket&rdquo;</i></li>
-        <li><b>&#127902; Direct it</b><span>Aim at a layer and say what happens. Gemini picks the poses; math fills the frames. Effects like snow are free code.</span><i>&ldquo;make it snow&rdquo;</i></li>
+        <li><b>&#127902; Direct it</b><span>Aim at a layer and say what happens. Gemini picks the poses; math draws the frames. Every animation is saved as p5.js code you can open.</span><i>&ldquo;make it snow&rdquo;</i></li>
         <li><b>&#9678; Find it again</b><span>Your drawing is the search. Voyage AI and MongoDB Atlas find look-alikes in your private library.</span><i>&ldquo;a rocket in the sky&rdquo;</i></li>
       </ol>
       <h3 class="help-sub flow-keys">Stay in flow</h3>
@@ -610,13 +605,13 @@
         <div><dt>&#128279; Used in</dt><dd>A shortcut to the original. Updates in one tap.</dd></div>
         <div><dt>&#128064; Looks like it</dt><dd>Reverse image search across scenes.</dd></div>
         <div><dt>&#129516; Similar assets</dt><dd>Near-duplicates in your library.</dd></div>
-        <div><dt>&#127902; Flipbook</dt><dd>In-betweening without redrawing: your exact strokes, posed in motion.</dd></div>
+        <div><dt>&#127902; Flipbook</dt><dd>In-betweening without redrawing: your exact strokes, posed in motion. Saved as the p5.js code that draws it.</dd></div>
+        <div><dt>&#9636; All frames</dt><dd>In an animation, hide, move, resize, add, or delete a layer once: every frame follows.</dd></div>
         <div><dt>&#10022; Talk to</dt><dd>Aim your words at one layer or a few. Everyone else keeps their motion.</dd></div>
         <div><dt>&#10216;/&#10217; Lab</dt><dd>Your strokes as numbers: 3D, Processing-style code, AI-written sketches you can read. Bake it back to frames.</dd></div>
         <div><dt>&#9992;&#65039; Offline</dt><dd>Install it, then draw in airplane mode. Your drawing is kept on this device; AI and search wait for the signal.</dd></div>
         <div><dt>&#10052;&#65039; Effects</dt><dd>Snow, rain, sparkles, confetti, bubbles: tiny strokes drawn by code. Free, instant, no AI.</dd></div>
         <div><dt>&#9312; Takes</dt><dd>Every AI attempt, side by side. Flip back, branch, hold to compare. Nothing is final until you keep it, and Undo brings the takes back.</dd></div>
-        <div><dt>&#10022; AI video</dt><dd>Gemini films your doodle in its backdrop. It may restyle the art.</dd></div>
         <div><dt>&#10022; Variations</dt><dd>One asset in, lookalikes out. AI edits your strokes; you keep and finish.</dd></div>
         <div><dt>&#9998; Process</dt><dd>Every stroke keeps its order and time. Replay any drawing, or save the replay as a video.</dd></div>
         <div><dt>&#128221; Audit trail</dt><dd>Every AI step you took or skipped, saved with the asset. Nothing is a black box.</dd></div>
@@ -689,7 +684,7 @@
       <section class="hood-card">
         <div>
           <h3>&#127811; MongoDB Atlas: your private shelf</h3>
-          <p>Every drawing, version, flipbook frame, video, and its coordinates live together in one database. <b>Atlas Vector Search</b> finds the nearest neighbors on the map, filtered to <b>your</b> library only, so one artist&rsquo;s search can never see another&rsquo;s art. Ask &ldquo;the moment the rocket leaves the ground&rdquo; and it can land on the exact frame.</p>
+          <p>Every drawing, version, flipbook frame, and its coordinates live together in one database. <b>Atlas Vector Search</b> finds the nearest neighbors on the map, filtered to <b>your</b> library only, so one artist&rsquo;s search can never see another&rsquo;s art. Ask &ldquo;the moment the rocket leaves the ground&rdquo; and it can land on the exact frame.</p>
         </div>
         <ul class="hood-points">
           <li>&#128274; Private to your account</li>
@@ -705,9 +700,8 @@
           <ul class="hood-jobs">
             <li><b>Tags</b> your saves so search just works (skip it by adding your own).</li>
             <li><b>Sparks</b>: a blue-pencil sketch to trace, a fix for a stuck spot, a refinement. Drafts you keep or skip, marked as AI forever.</li>
-            <li><b>Flipbooks</b>: picks a few key poses for the layers you aim at. Plain math fills the frames in between. Your strokes are never redrawn, and effects like snow or rain are code, not AI.</li>
+            <li><b>Flipbooks</b>: picks a few key poses for the layers you aim at. Plain math fills the frames in between, and the whole animation is saved as a short p5.js sketch: frame 1 plus that code reproduces every frame. Your strokes are never redrawn, and effects like snow or rain are code, not AI.</li>
             <li><b>Lab sketches</b>: writes readable p5.js (Processing for the web) that moves your strokes. It runs sandboxed in your browser with no network, and you can edit every line.</li>
-            <li><b>AI video</b> (Gemini Omni): a new take inspired by your art. It may restyle it, it is paid, and <b>What the AI saw</b> shows the exact picture and words it got.</li>
           </ul>
         </div>
       </section>
@@ -764,14 +758,6 @@
           <p class="muted">Plain <a href="https://p5js.org" target="_blank" rel="noopener">p5.js</a>, Processing for the web, in a sandbox with no network. <code>random()</code> and <code>noise()</code> are seeded, so a bake is repeatable.</p>
         </details>
       </section>
-    </dialog>
-
-    <dialog id="seen" class="sheet seen" aria-labelledby="seen-title">
-      <div class="sheet-head"><div><p class="eyebrow">No black box</p><h2 id="seen-title">What the AI saw</h2><p class="muted">Gemini received exactly this picture and these words. Nothing else from your library.</p></div><button type="button" id="seen-close" class="close" aria-label="Close">&times;</button></div>
-      <div class="seen-body">
-        <img id="seen-image" alt="The drawing that was sent">
-        <div><h3 class="help-sub">The words</h3><blockquote id="seen-brief"></blockquote><p id="seen-note" class="muted"></p></div>
-      </div>
     </dialog>
 
     <div id="tooltip" class="tooltip" role="tooltip" hidden><strong></strong><span></span></div>

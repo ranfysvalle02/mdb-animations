@@ -30,9 +30,23 @@ def ensure(collection) -> None:
     print(f"{collection.mongo.name}: collection and Voyage vector index are ready.", flush=True)
 
 
+def drop_ai_video(database) -> None:
+    """AI video is gone: its scenes, vector index, and stored media go too. Accounts live in m-stash; untouched."""
+    names = set(database.list_collection_names())
+    if "clips" in names:
+        for index in database["clips"].list_search_indexes():
+            database["clips"].drop_search_index(index["name"])
+        database.drop_collection("clips")
+        print("AI video: dropped the clips collection and its vector index.", flush=True)
+    for bucket in ("clip_media.files", "clip_media.chunks"):
+        if bucket in names:
+            database.drop_collection(bucket)
+
+
 def main() -> None:
     library = Library()
     try:
+        drop_ai_video(library.drawings.mongo.database)
         production = Production(library)
         for collection in [library.drawings, *production.collections]:
             ensure(collection)

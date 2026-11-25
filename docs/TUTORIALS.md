@@ -19,7 +19,7 @@ Screenshots show an earlier layout; follow the current labels in the instruction
 | 1 | [Your studio in 30 seconds](#1-your-studio-in-30-seconds) | Sign up, pick the demo library |
 | 2 | [Never start from a blank page](#2-never-start-from-a-blank-page) | Starters, Ask AI |
 | 3 | [Draw it once, grow a cast](#3-draw-it-once-grow-a-cast) | Save an asset, variations, the duplicate check |
-| 4 | [Bring it to life, then share it](#4-bring-it-to-life-then-share-it) | Flipbook or AI video, revise by talking, a share link |
+| 4 | [Bring it to life, then share it](#4-bring-it-to-life-then-share-it) | A flipbook, revised by talking or by code, a share link |
 | 5 | [Search by meaning](#5-search-by-meaning) | Find assets and animation moments by words, sketch, or asset |
 | 6 | [Always know: where, and how it was made](#6-always-know-where-and-how-it-was-made) | Where used, Breakdown, replay, evolution |
 | 7 | [Your art, multiplied](#7-your-art-multiplied) | Copy, paste, the stamp brush, flow shortcuts |
@@ -87,12 +87,12 @@ Asset cards show versions, usage, and lineage (*✦ variant of Red Rocket*).
 
 Under the canvas there's one box. Type or speak what happens (or leave it blank for a surprise), check
 who's **Starring** (this drawing, or any saved asset) and where (**in** a starter or your own backdrop),
-then press **🎞 Flipbook** (or Enter) or **✦ AI video**. Asset cards in your library have a shortcut:
+then press **🎞 Flipbook** (or Enter). Asset cards in your library have a shortcut:
 **✦ Bring to life** (or **✦ Use as backdrop**) fills it in for you. A new or changed drawing is saved and
 tagged first.
 
-**Flipbook** moves your original strokes; nothing is redrawn. **AI video** has Gemini film your doodle in
-its backdrop; it may restyle the art, and each take (including revisions) is a paid Gemini video call.
+**Flipbook** moves your original strokes; nothing is redrawn. Gemini picks the poses, math draws the frames,
+and **⟨/⟩ Code** on any take shows the p5.js sketch that draws it: keyframes as numbers you can change.
 
 While a take is open, type or speak a change and tap **✦ Change it**. Each change becomes a new numbered
 take in the **Takes** strip; your drawing doesn't change until you keep one.
@@ -115,9 +115,12 @@ first, and then it can move too.
   restores your drawing *and* every take.
 - **Discard** (Esc) closes the preview; nothing was touched.
 
-Video revisions use the previous Gemini take. AI video takes are saved automatically (the strip says
-*Takes (all saved)*) and can be reopened from **Animated scenes**.
-Video search uses the source drawing and directions, not the generated frames.
+**Take it apart.** After **Keep**, open **Layers**: edits reach **All frames** by default. Hide the sky in every
+frame, drag the rocket a little lower once (the whole flight moves), or add a layer to draw a puff of smoke on a few
+frames. One Undo undoes the lot. Tap **All frames** to switch to this frame only.
+
+**Change it as code.** **⟨/⟩ Edit as code** opens the scene's own sketch in the Lab. Change `STRENGTH = 1` to `1.4`,
+or nudge a keyframe's `y`, press ⌘/Ctrl+Enter, then **⤓ Bake to frames**: the frames come back in your layers.
 
 Choose **Backdrop** before animating an asset to use a starter or a saved backdrop. To make your own,
 save a drawing as an asset with type **Backdrop**. Its layers are copied into the new scene and remain
@@ -156,7 +159,7 @@ From anywhere, press **⌘/Ctrl+K** (or **/**, or tap **Search your art** in the
 is the same library for browsing.
 
 Open **Find your art**. Search across **Everything**, or narrow results to **Assets**, **Backdrops**, or
-**Animated scenes**. Video matches use their source drawing and directions, not generated frames.
+**Animated scenes**.
 
 **By words.** Describe the moment: *"the rocket flying high in the sky above the hills"*. Hits are
 grouped by scene, with the best frame first and chips for every frame. **Open frame N** puts it on the

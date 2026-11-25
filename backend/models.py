@@ -478,24 +478,6 @@ class AnimateRequest(BaseModel):
         return self
 
 
-class ClipRequest(BaseModel):
-    """Create or revise an AI-generated video inspired by the artist's scene."""
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-    prompt: str = Field(default="", max_length=300)
-    layers: list[Layer] = Field(default_factory=list, max_length=MAX_LAYERS)
-    previous_id: Annotated[str, Field(pattern=UUID_PATTERN)] | None = None
-    starring: str = Field(default="", max_length=80)
-    backdrop: str = Field(default="", max_length=40)
-
-    @model_validator(mode="after")
-    def limits(self) -> "ClipRequest":
-        if not self.previous_id:
-            check_layers(self.layers, require_ink=True)
-        if self.previous_id and len(self.prompt) < 3:
-            raise ValueError("Describe what to change in the scene.")
-        return self
-
-
 class RefineIdeasRequest(BaseModel):
     """Ask AI what this drawing could use next: a few short, editable prompts."""
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
@@ -566,7 +548,7 @@ class VariationRequest(BaseModel):
 class SketchSearch(BaseModel):
     """Search with a drawing: the visible ink is the query."""
     model_config = ConfigDict(extra="forbid")
-    scope: Literal["asset", "shot", "frame", "clip", "idea"] = "frame"
+    scope: Literal["asset", "shot", "frame", "idea"] = "frame"
     asset_type: AssetType | None = None
     animated: bool = False
     layers: list[Layer] = Field(min_length=1, max_length=MAX_LAYERS)

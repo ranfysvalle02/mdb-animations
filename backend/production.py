@@ -26,7 +26,6 @@ import time
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from gridfs import GridFSBucket
 from bson.binary import Binary
 from cinematlas.core import Image, Text
 from cinematlas.core.collection import VECTOR_PATH
@@ -119,16 +118,6 @@ def remap_ids(value, ids: dict[str, str]):
     if isinstance(value, dict):
         return {key: remap_ids(item, ids) for key, item in value.items()}
     return value
-
-
-def clip_summary(record: dict) -> dict:
-    return {
-        "id": record["id"], "name": record["name"], "prompt": record["prompt"], "brief": record.get("brief", ""),
-        "revision": bool(record.get("previous_id")),
-        "asset_ids": record.get("asset_ids", []), "updated_at": record["updated_at"],
-        "image_url": f"/api/clips/{record['id']}/image",
-        "video_url": f"/api/clips/{record['id']}/video",
-    }
 
 
 def metadata_filter(project: str | None, sequence: str | None, status: str | None) -> dict:
@@ -298,11 +287,6 @@ class Production(Scoped):
             "shot_frames", embed=Image("image"), key="id",
             filters=["owner", "project", "sequence", "status", "shot_id", "asset_ids", "frames"],
         )
-        self.clips = atlas.collection(
-            "clips", embed=Text("name") + Text("story", label="Direction") + Image("image"),
-            key="id", filters=["owner", "asset_ids"],
-        )
-        self.clip_media = GridFSBucket(self.assets.mongo.database, bucket_name="clip_media")
         # Public snapshots of scenes (a GIF and its explanation), found only by their unguessable token.
         self.shares = self.assets.mongo.database["shares"]
 
@@ -313,7 +297,7 @@ class Production(Scoped):
 
     @property
     def collections(self) -> list:
-        return [self.assets, self.shots, self.elements, self.frames, self.clips]
+        return [self.assets, self.shots, self.elements, self.frames]
 
     def _add(self, collection, records: list[dict], what: str) -> None:
         if not records:
@@ -321,51 +305,6 @@ class Production(Scoped):
         result = collection.add(records, retries=1)
         if result.added != len(records) or result.failed or result.skipped:
             raise LibraryError(f"{what} embedding failed; no save was confirmed.")
-
-    def get_clip(self, clip_id: str) -> dict | None:
-        return self.clips.mongo.find_one(self.q({"id": clip_id}), {"_id": 0, "embedding": 0})
-
-    def validate_clip_layers(self, layers: list[Layer]) -> None:
-        links = [layer.asset for layer in layers if layer.asset]
-        for link in links:
-            if not self.assets.mongo.find_one(self.q({"id": link.asset_id}), {"_id": 1}):
-                raise ProductionError("An asset in this scene is no longer available.")
-
-    def save_clip(self, layers: list[Layer], prompt: str, interaction_id: str, video: bytes,
-                  previous: dict | None = None, *, brief: str = "") -> dict:
-        self.validate_clip_layers(layers)
-        links = [layer.asset for layer in layers if layer.asset]
-        name = (previous or {}).get("name") or next(
-            (layer.name for layer in layers if layer.asset), "My scene")
-        story = "\n".join(filter(None, [(previous or {}).get("story", ""), prompt]))[-2000:]
-        image = png_bytes(render_image(layers))
-        media_id = self.clip_media.upload_from_stream("scene.mp4", video)
-        record = {
-            "id": str(uuid4()), "owner": self.q()["owner"], "name": name, "prompt": prompt,
-            "story": story, "brief": brief[:2000], "layers": [layer.model_dump() for layer in layers],
-            "asset_ids": list(dict.fromkeys(link.asset_id for link in links)),
-            "interaction_id": interaction_id, "media_id": media_id,
-            "image": image, "png": base64.b64encode(image).decode("ascii"),
-            "updated_at": now(), "previous_id": (previous or {}).get("id"),
-        }
-        try:
-            self._add(self.clips, [record], "Scene")
-        except Exception:
-            self.clip_media.delete(media_id)
-            raise
-        return clip_summary(record)
-
-    def list_clips(self, query: str = "") -> list[dict]:
-        if query:
-            return [clip_summary(hit) for hit in close_to_best(
-                self.clips.search(query).rerank(False).limit(24).where(**self.q()))]
-        rows = self.clips.mongo.find(self.q(), {"_id": 0, "embedding": 0, "png": 0, "image": 0,
-                                                "layers": 0}).sort("updated_at", -1).limit(24)
-        return [clip_summary(row) for row in rows]
-
-    def search_clips(self, picture) -> list[dict]:
-        return [clip_summary(hit) for hit in close_to_best(
-            self.clips.search(picture).rerank(False).limit(24).where(**self.q()))]
 
     # ------------------------------------------------------------------ assets
     def save_asset(self, asset: Asset, asset_id: str | None = None) -> dict:
@@ -612,8 +551,7 @@ class Production(Scoped):
         found = self._found(self._nearest(self.assets, vector, 12, self.q(), SEARCH_SPREAD),
                             self._nearest(self.shots, vector, 8, self.q(), SEARCH_SPREAD),
                             self._nearest(self.frames, vector, 24, self.q(), SEARCH_SPREAD))
-        clips = [clip_summary(row) for row in self._nearest(self.clips, vector, 8, self.q(), SEARCH_SPREAD)]
-        return {**found, "clips": clips, "timing": {"embed_ms": round((embedded - started) * 1000),
+        return {**found, "timing": {"embed_ms": round((embedded - started) * 1000),
                                     "search_ms": round((time.perf_counter() - embedded) * 1000), "embeddings": 1}}
 
     def similar_everywhere(self, asset_id: str) -> dict:
@@ -640,8 +578,7 @@ class Production(Scoped):
         matches = self._nearest(self.frames, list(vector), 12, self.q({"frames": {"$gte": 2}}), 0.12)
         seen = {row["id"] for row in linked}
         found = self._found(assets, [], linked + [row for row in matches if row["id"] not in seen])
-        clips = self.clips.mongo.find(self.q({"asset_ids": asset_id}), {"_id": 0}).sort("updated_at", -1).limit(12)
-        return {**found, "clips": [clip_summary(row) for row in clips], "of": {"id": doc["id"], "name": doc["name"]},
+        return {**found, "of": {"id": doc["id"], "name": doc["name"]},
                 "timing": {"embed_ms": 0, "search_ms": round((time.perf_counter() - started) * 1000), "embeddings": 0}}
 
     def _shot_model(self, shot_id: str) -> Shot:
@@ -871,11 +808,10 @@ class Production(Scoped):
     def stores(self) -> list:
         """Every owner-scoped Mongo collection, ideas included, in dependency order."""
         return [self.library.drawings.mongo, self.assets.mongo, self.versions, self.shots.mongo,
-                self.elements.mongo, self.frames.mongo, self.clips.mongo]
+                self.elements.mongo, self.frames.mongo]
 
     def counts(self) -> dict:
-        return {"assets": self.assets.mongo.count_documents(self.q()), "scenes": (
-                    self.shots.mongo.count_documents(self.q()) + self.clips.mongo.count_documents(self.q())),
+        return {"assets": self.assets.mongo.count_documents(self.q()), "scenes": self.shots.mongo.count_documents(self.q()),
                 "ideas": self.library.drawings.mongo.count_documents(self.q())}
 
     def copy_library(self, source: str) -> dict:
@@ -886,7 +822,7 @@ class Production(Scoped):
         """
         if source == self.q()["owner"]:
             raise ProductionError("That library is already yours.")
-        ids = {row["id"]: str(uuid4()) for store in (self.library.drawings.mongo, self.assets.mongo, self.shots.mongo, self.clips.mongo)
+        ids = {row["id"]: str(uuid4()) for store in (self.library.drawings.mongo, self.assets.mongo, self.shots.mongo)
                for row in store.find({"owner": source}, {"_id": 0, "id": 1})}
 
         copied = {}

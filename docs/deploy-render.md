@@ -4,7 +4,7 @@ One Docker web service on [Render](https://render.com), one hosted MongoDB Atlas
 About 15 minutes, most of it waiting for the first build.
 
 ```
-browser ──HTTPS──▶ Render (Docker: FastAPI + the studio) ──▶ MongoDB Atlas   (data + 5 vector indexes)
+browser ──HTTPS──▶ Render (Docker: FastAPI + the studio) ──▶ MongoDB Atlas   (data + 5 vector indexes: drawings, assets, scenes, elements, frames)
                                                          ──▶ Voyage AI       (embeddings)
                                                          ──▶ Gemini          (drafts)
                                                          ──▶ m-stash         (accounts, server to server)

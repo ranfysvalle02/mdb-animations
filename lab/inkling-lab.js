@@ -75,7 +75,9 @@
       return '#123b38';
     }
   };
-  const asPoint = p => (Array.isArray(p) ? { x: +p[0], y: +p[1], z: +(p[2] || 0) } : { x: +p.x, y: +p.y, z: +(p.z || 0) });
+  // Pen pressure rides along, so a baked line keeps the artist's thick-and-thin.
+  const asPoint = p => (Array.isArray(p) ? { x: +p[0], y: +p[1], z: +(p[2] || 0) }
+    : { x: +p.x, y: +p.y, z: +(p.z || 0), ...(Number.isFinite(p.pressure) ? { pressure: p.pressure } : {}) });
   // Where a point lands on the paper, through the current transform: what you see is what gets baked.
   function onPaper(points, width) {
     const r = window._renderer;
@@ -88,7 +90,7 @@
       for (const p of points) {
         const clip = mul(P, mul(V, mul(M, [p.x, p.y, p.z, 1])));
         if (clip[3] <= 1e-6) continue; // behind the camera
-        out.push({ x: (clip[0] / clip[3] + 1) / 2 * window.width, y: (1 - clip[1] / clip[3]) / 2 * window.height });
+        out.push({ x: (clip[0] / clip[3] + 1) / 2 * window.width, y: (1 - clip[1] / clip[3]) / 2 * window.height, pressure: p.pressure });
         depth += clip[3];
       }
       return { points: out, width: width * Math.max(0.2, Math.min(4, out.length ? eye / (depth / out.length) : 1)) };
@@ -96,7 +98,7 @@
     const m = window.drawingContext.getTransform();
     const density = window.pixelDensity();
     return {
-      points: points.map(p => ({ x: (m.a * p.x + m.c * p.y + m.e) / density, y: (m.b * p.x + m.d * p.y + m.f) / density })),
+      points: points.map(p => ({ x: (m.a * p.x + m.c * p.y + m.e) / density, y: (m.b * p.x + m.d * p.y + m.f) / density, pressure: p.pressure })),
       width: width * Math.sqrt(Math.abs(m.a * m.d - m.b * m.c)) / density
     };
   }
@@ -109,7 +111,10 @@
     const webgl = !!(window._renderer && window._renderer.isP3D);
     if (baking) {
       const placed = onPaper(pts, width);
-      if (placed.points.length) baking.current.push({ points: placed.points, color: toHex(color), width: placed.width, fill: style.fill ? toHex(style.fill) : null });
+      if (placed.points.length) {
+        baking.current.push({ points: placed.points, color: toHex(color), width: placed.width, fill: style.fill ? toHex(style.fill) : null,
+          layer: typeof style.layer === 'string' ? style.layer.slice(0, 40) : null }); // which layer it bakes into
+      }
     }
     window.push();
     window.stroke(color);
@@ -126,7 +131,7 @@
   };
   window.inkStroke = (stroke, map) => {
     if (!stroke || !stroke.points) return;
-    window.ink(map ? stroke.points.map((p, i) => map(p, i, stroke)) : stroke.points, { color: stroke.color, width: stroke.width });
+    window.ink(map ? stroke.points.map((p, i) => map(p, i, stroke)) : stroke.points, { color: stroke.color, width: stroke.width, layer: stroke.layer });
   };
   window.loopT = () => ((Math.max(1, window.frameCount) - 1) % window.LOOP) / window.LOOP;
 

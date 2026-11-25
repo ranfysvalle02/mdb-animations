@@ -29,6 +29,7 @@
   const SHAPES = new Set(['line', 'rect', 'ellipse']);
   const TOOL_KEYS = { b: 'pen', p: 'pen', e: 'eraser', l: 'line', r: 'rect', o: 'ellipse', m: 'move', v: 'move', s: 'spark', k: 'stamp' };
   const MAX_FRAMES = 80;
+  const MAX_SKETCH_CODE = 12000; // a scene's code, as saved (backend/models.py MAX_SKETCH_CODE)
 
   let layerSeq = 0;
   const newLayer = (name, props = {}) => ({ id: ++layerSeq, name, visible: true, opacity: 1, strokes: [], asset: null, ...props });
@@ -47,10 +48,9 @@
   let directing = false;
   let offline = !navigator.onLine; // airplane mode (or no route to Inkling): drawing only, nothing leaves the device
   let draftRevision = -1; // the canvas revision last kept on this device
-  let currentClip = null;
-  let clipTakes = []; // AI video takes in this session (each one is already saved)
   let targets = null; // the layers the box talks to (a Set of ids); null means everything that can move
   let targetGlow = 0; // until when the canvas outlines them
+  let everyFrame = true; // in an animation, layer edits reach the same layer in every frame (decompose, then recompose)
   let peeking = false; // while "hold to compare" is held, previews step aside to show the original
   let motionSeconds = 10;
   let sceneMotion = null; // the accepted direction behind this scene's frames, saved with the scene
@@ -495,6 +495,19 @@
   });
 
   // ---------------------------------------------------------------- layers panel
+  // The same layer in every frame: matched by position and name, so a scene can be taken apart and put back together.
+  const scoped = () => everyFrame && frames.length > 1;
+  function twins(layer) {
+    if (!scoped()) return [layer];
+    const index = layers.indexOf(layer);
+    return frames.map(stack => (stack === layers ? layer : stack[index])).filter(twin => twin && twin.name === layer.name);
+  }
+  const frameWord = list => (list.length > 1 ? ` in all ${list.length} frames` : frames.length > 1 ? ` on frame ${frameIndex + 1}` : '');
+  $('layer-scope').addEventListener('click', () => {
+    everyFrame = !everyFrame;
+    renderLayersPanel();
+    flashTray(everyFrame ? `\u25a4 Layer edits reach all ${frames.length} frames.` : `\u25a4 Layer edits stay on frame ${frameIndex + 1}.`);
+  });
   function renderLayersPanel() {
     const list = $('layer-list');
     list.replaceChildren(...[...layers].reverse().map(layer => {
@@ -512,9 +525,13 @@
         : '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><path d="M4 4l16 16"/></svg>';
       eye.addEventListener('click', () => {
         pushUndo();
-        layer.visible = !layer.visible;
+        const show = !layer.visible;
+        const all = twins(layer);
+        for (const twin of all) twin.visible = show;
         composite();
+        rebuildOnion();
         renderLayersPanel();
+        if (all.length > 1) flashTray(`${show ? 'Showing' : 'Hid'} \u201c${layer.name}\u201d${frameWord(all)}.`);
       });
       const thumb = document.createElement('canvas');
       thumb.className = 'layer-thumb';
@@ -555,6 +572,9 @@
     $('layer-copy').disabled = layers.length >= MAX_LAYERS;
     $('layer-brush').disabled = !activeLayer().strokes.some(stroke => !stroke.erase);
     $('layers-count').textContent = String(layers.length);
+    $('layer-scope').hidden = frames.length < 2;
+    $('layer-scope').setAttribute('aria-pressed', String(everyFrame));
+    $('layer-scope').textContent = everyFrame ? `All ${frames.length} frames` : `Frame ${frameIndex + 1} only`;
     renderSaveKind(); // the shot panel lists placed assets, which undo/delete can change
     updateHud();
     renderWho();
@@ -572,7 +592,7 @@
       const value = input.value.trim();
       if (save && value && value !== layer.name) {
         pushUndo();
-        layer.name = value;
+        for (const twin of twins(layer)) twin.name = value;
       }
       renderLayersPanel();
     };
@@ -591,35 +611,48 @@
     const used = new Set(layers.map(layer => layer.name));
     let n = layers.length + 1;
     while (used.has(`Layer ${n}`)) n++;
+    const at = layers.indexOf(activeLayer()) + 1;
     const layer = newLayer(`Layer ${n}`);
-    layers.splice(layers.indexOf(activeLayer()) + 1, 0, layer);
+    if (scoped()) for (const stack of frames) if (stack !== layers) stack.splice(Math.min(at, stack.length), 0, newLayer(layer.name));
+    layers.splice(at, 0, layer);
     activeId = layer.id;
     rebuildAll();
+    if (scoped()) flashTray(`New layer \u201c${layer.name}\u201d in all ${frames.length} frames: draw on any of them.`);
   });
   $('layer-delete').addEventListener('click', () => {
     if (layers.length === 1) return;
     pushUndo();
     const index = layers.indexOf(activeLayer());
-    const [removed] = layers.splice(index, 1);
-    activeId = layers[Math.max(0, index - 1)].id;
+    const all = twins(activeLayer());
+    for (const stack of frames) {
+      const at = stack.findIndex(layer => all.includes(layer));
+      if (at >= 0 && stack.length > 1) stack.splice(at, 1);
+    }
+    const removed = all[0];
+    activeId = layers[Math.max(0, Math.min(index - 1, layers.length - 1))].id;
     recount();
+    rebuildOnion();
     rebuildAll();
-    message('drawing-status', `Deleted "${removed.name}". Undo brings it back.`);
+    message('drawing-status', `Deleted "${removed.name}"${frameWord(all)}. Undo brings it back.`);
   });
   function moveLayer(step) {
     const index = layers.indexOf(activeLayer());
     const target = index + step;
     if (target < 0 || target >= layers.length) return;
     pushUndo();
-    [layers[index], layers[target]] = [layers[target], layers[index]];
+    const name = layers[index].name;
+    for (const stack of scoped() ? frames : [layers]) {
+      if (stack[index]?.name === name && stack[target]) [stack[index], stack[target]] = [stack[target], stack[index]];
+    }
     composite();
+    rebuildOnion();
     renderLayersPanel();
   }
   $('layer-up').addEventListener('click', () => moveLayer(1));
   $('layer-down').addEventListener('click', () => moveLayer(-1));
   $('layer-opacity').addEventListener('input', event => {
     opacityBefore ??= snapshot();
-    activeLayer().opacity = Number(event.target.value) / 100;
+    for (const twin of twins(activeLayer())) twin.opacity = Number(event.target.value) / 100;
     $('layer-opacity-value').value = `${event.target.value}%`;
     scheduleComposite();
   });
@@ -813,6 +846,7 @@
         const from = Math.hypot(moving.start.x * W - center.x, moving.start.y * H - center.y) || 1;
         const k = Math.max(0.15, Math.min(6, Math.hypot(point.x * W - center.x, point.y * H - center.y) / from));
         moving.layer.strokes = scaledStrokes(moving.original, center, k);
+        moving.k = k;
       } else {
         // Slide the whole layer; the offset is clamped so no point is squashed against the canvas edge.
         const { bounds } = moving;
@@ -821,6 +855,8 @@
         moving.layer.strokes = moving.original.map(stroke => ({
           ...stroke, points: stroke.points.map(p => ({ ...p, x: p.x + dx, y: p.y + dy }))
         }));
+        moving.dx = dx;
+        moving.dy = dy;
       }
       renderLayer(moving.layer);
       scheduleComposite();
@@ -855,11 +891,19 @@
     if (event.pointerId !== pointer) return;
     pointer = null;
     if (moving) {
-      const { layer, mode, changed } = moving;
+      const { layer, mode, changed, dx = 0, dy = 0, k = 1, center } = moving;
       moving = null;
       if (changed) {
+        // The same move for this layer in every other frame: its whole animation shifts (or grows) together.
+        const all = twins(layer);
+        for (const twin of all) {
+          if (twin === layer) continue;
+          twin.strokes = mode === 'scale' ? scaledStrokes(twin.strokes, center, k)
+            : twin.strokes.map(stroke => ({ ...stroke, points: stroke.points.map(p => ({ ...p, x: Math.max(0, Math.min(1, p.x + dx)), y: Math.max(0, Math.min(1, p.y + dy)) })) }));
+        }
+        if (all.length > 1) { rebuildOnion(); flashTray(`${mode === 'scale' ? 'Resized' : 'Moved'} \u201c${layer.name}\u201d${frameWord(all)}.`); }
         recount();
-        logEvent('artist', mode === 'scale' ? 'Resized' : 'Moved', `${layer.name}${frames.length > 1 ? ` on frame ${frameIndex + 1}` : ''}`);
+        logEvent('artist', mode === 'scale' ? 'Resized' : 'Moved', `${layer.name}${frameWord(all)}`);
       }
       renderLayersPanel();
     } else if (placeDraft) {
@@ -2773,7 +2817,7 @@
     fps = MOTION_FPS;
     $('fps').value = String(MOTION_FPS);
     sceneMotion = motionRecord(spec);
-    sceneSketch = null;
+    sceneSketch = sketchRecord(spec);
     if (!editing || editing.kind !== 'shot') {
       // One tap to save: a readable scene code ("LittleFox_0413") and the direction as its notes (Voyage reads those too).
       if (!CODE.test($('title').value.trim())) {
@@ -2808,6 +2852,7 @@
         setDockBusy(false);
         message('drawing-status', of > 1 ? 'Undone. Your takes are back: pick another, or change one.' : 'Undone. The preview is back: keep it, change it, or discard it.');
       } },
+        { label: '\u27e8/\u27e9 Edit as code', tip: 'Edit as code|This animation is a p5.js sketch: keyframes as numbers. Change one, then bake.', run: () => openTakeAsCode() },
         { label: '\u25c6 How it moves', tip: 'How it moves|Keyframes, in-betweens, and spacing, shown on your shot.', run: () => explainScene() }]);
     setTool('move');
     play();
@@ -2910,6 +2955,17 @@
         list.append(item);
       }
       five.append(list);
+    }
+    // The source of truth: frame 1 plus this code reproduce every frame above.
+    const code = motionDraft ? sketchRecord(motionDraft.spec)?.code : sceneSketch?.code;
+    if (code) {
+      const six = section('\u27e8/\u27e9', 'The code that draws it', 'Frame 1 plus these lines reproduce every frame above. Nothing hidden: change a number, run it, bake it.');
+      const pre = el('pre', 'explain-code');
+      pre.textContent = code;
+      const open = el('button', 'pill primary', '\u27e8/\u27e9 Edit in the Lab');
+      open.type = 'button';
+      open.addEventListener('click', () => { $('explain-sheet').close(); openTakeAsCode(); });
+      six.append(pre, open);
     }
     $('explain-math').checked = showMath;
     $('explain-sheet').showModal();
@@ -3202,9 +3258,9 @@
   }
   $('pipeline-close').addEventListener('click', () => { $('pipeline').hidden = true; });
 
-  // A take on screen decides what the box does: revise that video, or that flipbook.
-  const revisingMode = () => currentClip ? 'video' : motionDraft ? 'art' : '';
-  const GO_BUTTONS = ['go-flipbook', 'go-video', 'dock-similar'];
+  // A take on screen turns the box into its editor: words revise that flipbook.
+  const revisingMode = () => motionDraft ? 'art' : '';
+  const GO_BUTTONS = ['go-flipbook', 'dock-similar'];
   function setDockBusy(on) {
     on = on || directing;
     const revising = revisingMode();
@@ -3215,16 +3271,14 @@
     $('dock-animate').classList.toggle('busy', on);
     $('dock-animate').textContent = on ? 'Creating\u2026' : '\u2726 Change it';
     for (const id of GO_BUTTONS) $(id).disabled = on;
-    $('go-flipbook').hidden = $('go-video').hidden = !!revising;
+    $('go-flipbook').hidden = !!revising;
     // While a take is on screen the prompt revises it; who and where only matter for a new take.
     $('scene-picks').hidden = !!revising;
-    $('scene-prompt').placeholder = revising === 'art' ? 'What would you change? e.g. \u201cjump higher\u201d'
-      : revising ? 'What would you change? e.g. \u201cmake it snow\u201d'
+    $('scene-prompt').placeholder = revising ? 'What would you change? e.g. \u201cjump higher\u201d'
       : 'What happens? Or leave it blank for a surprise';
     renderTakes();
-    $('scene-style-note').textContent = revising === 'video' ? 'Each change is a new take, saved in your library. Tap any take to watch it again.'
-      : revising === 'art' ? 'Each change is a new take built on the one you see. Nothing changes until you keep one.'
-      : 'Flipbook moves your own strokes. AI video is filmed by Gemini.';
+    $('scene-style-note').textContent = revising ? 'Each change is a new take built on the one you see. Nothing changes until you keep one.'
+      : 'AI picks the poses. Math draws the frames. Every frame is your own strokes.';
     if (offline) $('scene-style-note').textContent = revising ? 'Offline: quick moves, effects, and tweaks. All math, all yours.'
       : 'Offline: Flipbook picks a quick move from your words. Plain math, no AI.';
     if (offline && !revising) $('scene-prompt').placeholder = 'What happens? e.g. \u201chop in the snow\u201d';
@@ -3286,7 +3340,6 @@
   // From a library card: cast it (or set the scene), then hand over to the prompt.
   function castInScene(item) {
     if (motionDraft) skipMotion();
-    if (currentClip) closeClip();
     if (item.type === 'environment') {
       if (!savedBackdrops.some(b => b.id === item.id)) savedBackdrops.unshift(item);
       renderSceneBackdrops();
@@ -3548,82 +3601,6 @@
     }
   }
 
-  function showClip(clip, { keepTakes = false } = {}) {
-    if (motionDraft) skipMotion();
-    if (!keepTakes) clipTakes = clipTakes.some(item => item.id === clip.id) ? clipTakes : [clip];
-    currentClip = clip;
-    $('scene-video').src = clip.video_url;
-    $('scene-video').muted = true;
-    $('video-preview').hidden = false;
-    const seen = [{ label: '\u2726 What the AI saw', tip: 'No black box|The exact picture and words Gemini received.', run: () => openSeen(clip) }];
-    message('drawing-status', 'AI video, inspired by your drawing. Your drawing itself is untouched.', false, seen);
-    $('scene-video').play().catch(() => message('drawing-status', 'Your video is ready. Press play to watch it.', false, seen));
-    $('scene-prompt').value = '';
-    setDockBusy(false);
-    $('canvas-frame').scrollIntoView({ behavior: 'smooth', block: 'center' });
-  }
-  function closeClip() {
-    $('scene-video').pause();
-    $('scene-video').removeAttribute('src');
-    $('scene-video').load();
-    $('video-preview').hidden = true;
-    currentClip = null;
-    clipTakes = [];
-    setDockBusy(false);
-  }
-  $('video-close').addEventListener('click', closeClip);
-  async function createClip(prompt) {
-    if (directing || makingVariations || busy()) return;
-    if (currentClip && prompt.length < 3) {
-      message('drawing-status', 'Tell us what you want to change.', true);
-      return;
-    }
-    const star = currentClip ? null : chosenStar();
-    if (!currentClip && !star && !hasInk()) {
-      flashTray('Draw something, or pick a star from your assets.', true);
-      return;
-    }
-    if (star && revision !== savedRevision && hasInk()
-      && !confirm(`Bring ${star.name} to life in a fresh scene? Your unsaved canvas is replaced (Undo brings it back).`)) return;
-    directing = true;
-    const previousClip = currentClip;
-    setDockBusy(true);
-    pipelineStart();
-    $('pipeline-title').textContent = 'Making your video\u2026 this can take a few minutes.';
-    try {
-      if (!previousClip) {
-        stopPlay();
-        const fresh = !star && unsavedThing();
-        let asset = star || (editing?.kind === 'asset' && revision === savedRevision && frames.length === 1
-          ? { id: editing.id, name: $('title').value.trim() } : null);
-        if (fresh) {
-          asset = await saveAsAsset();
-          if (revision !== savedRevision) throw new Error('Your drawing changed while saving. Try again.');
-        }
-        const choice = $('scene-backdrop').value;
-        if (asset) await stageAsset(asset, choice);
-        else if (choice && !layers.some(layer => layer.backdrop === choice.split(':')[1])) {
-          throw new Error('Choose an asset for a new scene to use this backdrop.');
-        }
-      }
-      const starring = [...new Set(layers.filter(layer => layer.asset).map(layer => layer.name))].join(', ').slice(0, 80);
-      const body = previousClip ? { prompt, previous_id: previousClip.id }
-        : { prompt, layers: docLayers(), starring, backdrop: backdropName().slice(0, 40) };
-      const clip = await postJSON('/api/clips', JSON.stringify(body));
-      pipelineFinish('\u2726 Your scene is ready');
-      clipTakes = previousClip ? [...clipTakes, clip] : [clip];
-      if (currentClip === previousClip) showClip(clip, { keepTakes: true });
-      else message('drawing-status', 'Your new scene is ready in your library.');
-      loadGallery(currentQuery);
-    } catch (error) {
-      pipelineFail(error.message);
-      message('drawing-status', error.message, true);
-    } finally {
-      directing = false;
-      setDockBusy(false);
-    }
-  }
-
   // ---------------------------------------------------------------- Find similar: the drawing is the query
   function showLibrary() {
     setFocus(false);
@@ -3708,13 +3685,7 @@
   $('scene-direct').addEventListener('submit', event => {
     event.preventDefault();
     const prompt = $('scene-prompt').value.trim();
-    // Enter (or Change it) follows the take on screen; otherwise the button you pressed is the choice.
-    const style = revisingMode() || event.submitter?.dataset.style || 'art';
-    if (style === 'video') {
-      if (offline) { flashTray(OFFLINE_NOTE, true); return; }
-      if (motionDraft) skipMotion();
-      createClip(prompt);
-    } else if (motionDraft) {
+    if (motionDraft) {
       const read = readPrompt(prompt);
       if (prompt && !read.ai && (read.on.length || read.off.length || read.tweak)) applyLocal(read);
       else if (offline) offlineRevise(prompt, read);
@@ -3786,7 +3757,8 @@
           autoAnimate({ ...again, effects: spec.effects || [], another: true });
         }));
       }
-      tray.append(compareButton(), trayButton('Discard <kbd>Esc</kbd>', 'Discard \u00b7 Esc|Close the preview. Your drawing stays exactly as it was.', () => {
+      tray.append(compareButton(), trayButton('\u27e8/\u27e9 Code', 'Edit as code|This take is p5.js code: keyframes as numbers you can change. Opens in the Lab.', () => openTakeAsCode()),
+        trayButton('Discard <kbd>Esc</kbd>', 'Discard \u00b7 Esc|Close the preview. Your drawing stays exactly as it was.', () => {
         skipMotion();
         message('drawing-status', 'Discarded. Your drawing is exactly as it was.');
       }));
@@ -3858,7 +3830,7 @@
   }
   // Who the box talks to: everything that can move (the default), or the layers you pick. Words only reach those.
   function targetable() {
-    if (currentClip || (!motionDraft && chosenStar())) return [];
+    if (!motionDraft && chosenStar()) return [];
     const stack = motionDraft ? motionDraft.spec.base : layers;
     return stack.filter(layer => layer.visible && !layer.fx && hasInk([layer]) && !isScenery(layer));
   }
@@ -3955,7 +3927,7 @@
     const revising = revisingMode();
     const busyNow = document.querySelector('.scene-maker').classList.contains('busy');
     if (revising === 'art' && !busyNow) $('dock-animate').textContent = '\u2726 Change it';
-    if (revising === 'video' || text.length < 3 || busyNow) { box.hidden = true; return; }
+    if (text.length < 3 || busyNow) { box.hidden = true; return; }
     const read = readPrompt(text);
     if (!revising && read.tweak) { read.ai = true; read.tweak = null; } // nothing to tweak yet: it's direction
     if (!revising) read.off = [];
@@ -3974,7 +3946,7 @@
       parts.push(part('free', `${move.icon} ${move.name}`, `a quick move for ${names} \u00b7 offline, plain math`));
     } else if (read.ai) parts.push(part('ai', '\u2726 Gemini', `new keyframes for ${names} only (move, turn, squash)`));
     else if (!revising) parts.push(part('ai', '\u2726 Gemini', `picks a motion for ${names}`));
-    if (read.warn) parts.push(part('warn', '\u26a0', `Flipbook only moves what\u2019s drawn. Draw the new thing first${offline ? '' : ', or try \u2726 AI video'}.`));
+    if (read.warn) parts.push(part('warn', '\u26a0', `Flipbook only moves what\u2019s drawn. Draw the new thing first, then it can move.`));
     box.replaceChildren(el('small', '', revising ? 'This will' : 'Flipbook reads'), ...parts);
     box.hidden = false;
     if (revising === 'art' && (!read.ai || offline)) $('dock-animate').textContent = '\u26a1 Apply \u00b7 free';
@@ -3982,7 +3954,7 @@
   $('scene-prompt').addEventListener('input', renderReading);
   function renderFxChips() {
     const row = $('scene-fx');
-    const spec = !currentClip && motionDraft ? motionDraft.spec : null;
+    const spec = motionDraft ? motionDraft.spec : null;
     row.hidden = !spec;
     if (!spec) { row.replaceChildren(); return; }
     const on = new Set(spec.effects || []);
@@ -4042,21 +4014,20 @@
   }
   function renderTakes() {
     const strip = $('takes');
-    const video = !!currentClip;
-    const list = video ? clipTakes : motionDraft || directing ? takes : [];
+    const list = motionDraft || directing ? takes : [];
     const chips = list.map((item, i) => {
-      const active = video ? item.id === currentClip.id : i === takeAt;
-      const label = video ? (i ? `+ ${item.prompt}` : item.prompt || 'Surprise') : item.take || item.label;
+      const active = i === takeAt;
+      const label = item.take || item.label;
       const chip = el('button', `take${active ? ' active' : ''}`);
       chip.type = 'button';
       chip.setAttribute('aria-pressed', String(active));
       chip.append(el('b', '', String(i + 1)), el('span', '', label.length > 30 ? `${label.slice(0, 29)}\u2026` : label));
-      chip.addEventListener('click', () => (video ? showClip(item, { keepTakes: true }) : showTake(i)));
+      chip.addEventListener('click', () => showTake(i));
       return chip;
     });
     if (directing && (list.length || motionDraft)) chips.push(Object.assign(el('span', 'take pending'), { textContent: `Take ${list.length + 1}\u2026` }));
-    strip.replaceChildren(...(chips.length ? [el('small', '', video ? 'Takes (all saved)' : 'Takes'), ...chips] : []));
-    strip.hidden = !chips.length || (!video && list.length < 2 && !directing);
+    strip.replaceChildren(...(chips.length ? [el('small', '', 'Takes'), ...chips] : []));
+    strip.hidden = !chips.length || (list.length < 2 && !directing);
     // Scroll only when the current take is out of view, so the strip's label stays put whenever it can.
     const current = strip.querySelector('.take.active, .take.pending');
     if (current && !strip.hidden) {
@@ -4611,7 +4582,7 @@
     const actions = el('div', 'card-actions');
     const backdrop = item.type === 'environment';
     const animateIt = actionButton(backdrop ? '\u2726 Use as backdrop' : '\u2726 Bring to life', 'primary-mini',
-      backdrop ? 'Use as backdrop|Sets the scene for your next flipbook or AI video.' : 'Bring to life|Stars it in your next flipbook or AI video.',
+      backdrop ? 'Use as backdrop|Sets the scene for your next flipbook.' : 'Bring to life|Stars it in your next flipbook.',
       () => castInScene(item));
     const similar = actionButton('\u25ce Similar', '', 'Find similar|Look-alikes ranked by its stored Voyage AI vector in Atlas: no new embedding.', () => findSimilar(item));
     const more = el('details', 'card-more');
@@ -4716,18 +4687,6 @@
     return card;
   }
 
-  function clipCard(item) {
-    const card = el('div', 'card shot-card');
-    const text = el('span', 'card-text');
-    text.append(el('strong', '', item.name), el('small', '', 'AI-reimagined video \u00b7 based on your drawing'));
-    if (item.prompt) text.append(el('small', '', item.prompt));
-    const actions = el('div', 'card-actions');
-    actions.append(actionButton('\u25b6 Watch & change', 'primary-mini', null, () => showClip(item)),
-      actionButton('What the AI saw', '', 'No black box|The exact picture and words Gemini received.', () => openSeen(item)));
-    card.append(thumbButton(item, `Watch ${item.name}`, () => showClip(item)), text, actions);
-    return card;
-  }
-
   // Frame hits come grouped by scene: neighbouring frames of one flipbook look alike, so the best frame
   // leads and the other matching frames are one tap away.
   function groupFrames(items) {
@@ -4763,10 +4722,10 @@
     card.append(thumb, text, actions);
     return card;
   }
-  function renderResults(tab, items, { query = '', filterText = '', sketch = false, clips = [] } = {}) {
+  function renderResults(tab, items, { query = '', filterText = '', sketch = false } = {}) {
     // Browsing (no query): each scene leads with frame 1; searching: with its best match.
     const ranked = query || sketch;
-    const cards = tab === 'frame' ? [...clips.map(clipCard), ...groupFrames(items).map(group => frameGroupCard(ranked ? group : group.sort((x, y) => x.frame - y.frame)))]
+    const cards = tab === 'frame' ? [...groupFrames(items).map(group => frameGroupCard(ranked ? group : group.sort((x, y) => x.frame - y.frame)))]
       : items.map(item => tab === 'idea' ? ideaCard(item, query) : tab === 'asset' || tab === 'backdrop' ? assetCard(item) : shotCard(item));
     cards.forEach((card, i) => card.style.setProperty('--i', Math.min(i, 12)));
     if (!cards.length) {
@@ -4778,7 +4737,7 @@
     }
     $('results').classList.remove('sectioned');
     $('results').replaceChildren(...cards);
-    const sceneCount = tab === 'frame' ? groupFrames(items).length + clips.length : 0;
+    const sceneCount = tab === 'frame' ? groupFrames(items).length : 0;
     const what = tab === 'frame' ? `${sceneCount} animated scene${sceneCount === 1 ? '' : 's'}` : null;
     const matches = what || `${items.length} match${items.length === 1 ? '' : 'es'}`;
     message('library-status', sketch ? `${matches} for your drawing, most similar first.`
@@ -4786,7 +4745,7 @@
       : `${what || `${items.length} ${TAB_TEXT[tab].noun}`}${filterText}.`);
   }
   // Everything at once: assets, scenes, and frames, each in its own row, with what it took to find them.
-  function renderEverything({ assets = [], scenes = [], frames: hits = [], clips = [] }, { receipt = '', empty = '' } = {}) {
+  function renderEverything({ assets = [], scenes = [], frames: hits = [] }, { receipt = '', empty = '' } = {}) {
     const section = (title, count, cards, kind) => {
       const wrap = el('section', `results-section ${kind}`);
       const head = el('h3', 'results-head', title);
@@ -4803,7 +4762,6 @@
     if (drawings.length) parts.push(section('\u25c6 Assets', drawings.length, drawings.map(assetCard), 'found-assets'));
     if (backdrops.length) parts.push(section('\u25a3 Backdrops', backdrops.length, backdrops.map(assetCard), 'found-assets'));
     if (scenes.length) parts.push(section('\u25a3 Scenes', scenes.length, scenes.map(shotCard), 'found-scenes'));
-    if (clips.length) parts.push(section('\ud83c\udfac AI-reimagined scenes', clips.length, clips.map(clipCard), 'found-scenes'));
     const groups = groupFrames(hits);
     if (groups.length) parts.push(section('\ud83c\udf9e Moments in your animations', hits.length, groups.map(frameGroupCard), 'found-frames'));
     if (!parts.length) parts.push(el('div', 'empty', empty || 'No matches. Try other words or another sketch, or give new saves a moment.'));
@@ -4848,9 +4806,9 @@
           if (controller.signal.aborted) return;
           renderEverything(data, { receipt: `Results for \u201c${query}\u201d, most similar first.` });
         } else {
-          const [assets, scenes, clips] = await Promise.all([api('/api/assets', { signal: controller.signal }), api('/api/shots', { signal: controller.signal }), api('/api/clips', { signal: controller.signal })]);
+          const [assets, scenes] = await Promise.all([api('/api/assets', { signal: controller.signal }), api('/api/shots', { signal: controller.signal })]);
           if (controller.signal.aborted) return;
-          renderEverything({ assets: assets.items.slice(0, 10), scenes: scenes.items.slice(0, 6), clips: clips.items.slice(0, 6) }, {
+          renderEverything({ assets: assets.items.slice(0, 10), scenes: scenes.items.slice(0, 6) }, {
             receipt: 'Your latest work. Search above by meaning, or tap \u25ce Find similar under the canvas.',
             empty: 'Nothing here yet. Doodle something above and bring it to life.' });
         }
@@ -4884,10 +4842,9 @@
       + (tab === 'asset' && handOnly ? ', mostly by hand' : '') + (tab === 'asset' && assetColor ? `, with ${assetColor}` : '');
     message('library-status', query ? `Looking for ${TAB_TEXT[tab].noun}${filterText} with Voyage AI...` : `Opening your ${TAB_TEXT[tab].noun}...`);
     try {
-      const [data, clips] = await Promise.all([api(url, { signal: controller.signal }),
-        tab === 'frame' ? api(`/api/clips${query ? `?q=${encodeURIComponent(query)}` : ''}`, { signal: controller.signal }) : Promise.resolve({ items: [] })]);
+      const data = await api(url, { signal: controller.signal });
       if (controller.signal.aborted) return;
-      renderResults(tab, data.items, { query, filterText, clips: clips.items });
+      renderResults(tab, data.items, { query, filterText });
     } catch (error) {
       if (error.name !== 'AbortError') {
         $('results').replaceChildren();
@@ -5173,20 +5130,9 @@
   $('wu-filters').addEventListener('submit', event => { event.preventDefault(); runWhereUsed(); });
   $('wu-status').addEventListener('change', runWhereUsed);
   $('wu-close').addEventListener('click', () => $('where-used').close());
-  for (const id of ['where-used', 'help', 'seen']) {
+  for (const id of ['where-used', 'help']) {
     $(id).addEventListener('click', event => { if (event.target === $(id)) $(id).close(); });
   }
-  // No black box: the exact picture and words an AI video was made from.
-  function openSeen(clip) {
-    $('seen-image').src = clip.image_url;
-    $('seen-brief').textContent = clip.brief || clip.prompt || 'No words: a surprise, from the picture alone.';
-    $('seen-note').textContent = clip.revision
-      ? 'A change to an earlier take: Gemini got these words plus its own previous video. Your drawing on the canvas is untouched.'
-      : 'Model: Gemini Omni. The video is a new take inspired by your drawing; your drawing on the canvas is untouched.';
-    $('seen').showModal();
-  }
-  $('seen-close').addEventListener('click', () => $('seen').close());
-
   // ---------------------------------------------------------------- the finder: search from anywhere (Cmd/Ctrl+K, /)
   // One box, results by meaning as you type, and every result usable right here: place it, bring it to life,
   // set the scene, open it, or find more like it.
@@ -5249,9 +5195,7 @@
         actions: [['Open', finderAct(() => openShot(item.id))]] }))),
       ...finderSection('Moments', frames.map(item => finderCard({ image: item.image_url, title: item.code, badge: `${item.frame}/${item.frames}`,
         meta: `Frame ${item.frame}${item.assets?.length ? ` \u00b7 ${item.assets.map(a => a.name).join(', ')}` : ''}`,
-        actions: [[`Open frame ${item.frame}`, finderAct(() => openShotAt(item.shot_id, item.frame))]] }))),
-      ...finderSection('AI videos', (data.clips || []).map(item => finderCard({ image: item.image_url, title: item.name, meta: item.prompt || 'AI video',
-        actions: [['\u25b6 Watch', finderAct(() => { showTop(); showClip(item); })], ['What the AI saw', () => openSeen(item)]] })))
+        actions: [[`Open frame ${item.frame}`, finderAct(() => openShotAt(item.shot_id, item.frame))]] })))
     ];
     $('finder-body').replaceChildren(...(parts.length ? parts : [el('p', 'finder-empty', 'Nothing yet. Try other words, or search with your drawing.')]));
     $('finder-status').textContent = note;
@@ -5338,10 +5282,9 @@
   }
   function castStarter(item) {
     if (motionDraft) skipMotion();
-    if (currentClip) closeClip();
     $('scene-backdrop').value = `starter:${item.id}`;
     showTop();
-    flashTray(`${item.icon} ${item.name} is the backdrop for your next flipbook or AI video.`);
+    flashTray(`${item.icon} ${item.name} is the backdrop for your next flipbook.`);
   }
   async function addStarterPack(button = null) {
     if (button) { button.disabled = true; button.textContent = 'Adding\u2026'; }
@@ -5779,7 +5722,7 @@
       // Hidden guides and backups don't count; nor do posed copies of frame 1 (moved, not drawn).
       if (!layer.visible || layer.xf) continue;
       // Weather (snow, rain...) is code, like the paper: it isn't authorship either way.
-      if (FX_NAMES.has(layer.name) && layer.strokes.length && layer.strokes.every(stroke => stroke.kit)) continue;
+      if (FX_NAMES.has(layer.name) && layer.strokes.length && layer.strokes.every(stroke => stroke.kit || stroke.code)) continue;
       for (const stroke of layer.strokes) {
         if (stroke.erase || seen.has(stroke)) continue;
         seen.add(stroke);
@@ -6651,11 +6594,9 @@
     $('tab-idea').hidden = !lib.ideas;
     document.querySelector('.kind-switch [data-kind="idea"]').hidden = !lib.ideas;
     const ai = account.budget?.ai;
-    const video = account.budget?.video;
     const embeds = account.budget?.embeds;
     const lines = [];
     if (ai?.limit) lines.push(`\u2726 ${ai.left} of ${ai.limit} AI drafts left this hour`);
-    if (video?.limit) lines.push(`${video.left} of ${video.limit} AI videos left this hour`);
     if (embeds?.limit && embeds.left < embeds.limit * 0.2) lines.push(`${embeds.left} saves & searches left this hour`);
     $('account-budget').textContent = lines.join(' \u00b7 ');
     $('account-budget').hidden = !lines.length;
@@ -6749,6 +6690,193 @@
       showGate();
     }
     launchShortcut();
+  }
+
+  // ---------------------------------------------------------------- every animation is code
+  // A flipbook take, written out as the p5 sketch that draws it: keyframes as numbers, the same Catmull-Rom curve
+  // and pose math as motionFrames/poseXf, and effects as the same seeded code. Frame 1 + this code = every frame,
+  // so any scene can be re-derived, audited, and changed one number at a time.
+  const num = v => String(Math.round(v * 1e4) / 1e4);
+  function motionToSketch(spec) {
+    const moving = spec.tracks.map(track => {
+      const layer = spec.base.find(item => item.id === track.layerId);
+      const b = layer && inkBounds(layer.strokes);
+      const pivot = b ? [(b.x + b.w / 2) / W, (b.y + b.h / 2) / H] : [0.5, 0.5];
+      const keys = track.keys.map(k => `      { t: ${num(k.t)}, x: ${num(k.x)}, y: ${num(k.y)}, sx: ${num(k.sx)}, sy: ${num(k.sy)}, r: ${num(k.r)}${k.label ? `, label: ${JSON.stringify(k.label)}` : ''} }`);
+      return `  ${JSON.stringify(track.name)}: {\n    pivot: [${num(pivot[0])}, ${num(pivot[1])}],  // its center: it turns and squashes around here\n    keys: [\n${keys.join(',\n')}\n    ]\n  }`;
+    });
+    const effects = fxList(spec.effects);
+    const fxCode = effects.length ? `
+// ---- Effects: tiny strokes computed by code from a fixed seed (the same every time). No AI.
+const ASPECT = H / W;
+const CONFETTI = ${JSON.stringify(CONFETTI)};
+${seeded.toString()}
+const onCanvas = p => p.x >= 0 && p.x <= 1 && p.y >= 0 && p.y <= 1;
+const fxStroke = (points, color, width, fill = null) => ({ points, color, width, fill });
+const FX = {
+${effects.map(fx => `  ${fx.id}: { name: ${JSON.stringify(fx.name)}, count: ${fx.count}, seed: ${fx.seed},\n    particle: ${fx.particle.toString()},\n    draw: ${fx.draw.toString()} }`).join(',\n')}
+};
+function drawEffects(f) {
+  for (const id of EFFECTS) {
+    const fx = FX[id];
+    if (!fx.parts) {
+      const r = seeded(fx.seed);
+      fx.parts = Array.from({ length: fx.count }, () => fx.particle(r));
+    }
+    for (const q of fx.parts) {
+      for (const s of fx.draw(q, f / FPS)) {
+        ink(s.points.map(p => ({ x: p.x * W, y: p.y * H })), { color: s.color, width: s.width, fill: s.fill, layer: fx.name });
+      }
+    }
+  }
+}
+` : '';
+    const title = (spec.title || spec.label || 'Flipbook').replace(/^\W+\s*/, '');
+    return `// ${title}: ${spec.by === 'ai' ? 'Gemini chose these keyframes' : 'a quick move (plain math)'}. This code draws every frame.
+// Your strokes are never redrawn: each moving layer is posed (moved, squashed, turned) by the numbers below,
+// and in-betweens come from a smooth curve through them. Change a number, Run, then Bake.
+
+const FPS = ${MOTION_FPS};
+const STRENGTH = ${num(spec.strength)};   // 1 = as choreographed. Try 1.4 for bigger moves.
+const EFFECTS = ${JSON.stringify(effects.map(fx => fx.id))};${effects.length ? `
+const EFFECT_LAYERS = ${JSON.stringify(effects.map(fx => fx.name))};` : ''}
+
+// t: 0..1 through the clip. x, y: offset in paper fractions (y up is negative). sx, sy: squash and stretch. r: degrees.
+const MOTION = {
+${moving.join(',\n')}
+};
+
+function setup() {
+  createCanvas(W, H);
+}
+
+function draw() {
+  background(255);
+  const f = (frameCount - 1) % LOOP;   // this frame
+  const t = f / max(1, LOOP - 1);      // 0..1; the last frame lands on the last pose
+  for (const layer of layers) {
+    if (!layer.visible${effects.length ? ' || EFFECT_LAYERS.includes(layer.name)' : ''}) {
+      continue;   // ${effects.length ? 'effects are drawn by drawEffects() below, fresh every frame' : 'hidden layers stay hidden'}
+    }
+    const move = MOTION[layer.name];
+    push();
+    if (move) {
+      const k = pose(move.keys, t);
+      const [cx, cy] = [move.pivot[0] * W, move.pivot[1] * H];
+      translate(cx + k.x * W, cy + k.y * H);
+      rotate(radians(k.r));
+      scale(k.sx, k.sy);
+      translate(-cx, -cy);
+    }
+    for (const s of layer.strokes) {
+      inkStroke(s);
+    }
+    pop();
+  }${effects.length ? '\n  drawEffects(f);' : ''}
+}
+
+// Catmull-Rom through the keys: smooth arcs, no stop-and-go at each key (the in-betweens).
+function pose(keys, t) {
+  if (t <= keys[0].t) {
+    return keys[0];
+  }
+  const last = keys[keys.length - 1];
+  if (t >= last.t) {
+    return strength(last);
+  }
+  let i = 0;
+  while (keys[i + 1].t < t) {
+    i++;
+  }
+  const p1 = keys[i], p2 = keys[i + 1], p0 = keys[i - 1] || p1, p3 = keys[i + 2] || p2;
+  const u = (t - p1.t) / ((p2.t - p1.t) || 1), u2 = u * u, u3 = u2 * u;
+  const cr = c => 0.5 * ((2 * p1[c]) + (-p0[c] + p2[c]) * u + (2 * p0[c] - 5 * p1[c] + 4 * p2[c] - p3[c]) * u2
+    + (-p0[c] + 3 * p1[c] - 3 * p2[c] + p3[c]) * u3);
+  return strength({ x: cr('x'), y: cr('y'), sx: max(0.03, cr('sx')), sy: max(0.03, cr('sy')), r: cr('r') });
+}
+function strength(k) {
+  const s = STRENGTH;
+  return { x: constrain(k.x * s, -2, 2), y: constrain(k.y * s, -2, 2), sx: constrain(1 + (k.sx - 1) * s, 0.03, 4),
+    sy: constrain(1 + (k.sy - 1) * s, 0.03, 4), r: constrain(k.r * s, -1080, 1080) };
+}
+${fxCode}`;
+  }
+  // The sketch saved with a kept flipbook: the scene's own source, small enough to read (and to save).
+  function sketchRecord(spec, code = motionToSketch(spec)) {
+    if (code.length > MAX_SKETCH_CODE) return null;
+    return { by: spec.by === 'ai' ? 'ai' : 'preset', title: (spec.title || spec.label || 'Flipbook').replace(/^\W+\s*/, '').slice(0, 80) || 'Flipbook',
+      prompt: (spec.prompt || '').slice(0, 400), code, frames: frameCount(spec.seconds) };
+  }
+
+  // Your drawing, as code: strokes drawn in one motion but lifted mid-line are joined, and points the eye can't see
+  // are dropped (Ramer-Douglas-Peucker). Color, width, and drawing order stay; the receipt says what it saved.
+  function rdp(points, eps) {
+    if (points.length < 3) return points;
+    const [a, b] = [points[0], points[points.length - 1]];
+    const dx = b[0] - a[0], dy = b[1] - a[1], len = Math.hypot(dx, dy) || 1;
+    let far = 0, at = 0;
+    for (let i = 1; i < points.length - 1; i++) {
+      const d = Math.abs(dy * points[i][0] - dx * points[i][1] + b[0] * a[1] - b[1] * a[0]) / len;
+      if (d > far) { far = d; at = i; }
+    }
+    return far <= eps ? [a, b] : [...rdp(points.slice(0, at + 1), eps).slice(0, -1), ...rdp(points.slice(at), eps)];
+  }
+  function drawingAsCode() {
+    const paths = [];
+    let strokes = 0, points = 0, erasers = 0;
+    for (const layer of frames[0]) {
+      if (!layer.visible) continue;
+      let chain = null;
+      for (const stroke of layer.strokes) {
+        if (stroke.erase) { erasers++; chain = null; continue; }
+        strokes++;
+        points += stroke.points.length;
+        const pressure = stroke.points.reduce((n, p) => n + (p.pressure ?? 0.5), 0) / stroke.points.length;
+        const width = Math.round(stroke.width * (0.25 + pressure) * 10) / 10;
+        const xy = stroke.points.map(p => [p.x * W, p.y * H]);
+        const end = chain && chain.xy[chain.xy.length - 1];
+        if (chain && !stroke.fill && !chain.fill && chain.color === stroke.color && Math.abs(chain.width - width) < 0.8
+          && Math.hypot(end[0] - xy[0][0], end[1] - xy[0][1]) < 5) {
+          chain.xy.push(...xy.slice(1)); // one line, drawn in several strokes: one path
+          chain.joined++;
+        } else {
+          chain = { layer: layer.name, color: stroke.color, width, fill: stroke.fill || '', xy, joined: 1 };
+          paths.push(chain);
+        }
+      }
+    }
+    for (const eps of [0.6, 1, 1.5, 2.5, 4]) {
+      const rows = paths.map(path => {
+        const flat = rdp(path.xy, eps).flatMap(([x, y]) => [Math.round(x), Math.round(y)]);
+        return `  [${JSON.stringify(path.layer)}, '${path.color}', ${path.width}, '${path.fill}', ${flat.join(',')}]`;
+      });
+      const kept = rows.reduce((n, row) => n + (row.split(',').length - 4) / 2, 0);
+      const joined = strokes - paths.length;
+      const code = `// Your drawing, as code: ${plural(strokes, 'stroke')} (${points.toLocaleString()} points) became ${plural(paths.length, 'path')} (${Math.round(kept).toLocaleString()} points), ${(points / Math.max(1, kept)).toFixed(1)}\u00d7 smaller.
+// ${joined ? `${plural(joined, 'stroke')} that continued a line were joined. ` : ''}Points the eye can't see (within ${eps} px of the line) were dropped.
+// Same colors, widths, and order. Each path: [layer, color, width, fill, x0, y0, x1, y1, ...] in paper pixels.${erasers ? `\n// Eraser passes (${erasers}) aren't paths, so they're left out.` : ''}
+const ART = [
+${rows.join(',\n')}
+];
+
+function setup() {
+  createCanvas(W, H);
+}
+
+function draw() {
+  background(255);
+  for (const [layer, color, width, fill, ...xy] of ART) {
+    const points = [];
+    for (let i = 0; i < xy.length; i += 2) {
+      points.push({ x: xy[i], y: xy[i + 1] });   // try: + noise(i, frameCount * 0.2) * 3 for a hand-drawn "boil"
+    }
+    ink(points, { color: color, width: width, fill: fill || null, layer: layer });
+  }
+}
+`;
+      if (code.length <= MAX_SKETCH_CODE) return { code, note: `\u270d Your drawing as code: ${plural(strokes, 'stroke')} \u2192 ${plural(paths.length, 'path')}, ${(points / Math.max(1, kept)).toFixed(1)}\u00d7 fewer points, same look. Plain code, no AI.` };
+    }
+    return null;
   }
 
   // ---------------------------------------------------------------- the Lab: your strokes, as numbers
@@ -6926,8 +7054,8 @@ function draw() {
   }
   // The artist's strokes as the sketch sees them: paper coordinates, drawing order, every frame.
   function labData() {
-    const asLab = (stack) => {
-      const list = stack.filter(layer => layer.visible)
+    const asLab = (stack, hidden = false) => {
+      const list = stack.filter(layer => hidden || layer.visible)
         .flatMap(layer => layer.strokes.filter(stroke => !stroke.erase).map(stroke => ({ stroke, layer: layer.name })));
       list.sort((a, b) => (a.stroke.seq ?? 0) - (b.stroke.seq ?? 0));
       return list.map(({ stroke, layer }, order) => ({
@@ -6935,7 +7063,7 @@ function draw() {
         color: stroke.color, width: stroke.width, layer, order
       }));
     };
-    return { frames: frames.map(asLab), layers: frames[0].filter(layer => layer.visible).map(layer => ({ name: layer.name, strokes: asLab([layer]) })) };
+    return { frames: frames.map(stack => asLab(stack)), layers: frames[0].map(layer => ({ name: layer.name, visible: layer.visible, strokes: asLab([layer], true) })) };
   }
   function labError(text) {
     $('lab-error').hidden = !text;
@@ -7049,6 +7177,7 @@ function draw() {
     const take = labTakes[index];
     $('lab-code').value = take.code;
     $('lab-note').textContent = take.note;
+    if (take.frames) setLabFrames(take.frames);
     renderLabTakes();
     labLines();
     runLab(take.code);
@@ -7066,13 +7195,54 @@ function draw() {
     if (text) $('lab-note').textContent = text;
     renderLabTakes();
   }
-  $('lab-presets').append(...LAB_PRESETS.map(preset => {
-    const button = el('button', 'lab-preset');
+  // Two doors that are about *this* canvas: the animation on it, as its own code; and the drawing itself, as code.
+  function sceneSeed() {
+    if (motionDraft) {
+      const spec = motionDraft.spec;
+      const record = sketchRecord(spec);
+      return record && { ...record, motion: motionRecord(spec), take: `\ud83c\udf9e ${record.title}`,
+        note: `\ud83c\udf9e This take, as the code that draws it: ${plural(spec.tracks.length, 'moving layer')}, ${plural(spec.tracks.reduce((n, t) => n + t.keys.length, 0), 'keyframe')}. Change a number, run it, bake it.` };
+    }
+    if (sceneSketch) return { ...sceneSketch, motion: sceneMotion, take: `\ud83c\udf9e ${sceneSketch.title}`,
+      note: `\ud83c\udf9e This scene\u2019s own code (${sceneSketch.by === 'ai' ? 'keyframes by Gemini' : sceneSketch.by === 'preset' ? 'a preset' : 'your code'}), saved with it. It runs over frame 1.` };
+    return null;
+  }
+  function seedLab(seed) {
+    const same = labTakes.findIndex(take => take.code === seed.code);
+    setLabFrames(seed.frames || Number($('lab-frames').value));
+    if (same >= 0) { showLabTake(same); return; }
+    addLabTake({ title: seed.take || seed.title, by: seed.by, prompt: seed.prompt || '', code: seed.code, motion: seed.motion || null,
+      frames: seed.frames, note: seed.note });
+  }
+  function setLabFrames(count) {
+    const select = $('lab-frames');
+    const value = String(Math.max(2, Math.min(MAX_FRAMES, Math.round(count))));
+    if (![...select.options].some(option => option.value === value)) {
+      select.append(Object.assign(document.createElement('option'), { value, textContent: `${value} frames \u00b7 ${(value / MOTION_FPS).toFixed(1)} s` }));
+    }
+    select.value = value;
+  }
+  const LAB_DOORS = [
+    { id: 'scene', icon: '\ud83c\udf9e', name: 'This animation', hint: 'The take on screen (or this scene), as the code that draws it.', seed: sceneSeed },
+    { id: 'ascode', icon: '\u270d\ufe0f', name: 'Drawing as code', hint: 'Your strokes as compact paths: joined, simplified, same look.', seed: () => {
+      const made = drawingAsCode();
+      return made && { title: 'Drawing as code', take: '\u270d Drawing as code', by: 'preset', code: made.code, note: made.note };
+    } },
+    ...LAB_PRESETS
+  ];
+  $('lab-presets').append(...LAB_DOORS.map(preset => {
+    const button = el('button', `lab-preset${preset.seed ? ' lab-door' : ''}`);
     button.type = 'button';
     button.dataset.preset = preset.id;
     button.dataset.tip = `${preset.name}|${preset.hint} No AI: plain code you can read.`;
     button.append(el('span', '', preset.icon), el('b', '', preset.name));
     button.addEventListener('click', () => {
+      if (preset.seed) {
+        const seed = preset.seed();
+        if (!seed) { labError(preset.id === 'scene' ? 'No animation here yet: make a flipbook first.' : 'This drawing is too detailed to fit in one sketch.'); return; }
+        seedLab({ ...seed, preset: preset.id });
+        return;
+      }
       const same = labTakes.findIndex(take => take.preset === preset.id && take.code === preset.code);
       if (same >= 0) { showLabTake(same); return; }
       addLabTake({ title: preset.name, by: 'preset', preset: preset.id, prompt: '', code: preset.code,
@@ -7080,6 +7250,10 @@ function draw() {
     });
     return button;
   }));
+  function renderLabDoors() {
+    const scene = $('lab-presets').querySelector('[data-preset="scene"]');
+    scene.hidden = !motionDraft && !sceneSketch;
+  }
   $('lab-code').addEventListener('input', labLines);
   $('lab-code').addEventListener('keydown', event => {
     if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') { event.preventDefault(); $('lab-run').click(); return; }
@@ -7096,7 +7270,7 @@ function draw() {
     if (!code.trim()) { labError('Write a sketch (or pick one above) first.'); return; }
     if (current && code === current.code) { runLab(code); return; }
     const named = (current?.title || 'Your sketch').replace(/^[+\u270e]\s*/, '');
-    addLabTake({ title: `\u270e ${named}`, by: 'artist', prompt: current?.prompt || '', code,
+    addLabTake({ title: `\u270e ${named}`, by: 'artist', prompt: current?.prompt || '', code, frames: current?.frames,
       note: `\u270e Your edit${current ? `: ${lineDiff(current.code, code)}` : ''}. Every take stays a tap away.` });
   });
   $('lab-frames').addEventListener('change', () => runLab()); // the preview loops over exactly what gets baked
@@ -7137,7 +7311,8 @@ function draw() {
     let points = 0;
     let trimmed = false;
     for (const raw of list || []) {
-      let pts = (raw.points || []).filter(p => Number.isFinite(p.x) && Number.isFinite(p.y)).map(p => ({ x: p.x / W, y: p.y / H }));
+      let pts = (raw.points || []).filter(p => Number.isFinite(p.x) && Number.isFinite(p.y))
+        .map(p => ({ x: p.x / W, y: p.y / H, pressure: Number.isFinite(p.pressure) ? clampTo(p.pressure, 0, 1) : 0.75 }));
       if (!pts.length || pts.every(p => p.x < -0.02 || p.x > 1.02 || p.y < -0.02 || p.y > 1.02)) continue;
       if (pts.length > perStroke) {
         const step = Math.ceil(pts.length / perStroke);
@@ -7146,15 +7321,15 @@ function draw() {
       if (out.length >= room.strokes || points + pts.length > room.points) { trimmed = true; break; }
       points += pts.length;
       const fill = /^#[0-9a-f]{6}$/i.test(raw.fill || '') && pts.length > 2 ? raw.fill.toLowerCase() : null;
-      out.push({ points: pts.map(p => ({ x: r4(clampTo(p.x, 0, 1)), y: r4(clampTo(p.y, 0, 1)), pressure: 0.75 })),
+      out.push({ layer: typeof raw.layer === 'string' ? raw.layer : null, stroke: {
+        points: pts.map(p => ({ x: r4(clampTo(p.x, 0, 1)), y: r4(clampTo(p.y, 0, 1)), pressure: r4(p.pressure) })),
         color: /^#[0-9a-f]{6}$/i.test(raw.color || '') ? raw.color.toLowerCase() : '#123b38',
-        width: Math.round(clampTo(Number(raw.width) || 3, 1, 40) * 10) / 10, ...(fill ? { fill } : {}), code: true, seq: 0 });
+        width: Math.round(clampTo(Number(raw.width) || 3, 1, 40) * 10) / 10, ...(fill ? { fill } : {}), code: true, seq: 0 } });
     }
     return { strokes: out, trimmed };
   }
   function bakeLab(take, raw, keep) {
     const base = frames[0];
-    if (base.length + 1 > MAX_LAYERS) { labError(`The Lab needs one free layer (${MAX_LAYERS} max). Merge or delete one first.`); return; }
     const baseStrokes = base.flatMap(layer => layer.strokes);
     const room = { strokes: MAX_STROKES - baseStrokes.length, points: MAX_POINTS - countPoints(baseStrokes) };
     if (room.strokes < 1 || room.points < 2) { labError('This drawing already uses the canvas limits, so nothing can be baked on top.'); return; }
@@ -7162,26 +7337,44 @@ function draw() {
     let baked = null;
     for (const perStroke of [240, 120, 60, 30]) {
       baked = raw.slice(0, MAX_FRAMES).map(list => bakedStrokes(list, room, perStroke));
-      if (JSON.stringify(baked.map(frame => frame.strokes)).length < 1_500_000) break;
+      if (JSON.stringify(baked.map(frame => frame.strokes.map(item => item.stroke))).length < 1_500_000) break;
       baked = null;
     }
     if (!baked) { labError('Too much to bake into one scene. Try fewer frames, or a sketch with fewer ink() calls.'); return; }
     if (!baked.some(frame => frame.strokes.length)) { labError('Nothing was inked. Bake captures what ink() and inkStroke() draw.'); return; }
     const title = take.title.replace(/^[+\u270e]\s*/, '').slice(0, 60) || 'Sketch';
+    // The scene keeps its layers: ink tagged with a layer bakes back into it (asset links and all); untagged ink
+    // gets one code layer. Where the code drew a layer exactly as it was, your original strokes are reused.
+    const names = new Set(base.map(layer => layer.name));
+    const loose = baked.some(frame => frame.strokes.some(item => !names.has(item.layer)));
+    const unchanged = (layer, items) => items.length === layer.strokes.filter(stroke => !stroke.erase).length && items.every((item, i) => {
+      const a = item.stroke.points, b = layer.strokes.filter(stroke => !stroke.erase)[i]?.points;
+      return b && a.length === b.length && [0, a.length >> 1, a.length - 1].every(j => Math.abs(a[j].x - b[j].x) < 5e-4 && Math.abs(a[j].y - b[j].y) < 5e-4);
+    });
+    if (loose && base.length + 1 > MAX_LAYERS) { labError(`This sketch needs one free layer for its own lines (${MAX_LAYERS} max). Merge or delete one first.`); return; }
+    if (motionDraft) skipMotion(); // baking replaces the frames; a preview on top would be stale
     stopPlay();
     pushUndo();
-    const stacks = baked.map(frame => [
-      ...base.map(layer => newLayer(layer.name, { visible: keep && layer.visible, opacity: layer.opacity, strokes: layer.strokes.slice(),
-        asset: layer.asset || null, backdrop: layer.backdrop || null })),
-      newLayer(`\u27e8/\u27e9 ${title}`.slice(0, 40), { strokes: frame.strokes })
-    ]);
+    const stacks = baked.map(frame => {
+      const groups = new Map();
+      for (const item of frame.strokes) if (names.has(item.layer)) (groups.get(item.layer) || groups.set(item.layer, []).get(item.layer)).push(item);
+      const stack = base.map(layer => {
+        const props = { opacity: layer.opacity, asset: layer.asset || null, backdrop: layer.backdrop || null };
+        const items = groups.get(layer.name);
+        groups.delete(layer.name); // a duplicate name bakes into the first layer that has it
+        if (!items) return newLayer(layer.name, { ...props, visible: (loose ? keep : true) && layer.visible, strokes: layer.strokes.slice() });
+        return newLayer(layer.name, { ...props, visible: true, strokes: unchanged(layer, items) ? layer.strokes.slice() : items.map(item => item.stroke) });
+      });
+      if (loose) stack.push(newLayer(`\u27e8/\u27e9 ${title}`.slice(0, 40), { strokes: frame.strokes.filter(item => !names.has(item.layer)).map(item => item.stroke) }));
+      return stack;
+    });
     frames = stacks;
     frameIndex = 0;
     layers = frames[0];
     activeId = layers[layers.length - 1].id;
     fps = MOTION_FPS;
     $('fps').value = String(MOTION_FPS);
-    sceneMotion = null;
+    sceneMotion = take.motion || null;
     sceneSketch = { by: take.by, title: title.slice(0, 80), prompt: take.prompt.slice(0, 400), code: take.code, frames: stacks.length };
     if (!editing || editing.kind !== 'shot') {
       if (!CODE.test($('title').value.trim())) {
@@ -7202,15 +7395,16 @@ function draw() {
     play();
     const perFrame = Math.round(baked.reduce((n, frame) => n + frame.strokes.length, 0) / baked.length);
     const trimmed = baked.some(frame => frame.trimmed);
-    message('drawing-status', `\u2913 Baked ${stacks.length} frames from \u201c${title}\u201d: about ${plural(perFrame, 'stroke')} a frame, all editable.${trimmed ? ' Some frames were trimmed to fit the canvas limits.' : ''} ${keep ? 'Your drawing stays underneath.' : 'Your original layers are kept, hidden.'}`, false, [
+    message('drawing-status', `\u2913 Baked ${stacks.length} frames from \u201c${title}\u201d: about ${plural(perFrame, 'stroke')} a frame, in your layers, all editable.${trimmed ? ' Some frames were trimmed to fit the canvas limits.' : ''} The code is saved with the scene.`, false, [
       { label: '\u21b6 Undo', tip: 'Undo|Your drawing exactly as it was.', run: () => { undo(); message('drawing-status', 'Undone. Your drawing is back; the Lab still has your takes.'); } },
       { label: '\u27e8/\u27e9 Back to the Lab', run: () => openLab() }]);
   }
-  function openLab() {
+  function openLab(seed = null) {
     if (busy() || $('lab').open) return;
     if (!hasInk()) { flashTray('Draw something first: the Lab works on your strokes.', true); canvas.scrollIntoView({ behavior: 'smooth', block: 'center' }); return; }
     stopPlay();
-    if (motionDraft) skipMotion();
+    renderLabDoors();
+    seed = seed || (labAt < 0 ? sceneSeed() : null);
     if (document.body.classList.contains('focus-mode')) setFocus(false);
     const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
     // The page tilts back and the lights go down: your drawing is about to become numbers.
@@ -7219,7 +7413,8 @@ function draw() {
       $('canvas-frame').classList.remove('lab-tilt');
       $('lab').showModal();
       document.body.classList.add('lab-open');
-      if (labAt < 0) $('lab-presets').querySelector('button').click();
+      if (seed) seedLab(seed);
+      else if (labAt < 0) $('lab-presets').querySelector('[data-preset="ascode"]').click();
       else runLab(labTakes[labAt].code === $('lab-code').value ? labTakes[labAt].code : $('lab-code').value);
     }, still ? 0 : 380);
   }
@@ -7231,11 +7426,12 @@ function draw() {
     $('lab').close();
   }
   $('lab').addEventListener('close', () => { document.body.classList.remove('lab-open'); labRun++; labFrame().removeAttribute('srcdoc'); });
-  $('lab-open').addEventListener('click', openLab);
+  $('lab-open').addEventListener('click', () => openLab());
   $('lab-close').addEventListener('click', closeLab);
   $('lab').addEventListener('keydown', event => { if (event.key === 'Escape' && event.target !== $('lab-code')) { event.preventDefault(); closeLab(); } });
   $('lab').addEventListener('cancel', event => { event.preventDefault(); closeLab(); });
   MENU_ACTIONS.lab = () => openLab();
+  const openTakeAsCode = () => { const seed = sceneSeed(); if (seed) openLab(seed); };
 
   // ---------------------------------------------------------------- offline: airplane mode is a studio, not an error page
   // Everything that's yours keeps working (pen, layers, frames, kit, stamps, quick moves, effects). Everything that
@@ -7291,7 +7487,7 @@ function draw() {
     $('connection').closest('.connection').dataset.tip = on
       ? 'Offline|Your pencil works anywhere. AI, search, and your library come back with the connection. Your drawing is kept on this device.'
       : 'Your library|Saved in MongoDB Atlas. Searched by meaning with Voyage AI. AI drafts by Gemini.';
-    for (const id of ['finder', 'seen', 'welcome']) if ($(id)?.open) $(id).close();
+    for (const id of ['finder', 'welcome']) if ($(id)?.open) $(id).close();
     setDockBusy(false);
     renderFxChips();
     if (quiet) return;

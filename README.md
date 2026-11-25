@@ -27,12 +27,22 @@ Under the canvas sits one box, like a search page: type or speak what happens (o
 surprise), pick who's **Starring** (this drawing, or any saved asset) and where (a starter or a backdrop you
 drew), then press a button. The button you press is the choice:
 
-- **🎞 Flipbook** (or Enter): Gemini choreographs keyframes; math fills the in-betweens. Every frame is
-  **your own strokes**, never redrawn. **Keep** turns it into editable frames.
-- **✦ AI video**: Gemini Omni films your doodle in its backdrop as a short video. It may restyle the art.
+- **🎞 Flipbook** (or Enter): Gemini picks the poses; math draws the frames. Every frame is **your own
+  strokes**, never redrawn. **Keep** turns it into editable frames, and **⟨/⟩ Code** shows the take as the p5.js
+  sketch that draws it.
 - **◎ Find similar**: your drawing is the search (or the words in the box). **Voyage AI** multimodal
   embeddings in **MongoDB Atlas** Vector Search find look-alike assets, backdrops, and scenes. Gemini
   auto-tags what you save, so you're never filing, just cooking.
+
+**Every animation is code.** A kept flipbook is saved with its source: a short, readable
+[p5.js](https://p5js.org) sketch (keyframes as numbers, the same in-between curve and pose math, effects as the same
+seeded code). Frame 1 plus that code reproduces every frame, so any scene can be audited, re-derived, and changed one
+number at a time: **⟨/⟩ Edit as code** opens it in the Lab; bake it and the frames come back *in your layers*, with your
+pen pressure, and with your original strokes reused wherever the code left them untouched.
+
+**Take any scene apart.** In an animation, layer edits reach **all frames** by default: show or hide a layer, move or
+resize an asset, rename, add, delete, or reorder, once, and the whole animation follows (one Undo). Tap **All frames**
+in Layers to scope edits to one frame. The Breakdown shows the exposure sheet: every layer, every frame.
 
 **Talk to a layer.** With two or more things on the canvas, a **Talk to** row sits above the box: *Everything*,
 or the layers you pick (grab one on the canvas with Move, or click it in Layers; Shift adds). The canvas outlines
@@ -58,7 +68,7 @@ The **☰** menu reaches every one of them in a tap (swipe it away on a phone).
 
 **Search is always one keystroke away.** The **Search your art** box in the header (or **⌘/Ctrl+K**, or **/**)
 opens a finder over whatever you're doing. Results arrive by meaning as you type (one Voyage embedding per
-pause, not per keystroke): assets, backdrops, scenes, single frames, and AI videos, each usable right there
+pause, not per keystroke): assets, backdrops, scenes, and single frames, each usable right there
 (**Place**, **✦ Bring to life**, **Use as backdrop**, **Open**, **◎ Similar**). **✏️ My drawing** searches with
 the canvas. ↑↓ and Enter work too. Before you type, it offers starter backdrops and your latest work.
 
@@ -121,22 +131,18 @@ as it fits, floats the toolbar, and fades every control while your pen is down. 
 one-row toolbar and the whole page; held upright, a hint suggests turning sideways.
 
 **No black box.** A live meter on the canvas (*✍ 100% your hand*) shows how much is yours and how much is AI
-drafts you accepted; tap it for the full breakdown. Every AI video has **What the AI saw**: the exact
-picture and words Gemini received, and nothing else from your library. **☰ › Under the hood** explains Voyage AI,
+drafts you accepted (and *code*, for lines a sketch moved); tap it for the full breakdown. Every animation keeps
+its p5.js source, so how a frame came to be is always readable. **☰ › Under the hood** explains Voyage AI,
 MongoDB Atlas, and Gemini in plain words, using your own canvas as the example.
 
 | | You | Inkling |
 | --- | --- | --- |
 | **1. Doodle it** | Draw in layers (try **Focus** or a **starter**) | Pressure, palm rejection, auto-tags on save |
-| **2. Bring it to life** | Say what happens, then **🎞 Flipbook** or **✦ AI video**. Revise by talking | Gemini keyframes your strokes, or Gemini Omni films your doodle |
+| **2. Bring it to life** | Say what happens, then **🎞 Flipbook**. Revise by talking, or by editing the code | Gemini keyframes your strokes; the scene is saved as p5.js |
 | **3. Find similar** | Your drawing, words, or voice | Voyage AI + Atlas Vector Search across assets, backdrops, and scenes |
 | **4. Share it** | **🔗 Save & share** a flipbook | A public link with a looping GIF. Your library stays private |
 
 Good to know:
-- **AI video costs money.** Each take (including revisions) is a paid Gemini video generation, budgeted per
-  member (`INKLING_VIDEO_PER_HOUR`, default 5). Takes save automatically and privately; a revision makes a
-  new take. Video search matches the **source drawing and direction**, not generated frames.
-  `GEMINI_VIDEO_MODEL` overrides the default (`gemini-omni-1.2-flash`).
 - **Voice** uses your browser's speech service (HTTPS or localhost; audio may go to its provider). Inkling
   never submits the words until you do.
 - A saved backdrop joins a new scene as editable layer copies; later edits to the backdrop don't flow in.
@@ -181,8 +187,7 @@ How it's locked down:
   5 minutes); the member id comes from its answer, and tokens for a different app are refused.
 - **Copies, not shares.** The demo library is copied into your space under fresh ids (vectors included,
   nothing re-embedded), with every link, lineage, element, and frame id remapped.
-- **Hourly budgets per member** for billable calls: 60 Gemini drafts (`INKLING_AI_PER_HOUR`), 5 Gemini videos
-  (`INKLING_VIDEO_PER_HOUR`), and 600 Voyage
+- **Hourly budgets per member** for billable calls: 60 Gemini drafts (`INKLING_AI_PER_HOUR`) and 600 Voyage
   saves and searches (`INKLING_EMBEDS_PER_HOUR`). They're checked before the call, charged only on success,
   shown in the account menu, and answered with a friendly 429 plus `Retry-After` when spent. Provider charges
   can still apply if a generation succeeds but saving fails. Browsing, images, metadata edits, and the demo

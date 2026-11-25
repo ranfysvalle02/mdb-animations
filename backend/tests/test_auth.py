@@ -185,7 +185,6 @@ def test_copying_a_library_remaps_every_id_so_the_copy_is_independent():
                                   "layers": [{"asset": {"asset_id": asset, "version": 1}}], "created_at": "2026-01-01T00:00:00+00:00"}]),
         "shot_elements": Store("shot_elements", [{"id": f"{shot}:0", "owner": "demo", "shot_id": shot, "asset_id": asset}]),
         "shot_frames": Store("shot_frames", [{"id": f"{shot}:f2", "owner": "demo", "shot_id": shot, "asset_ids": [asset]}]),
-        "clips": Store("clips", []),
     }
     production = Production.__new__(Production)
     production.owner = "u1"
@@ -193,11 +192,10 @@ def test_copying_a_library_remaps_every_id_so_the_copy_is_independent():
     production.library.drawings.mongo = stores["drawings"]
     production.assets, production.shots = Mock(mongo=stores["assets"]), Mock(mongo=stores["shots"])
     production.elements, production.frames = Mock(mongo=stores["shot_elements"]), Mock(mongo=stores["shot_frames"])
-    production.clips = Mock(mongo=stores["clips"])
     production.versions = stores["asset_versions"]
 
     copied = production.copy_library("demo")
-    assert copied == {"drawings": 0, "assets": 1, "asset_versions": 1, "shots": 1, "shot_elements": 1, "shot_frames": 1, "clips": 0}
+    assert copied == {"drawings": 0, "assets": 1, "asset_versions": 1, "shots": 1, "shot_elements": 1, "shot_frames": 1}
     new_asset = stores["assets"].find({"owner": "u1"})[0]
     new_shot = stores["shots"].find({"owner": "u1"})[0]
     assert new_asset["id"] != asset and new_asset["_key"] == new_asset["id"] and new_asset["embedding"] == [0.1, 0.2]
@@ -367,3 +365,22 @@ def test_lab_sketches_run_sandboxed_with_no_network_and_count_as_ai(client):
     assert runner.status_code == 200 and "connect-src 'none'" in policy and "default-src 'none'" in policy
     assert client.get("/lab/p5.LICENSE.txt").status_code == 200  # LGPL: the license ships with the library
     assert client.get("/lab/studio.js").status_code == 404  # only the Lab's own files
+
+
+def test_ai_video_is_gone_and_its_data_is_dropped_once(client):
+    from unittest.mock import MagicMock
+
+    from backend.setup import drop_ai_video
+    http, _ = client
+    assert http.post("/api/clips", json={"prompt": "dance"}).status_code in (404, 405)
+    database = MagicMock()
+    database.list_collection_names.return_value = ["assets", "clips", "clip_media.files", "clip_media.chunks"]
+    database["clips"].list_search_indexes.return_value = [{"name": "clips_vector"}]
+    drop_ai_video(database)
+    database["clips"].drop_search_index.assert_called_once_with("clips_vector")
+    dropped = [call.args[0] for call in database.drop_collection.call_args_list]
+    assert dropped == ["clips", "clip_media.files", "clip_media.chunks"]
+    database.reset_mock()
+    database.list_collection_names.return_value = ["assets", "users_are_elsewhere"]
+    drop_ai_video(database)
+    database.drop_collection.assert_not_called()  # nothing to do: a second boot is a no-op

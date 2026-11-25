@@ -157,14 +157,15 @@ with no network and no DOM beyond its canvas. Use these globals, provided by Ink
 - strokes: the artist's drawing (frame 1), in drawing order. Each stroke is
   { points: [{x, y, pressure}], color: '#rrggbb', width, layer: 'name', order: 0..n-1 }, x in 0..W, y in 0..H.
 - frames: every flipbook frame, each an array of strokes in the same shape (frames[0] is strokes).
-- layers: [{ name, strokes }] for frame 1.
+- layers: [{ name, visible, strokes }] for frame 1 (hidden layers included, flagged).
 - LOOP: how many frames will be baked (24 to 80). loopT() returns 0..1, the progress through that loop.
   Make the motion a seamless loop over LOOP frames, driven by loopT() (not millis()).
 - ink(points, style): draws a stroke AND records it, so it can be baked into editable frames. points is an
-  array of {x, y, z?} (or [x, y, z?]); style is { color, width, fill } (color as '#rrggbb' or [r, g, b]).
+  array of {x, y, z?} (or [x, y, z?]); style is { color, width, fill, layer } (color as '#rrggbb' or [r, g, b];
+  layer names which of the artist's layers it bakes into, so the scene keeps its layers).
   Everything you want baked must be drawn with ink(); other p5 drawing is preview-only.
 - inkStroke(stroke, map?): ink one of the artist's strokes, optionally mapping each point with
-  map(p, i, stroke) => {x, y, z}. Keeps the stroke's color and width.
+  map(p, i, stroke) => {x, y, z}. Keeps the stroke's color, width, and layer.
 - KEEP_DRAWING (optional): set to true if the artist's original drawing should stay visible under the baked
   code layer; leave it out if your sketch redraws their strokes itself.
 Rules: only move, transform, repeat, or recombine the artist's own strokes; never invent new figures or text.
@@ -345,17 +346,6 @@ def ink_to_alpha(image: PILImage.Image) -> PILImage.Image:
     return rgba
 
 
-def clip_brief(prompt: str, starring: str = "", backdrop: str = "") -> str:
-    """The exact words sent with the drawing for a new AI video (shown to the artist afterwards)."""
-    story = prompt or ("Surprise me: a short, playful story with a fun beginning, a twist in the middle, "
-                       "and a satisfying ending.")
-    cast = f"The star is {starring}. " if starring else ""
-    place = f"The setting is {backdrop}. " if backdrop else ""
-    return ("This image is an artist's hand-drawn doodle. Bring it to life as an animated short. "
-            f"{cast}{place}Keep the hand-drawn look: the same characters, line style, and colors, "
-            f"so the artist recognizes their own drawing. Story: {story}")
-
-
 class Sparks:
     def __init__(self) -> None:
         key = os.environ.get("GEMINI_API_KEY")
@@ -364,7 +354,6 @@ class Sparks:
         self.client = genai.Client(api_key=key, http_options=types.HttpOptions(timeout=90_000))
         self.text_model = os.environ.get("GEMINI_TEXT_MODEL", "gemini-3.5-flash")
         self.image_model = os.environ.get("GEMINI_IMAGE_MODEL", "gemini-3.1-flash-image")
-        self.video_model = os.environ.get("GEMINI_VIDEO_MODEL", "gemini-omni-1.2-flash")
 
     def _generate(self, **kwargs):
         try:
@@ -386,40 +375,6 @@ class Sparks:
         if not isinstance(response.parsed, schema):
             raise AIError("Gemini returned no suggestion. Try a different area or wording.")
         return response.parsed
-
-    def clip(self, layers: list[Layer], prompt: str, previous: str | None = None, *,
-             starring: str = "", backdrop: str = "") -> tuple[str, bytes]:
-        """Generate a video, or edit the owner's previous Gemini interaction."""
-        if previous:
-            contents = prompt
-        else:
-            contents = [
-                {"type": "image", "data": base64.b64encode(png_bytes(render_image(layers))).decode("ascii"),
-                 "mime_type": "image/png"},
-                {"type": "text", "text": clip_brief(prompt, starring, backdrop)},
-            ]
-        try:
-            result = self.client.interactions.create(
-                model=self.video_model, input=contents, previous_interaction_id=previous,
-                response_format={"type": "video", "duration": "8s", "resolution": "720p"},
-                timeout=300,
-            )
-        except genai_errors.APIError:
-            raise
-        except Exception as exc:
-            raise AIUnavailable("Gemini video is unreachable. Please try again.") from exc
-        video = result.output_video
-        if result.status != "completed" or not result.id or not video or not video.data:
-            raise AIError("Gemini did not return a finished video. Try a different direction.")
-        if video.mime_type and video.mime_type != "video/mp4":
-            raise AIError("Gemini returned an unsupported video format.")
-        try:
-            data = base64.b64decode(video.data, validate=True)
-        except (binascii.Error, ValueError) as exc:
-            raise AIError("Gemini returned an invalid video.") from exc
-        if len(data) < 12 or data[4:8] != b"ftyp" or len(data) > 40 * 1024 * 1024:
-            raise AIError("Gemini returned an invalid or oversized video.")
-        return result.id, data
 
     def suggest_tags(self, request: TagRequest) -> list[str]:
         image = png_bytes(render_image(request.layers))

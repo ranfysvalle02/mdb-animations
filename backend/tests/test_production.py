@@ -86,13 +86,11 @@ def test_metadata_filter_open_means_not_approved():
 def offline_production():
     production = Production.__new__(Production)
     production.owner = "tester"
-    production.assets, production.shots, production.elements, production.frames, production.clips = Mock(), Mock(), Mock(), Mock(), Mock()
-    production.clips.mongo.find.return_value.sort.return_value.limit.return_value = []
-    production.clip_media = Mock()
+    production.assets, production.shots, production.elements, production.frames = Mock(), Mock(), Mock(), Mock()
     production.min_score = 0.72
     production.frames.mongo.find.return_value = []
     production.versions = Mock()
-    for collection in (production.assets, production.shots, production.elements, production.frames, production.clips):
+    for collection in (production.assets, production.shots, production.elements, production.frames):
         collection.add.side_effect = lambda records, retries: SimpleNamespace(added=len(records), failed=0, skipped=0)
     production.assets.mongo.find.return_value = [{"id": ASSET_ID, "name": "Red Rocket", "version": 3}]
     production.shots.mongo.find_one.return_value = None
@@ -544,23 +542,6 @@ def test_similar_finds_linked_animations_and_only_animated_visual_matches():
     assert production.frames.mongo.aggregate.call_args.args[0][0] == {
         "$match": {"owner": "tester", "asset_ids": ASSET_ID, "frames": {"$gte": 2}}}
     assert production._nearest.call_args.args[3] == {"owner": "tester", "frames": {"$gte": 2}}
-
-
-def test_generated_clip_is_owner_scoped_and_media_is_removed_if_indexing_fails():
-    from backend.models import Layer
-    production = offline_production()
-    production.assets.mongo.find_one.return_value = {"_id": "owned"}
-    production.clip_media.upload_from_stream.return_value = "media"
-    layers = [Layer.model_validate(layer) for layer in shot_payload()["layers"][:2]]
-    saved = production.save_clip(layers, "explores the moon", "interaction", b"video", brief="exact words")
-    record = production.clips.add.call_args.args[0][0]
-    assert record["owner"] == "tester" and record["asset_ids"] == [ASSET_ID]
-    assert record["interaction_id"] == "interaction" and saved["video_url"].startswith("/api/clips/")
-    assert saved["brief"] == "exact words"
-    production.clips.add.side_effect = RuntimeError("index unavailable")
-    with pytest.raises(RuntimeError, match="index unavailable"):
-        production.save_clip(layers, "again", "interaction", b"video")
-    production.clip_media.delete.assert_called_once_with("media")
 
 
 def test_long_shots_get_a_sample_of_frame_vectors():
