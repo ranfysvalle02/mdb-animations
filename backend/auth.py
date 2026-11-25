@@ -242,6 +242,46 @@ class Throttle:
                 self._hits = {k: v for k, v in self._hits.items() if v and v[-1] > now - self.window}
             return allowed
 
+    def _live(self, key: str, now: float) -> list[float]:
+        hits = [t for t in self._hits.get(key, []) if t > now - self.window]
+        self._hits[key] = hits
+        return hits
+
+    def used(self, key: str) -> int:
+        with self._lock:
+            return len(self._live(key, time.time()))
+
+    def record(self, key: str) -> None:
+        now = time.time()
+        with self._lock:
+            self._live(key, now).append(now)
+
+    def retry_after(self, key: str) -> int:
+        """Seconds until the oldest counted call leaves the window."""
+        now = time.time()
+        with self._lock:
+            hits = self._live(key, now)
+            return max(1, int(hits[0] + self.window - now) + 1) if hits else 0
+
+
+class Budget:
+    """Billable calls per member per hour: checked before the call, charged only when it succeeds."""
+
+    def __init__(self, name: str, label: str, per_hour: int) -> None:
+        self.name, self.label, self.limit = name, label, per_hour
+        self.meter = Throttle(limit=max(per_hour, 1), window=3600)
+
+    @property
+    def unlimited(self) -> bool:
+        return self.limit <= 0
+
+    def exhausted(self, owner: str) -> bool:
+        return not self.unlimited and self.meter.used(owner) >= self.limit
+
+    def status(self, owner: str) -> dict:
+        used = self.meter.used(owner)
+        return {"used": used, "limit": self.limit or None, "left": None if self.unlimited else max(0, self.limit - used)}
+
 
 def service_owner(headers, client_host: str | None) -> str | None:
     """A container-internal script acting as a named owner (loopback + the derived service key only)."""

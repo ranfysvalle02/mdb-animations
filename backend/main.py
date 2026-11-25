@@ -1,6 +1,8 @@
 import base64
+import html
 import logging
 import os
+import re
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -10,7 +12,7 @@ from uuid import UUID
 from cinematlas.exceptions import CinematlasError
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from google.genai.errors import APIError as GeminiError
 from pydantic import BaseModel, Field, ValidationError
 from pymongo.errors import PyMongoError
@@ -18,7 +20,7 @@ from starlette.concurrency import run_in_threadpool
 from voyageai.error import VoyageError
 
 from backend.ai import AIError, AIUnavailable, Sparks
-from backend.auth import DEMO_OWNER, SESSION_COOKIE, AuthError, AuthUnavailable, MStash, OpenAuth, Throttle, jwt_claims, service_owner
+from backend.auth import DEMO_OWNER, SESSION_COOKIE, AuthError, AuthUnavailable, Budget, MStash, OpenAuth, Throttle, jwt_claims, service_owner
 from backend.library import Library, LibraryError, ink_crop, render_image
 from backend.models import (
     ASSET_TYPES, CODE_PATTERN, MAX_LAYERS, SHOT_STATUSES, Asset, Drawing, LayersRequest, Shot, ShotUpdate, SketchRequest, SparkRequest, TagRequest,
@@ -96,6 +98,34 @@ def is_https(request: Request) -> bool:
     return request.url.scheme == "https" or (TRUST_PROXY and forwarded == "https")
 
 
+# Billable work, metered per member per hour (0 = unlimited). Gemini drafts are the expensive kind;
+# Voyage embeds every save and every search by words, by drawing, or for look-alikes.
+AI_BUDGET = Budget("ai", "AI drafts", int(os.environ.get("INKLING_AI_PER_HOUR", "60")))
+EMBED_BUDGET = Budget("embeds", "saves and searches", int(os.environ.get("INKLING_EMBEDS_PER_HOUR", "600")))
+_ID = r"[0-9a-fA-F-]{36}"
+METERED = [
+    (AI_BUDGET, "POST", re.compile(r"/api/(sparks/(strokes|sketch|guide)|tags/suggest|assets/" + _ID + r"/variations(/plan)?)")),
+    (EMBED_BUDGET, "POST", re.compile(r"/api/(drawings|assets|assets/similar|shots|search/sketch|shots/" + _ID + r"/(sync/" + _ID + r"|link))")),
+    (EMBED_BUDGET, "PUT", re.compile(r"/api/(assets|shots)/" + _ID)),
+    (EMBED_BUDGET, "GET", re.compile(r"/api/(search|assets/" + _ID + r"/where-used)")),
+]
+QUERY_SEARCH = re.compile(r"/api/(assets|shots|frames)")  # vector search only when there's a ?q=
+
+
+def budget_for(request: Request) -> Budget | None:
+    method, path = request.method, request.url.path
+    for budget, verb, pattern in METERED:
+        if method == verb and pattern.fullmatch(path):
+            return budget
+    if method == "GET" and QUERY_SEARCH.fullmatch(path) and request.query_params.get("q", "").strip():
+        return EMBED_BUDGET
+    return None
+
+
+def wait_text(seconds: int) -> str:
+    return f"{max(1, round(seconds / 60))} min" if seconds >= 60 else f"{seconds} s"
+
+
 def session_token(request: Request) -> str:
     header = request.headers.get("authorization", "")
     if header.lower().startswith("bearer "):
@@ -125,7 +155,16 @@ async def authenticate(request: Request, call_next):
         return JSONResponse(status_code=401, content={"detail": str(exc)})
     except AuthUnavailable as exc:
         return JSONResponse(status_code=503, content={"detail": str(exc)})
-    return await call_next(request)
+    # Members get an hourly budget for billable calls; in-container scripts (seed, backfill) don't.
+    budget = budget_for(request) if getattr(request.state, "user", None) else None
+    if budget and budget.exhausted(owner):
+        wait = budget.meter.retry_after(owner)
+        return JSONResponse(status_code=429, headers={"Retry-After": str(wait)}, content={
+            "detail": f"You've used this hour's {budget.limit} {budget.label}. More in {wait_text(wait)}."})
+    response = await call_next(request)
+    if budget and response.status_code < 400:
+        budget.meter.record(owner)
+    return response
 
 
 @app.exception_handler(AuthError)
@@ -213,8 +252,10 @@ class Prefs(BaseModel):
 def whoami(request: Request) -> dict:
     user = getattr(request.state, "user", None)
     production = prod(request)
-    return {"user": {"id": request.state.owner, "email": user.email if user else ""}, "library": production.counts(),
-            "demo": production.scoped(DEMO_OWNER).counts()["assets"] > 0}
+    owner = request.state.owner
+    return {"user": {"id": owner, "email": user.email if user else ""}, "library": production.counts(),
+            "demo": production.scoped(DEMO_OWNER).counts()["assets"] > 0,
+            "budget": {budget.name: budget.status(owner) for budget in (AI_BUDGET, EMBED_BUDGET)}}
 
 
 @app.get("/api/auth/config")
@@ -686,10 +727,25 @@ def playground() -> FileResponse:
     return FileResponse(ROOT / "index.html", headers=REVALIDATE)
 
 
+def public_origin(request: Request) -> str:
+    """Where this app lives, for link previews (crawlers need absolute URLs)."""
+    configured = os.environ.get("PUBLIC_URL") or os.environ.get("RENDER_EXTERNAL_URL")  # Render sets the latter
+    if configured:
+        return configured.rstrip("/")
+    host = (request.headers.get("x-forwarded-host") if TRUST_PROXY else None) or request.headers.get("host", "localhost")
+    return f"{'https' if is_https(request) else 'http'}://{host.split(',')[0].strip()}"
+
+
 @app.get("/", include_in_schema=False)
 @app.get("/studio", include_in_schema=False)
-def studio() -> FileResponse:
-    return FileResponse(ROOT / "studio.html", headers=REVALIDATE)
+def studio(request: Request) -> HTMLResponse:
+    page = (ROOT / "studio.html").read_text(encoding="utf-8")
+    return HTMLResponse(page.replace("__ORIGIN__", html.escape(public_origin(request), quote=True)), headers=REVALIDATE)
+
+
+@app.get("/og.png", include_in_schema=False)
+def social_card() -> FileResponse:
+    return FileResponse(ROOT / "og.png", media_type="image/png", headers={"Cache-Control": "public, max-age=86400"})
 
 
 @app.get("/studio.js", include_in_schema=False)

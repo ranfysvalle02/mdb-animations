@@ -54,7 +54,11 @@ What the Blueprint sets for you:
 | `TRUST_PROXY` | `1` | Render terminates TLS: session cookies become `Secure`, sign-in limits use the real client IP |
 | `INKLING_SERVICE_KEY` | generated | Lets in-container scripts act as a library, over loopback only |
 | `MSTASH_APP_KEY`, `MSTASH_APP_ID`, `MSTASH_API` | Inkling's m-stash app | Accounts. Swap in your own app to own the user list |
+| `INKLING_AI_PER_HOUR`, `INKLING_EMBEDS_PER_HOUR` | `60`, `600` | Hourly per-member budgets for Gemini drafts and Voyage saves/searches (`0` = unlimited) |
 | `WHERE_USED_MIN_SCORE`, `SIMILAR_ASSET_MIN_SCORE` | `0.75` | Look-alike cutoffs (see [NEXT-STEPS.md](../NEXT-STEPS.md)) |
+
+Link previews (the card in [`og.png`](../og.png)) use Render's `RENDER_EXTERNAL_URL` automatically. On a
+custom domain, set `PUBLIC_URL=https://your.domain`.
 
 **Plan:** `starter` is the default. `free` works but sleeps when idle, so the first visit takes about a minute.
 
@@ -104,11 +108,15 @@ python -m backend.smoke_test   # signs in through m-stash and exercises everythi
 | Sign-in works but you're signed straight out | The cookie isn't marked `Secure` behind the proxy | Make sure `TRUST_PROXY=1` |
 | First sign-in of the day is slow | m-stash wakes from idle | The UI says so after 4 s; later sign-ins are fast |
 | "Too many sign-in attempts" | 10 per 5 minutes, per address and per account | Wait a few minutes |
+| "You've used this hour's 60 AI drafts" | The member's hourly budget | Wait (the message says how long), or raise `INKLING_AI_PER_HOUR` |
+| A push didn't deploy | CI failed, or auto-deploy is off | Check the repo's **Actions** tab (tests, lint, Docker build) |
 
 ## Before you share it widely
 
-- **Cost:** every save and search calls Voyage; Ask AI and auto-tags call Gemini. Accounts gate access, but
-  there's no per-member AI quota yet. Set budget alerts with both providers.
+- **Cost:** every save and search calls Voyage; Ask AI and auto-tags call Gemini. Each member gets an hourly
+  budget (`INKLING_AI_PER_HOUR`, default 60 drafts; `INKLING_EMBEDS_PER_HOUR`, default 600 saves and searches),
+  shown in their account menu. Failed calls aren't charged. Budgets reset on restart, so still set budget alerts
+  with both providers.
 - **Backups:** turn on Atlas backups (M10+) or scheduled exports.
 - **Your own accounts:** create your own m-stash app and set `MSTASH_APP_KEY` / `MSTASH_APP_ID`, so the
   user list is yours.

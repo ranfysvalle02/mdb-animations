@@ -1,5 +1,7 @@
 # ✦ Inkling: draw it once, animate it anywhere
 
+[![CI](https://github.com/ranfysvalle02/mdb-animations/actions/workflows/ci.yml/badge.svg)](https://github.com/ranfysvalle02/mdb-animations/actions/workflows/ci.yml)
+
 > **inkling** /ˈɪŋklɪŋ/ *n.* a slight hint or suggestion.
 
 **Draw it once. Animate it anywhere. Find any frame.**
@@ -68,6 +70,10 @@ How it's locked down:
 - **Preferences follow you.** Guide progress is a private m-stash `item` record (`inkling-prefs`).
 - **Copies, not shares.** The demo library is copied into your space under fresh ids (vectors included,
   nothing re-embedded), with every link, lineage, element, and frame id remapped.
+- **Hourly budgets per member** for billable calls: 60 Gemini drafts (`INKLING_AI_PER_HOUR`) and 600 Voyage
+  saves and searches (`INKLING_EMBEDS_PER_HOUR`). They're checked before the call, charged only on success,
+  shown in the account menu, and answered with a friendly 429 plus `Retry-After` when spent. Browsing, images,
+  metadata edits, and the demo copy are free.
 - Container scripts (seed, backfill, smoke test) act as a named owner with a service key derived from a
   server-side secret, accepted only over loopback.
 
@@ -448,6 +454,10 @@ Offline tests (no credentials, no billable provider calls; accounts are faked):
 .venv/bin/python -m pytest backend/tests -q
 node --check studio.js
 ```
+
+GitHub Actions ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs the same checks on every push and pull
+request, plus `pyflakes` and a build of the Docker image Render deploys. Refresh the docs' screenshots and the
+link-preview card with `python docs/capture_screenshots.py --with-ai` and `python docs/make_social_card.py`.
 
 API: `POST /api/drawings` accepts JSON with `title`, `description`, `layers`
 (1-12; each `name`, `visible`, `opacity` 0–1, `strokes`; each stroke: hex

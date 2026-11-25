@@ -143,7 +143,8 @@ Animation stays a taste of what's possible; assets are the product.
   Next: shared studio libraries (teams), per-project roles, and an m-stash allowed origin for the hosted domain.
 - Artwork goes to Voyage and Gemini: per-project provider controls, retention, a processing agreement, and
   self-hosted or VPC options.
-- Shipped: a Render Blueprint ([docs/deploy-render.md](docs/deploy-render.md)). Next: per-member AI quotas, Atlas backups, cost metering per project.
+- Shipped: a Render Blueprint ([docs/deploy-render.md](docs/deploy-render.md)), hourly per-member budgets for Gemini drafts and Voyage calls, and CI.
+  Next: persistent budgets (they're in-process and reset on restart), Atlas backups, cost metering per project.
 - A signed, exportable audit trail and process record (JSON/PDF) for clients and rights reviews.
 - Deleting an asset offers to unlink or re-link its placements instead of refusing.
 
@@ -161,7 +162,7 @@ Animation stays a taste of what's possible; assets are the product.
 - The audit trail records what the member's browser reports, not signed events.
 - New saves take a moment to become vector-searchable (eventual consistency); exact links are immediate.
 - Libraries are per member; there are no shared team libraries or roles yet (step 8).
-- No per-member AI quota yet: a signed-in member can make as many Voyage/Gemini calls as they like (step 8).
+- Budgets live in process memory: a restart resets them, and more than one instance would need a shared store (step 8).
 - The demo copy is a snapshot: improvements to the shared demo don't reach copies already made.
 - "Inkling" needs a trademark check before any public launch.
 

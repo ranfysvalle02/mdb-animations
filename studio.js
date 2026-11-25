@@ -3453,6 +3453,13 @@
     $('account-email').textContent = email || 'Local studio';
     const lib = account.library || {};
     $('account-counts').textContent = `${plural(lib.assets || 0, 'asset')} \u00b7 ${plural(lib.scenes || 0, 'scene')} \u00b7 ${plural(lib.ideas || 0, 'idea')}`;
+    const ai = account.budget?.ai;
+    const embeds = account.budget?.embeds;
+    const lines = [];
+    if (ai?.limit) lines.push(`\u2726 ${ai.left} of ${ai.limit} AI drafts left this hour`);
+    if (embeds?.limit && embeds.left < embeds.limit * 0.2) lines.push(`${embeds.left} saves & searches left this hour`);
+    $('account-budget').textContent = lines.join(' \u00b7 ');
+    $('account-budget').hidden = !lines.length;
   }
   $('account-button').addEventListener('click', event => {
     event.stopPropagation();

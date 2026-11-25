@@ -233,3 +233,50 @@ def test_sign_ins_are_also_limited_per_account(signed, monkeypatch):
 def test_the_root_url_is_the_studio(signed):
     assert "inkling" in signed.get("/").text.lower()
     assert signed.get("/playground").status_code == 200
+
+
+def test_only_billable_calls_are_metered():
+    from starlette.requests import Request as Req
+
+    from backend.main import AI_BUDGET, EMBED_BUDGET, budget_for
+
+    def kind(method, path, query=""):
+        budget = budget_for(Req({"type": "http", "method": method, "path": path, "query_string": query.encode(), "headers": []}))
+        return budget and budget.name
+
+    uid = "11111111-2222-4333-8444-555555555555"
+    assert kind("POST", "/api/sparks/sketch") == AI_BUDGET.name
+    assert kind("POST", f"/api/assets/{uid}/variations/plan") == AI_BUDGET.name
+    assert kind("POST", "/api/assets") == kind("PUT", f"/api/shots/{uid}") == EMBED_BUDGET.name
+    assert kind("GET", "/api/frames", "q=rocket") == kind("GET", f"/api/assets/{uid}/where-used") == EMBED_BUDGET.name
+    # browsing, images, metadata-only edits, and the demo copy (no re-embedding) are free
+    assert kind("GET", "/api/frames") is kind("GET", f"/api/assets/{uid}/image") is kind("PATCH", f"/api/shots/{uid}") is None
+    assert kind("POST", "/api/library/demo") is None
+
+
+def test_a_member_who_spends_the_hour_gets_a_friendly_429_and_failures_are_free(signed, monkeypatch):
+    import backend.main as main
+    from backend.auth import Budget
+
+    monkeypatch.setattr(main, "AI_BUDGET", Budget("ai", "AI drafts", 2))
+    monkeypatch.setattr(main, "METERED", [(main.AI_BUDGET, *rule[1:]) if rule[0].name == "ai" else rule for rule in main.METERED])
+    auth = {"Authorization": f"Bearer {GOOD}"}
+    body = {"title": "Robot", "layers": [{"strokes": [{"color": "#000000", "width": 4, "points": [{"x": 0.1, "y": 0.1}]}]}]}
+    assert signed.post("/api/tags/suggest", json={"layers": []}, headers=auth).status_code == 422  # failed: not charged
+    assert [signed.post("/api/tags/suggest", json=body, headers=auth).status_code for _ in range(3)] == [200, 200, 429]
+    blocked = signed.post("/api/tags/suggest", json=body, headers=auth)
+    assert "2 AI drafts" in blocked.json()["detail"] and int(blocked.headers["Retry-After"]) > 3000
+    signed.production.counts.return_value = {"assets": 0, "scenes": 0, "ideas": 0}
+    assert signed.get("/api/session", headers=auth).json()["budget"]["ai"] == {"used": 2, "limit": 2, "left": 0}
+
+
+def test_link_previews_use_absolute_urls_and_escape_the_host(signed, monkeypatch):
+    monkeypatch.delenv("PUBLIC_URL", raising=False)
+    monkeypatch.delenv("RENDER_EXTERNAL_URL", raising=False)
+    page = signed.get("/", headers={"Host": 'evil.test"><script>'}).text
+    assert "__ORIGIN__" not in page and "<script>\"" not in page and "&quot;&gt;&lt;script&gt;" in page
+    monkeypatch.setenv("RENDER_EXTERNAL_URL", "https://inkling.onrender.com")
+    page = signed.get("/").text
+    assert '<meta property="og:image" content="https://inkling.onrender.com/og.png">' in page
+    image = signed.get("/og.png")
+    assert image.status_code == 200 and image.headers["content-type"] == "image/png"

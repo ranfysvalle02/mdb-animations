@@ -13,6 +13,9 @@ x-studio: &studio
     SIMILAR_ASSET_MIN_SCORE: ${SIMILAR_ASSET_MIN_SCORE:-0.75}
     # Accounts (m-stash). The pk_ key is a publishable, frontend-safe key; never put an sk_ key here.
     INKLING_AUTH: ${INKLING_AUTH:-mstash}
+    INKLING_AI_PER_HOUR: ${INKLING_AI_PER_HOUR:-60}
+    INKLING_EMBEDS_PER_HOUR: ${INKLING_EMBEDS_PER_HOUR:-600}
+    PUBLIC_URL: ${PUBLIC_URL:-}
     MSTASH_API: ${MSTASH_API:-https://m-stash.onrender.com}
     MSTASH_APP_KEY: ${MSTASH_APP_KEY:-pk_yHSFykvx0dOwKjY0_RqelF6Cea-ll2j5}
     MSTASH_APP_ID: ${MSTASH_APP_ID:-6b066706e721f4b3abbaee3b}

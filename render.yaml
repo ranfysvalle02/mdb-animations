@@ -33,6 +33,10 @@ services:
         value: "1"
       - key: INKLING_SERVICE_KEY      # internal scripts' key (loopback only)
         generateValue: true
+      - key: INKLING_AI_PER_HOUR      # Gemini drafts per member per hour (0 = unlimited)
+        value: "60"
+      - key: INKLING_EMBEDS_PER_HOUR  # Voyage saves + searches per member per hour
+        value: "600"
       - key: WHERE_USED_MIN_SCORE
         value: "0.75"
       - key: SIMILAR_ASSET_MIN_SCORE

@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Tests and lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements*.txt
+      - name: Install
+        run: python -m pip install -r backend/requirements-dev.txt pyflakes
+      - name: Lint (Python)
+        run: python -m pyflakes backend docs
+      - name: Check (JavaScript)
+        run: node --check studio.js
+      - name: Unit tests (offline; no keys, no billable calls)
+        run: python -m pytest backend/tests -q
+
+  image:
+    name: Docker image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build (the same image Render deploys)
+        run: docker build -t inkling:ci .
+      - name: The app imports inside the image
+        run: docker run --rm inkling:ci python -c "import backend.main, backend.serve; print('ok')"
