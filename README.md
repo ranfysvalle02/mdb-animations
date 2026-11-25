@@ -21,13 +21,14 @@ slot machine. Three rules you can check in the app (tap them under the headline)
 3. **Your sketchbook, remembered.** Draw a rough shape to find matching work. Voyage AI maps meaning; MongoDB
    Atlas searches only your library.
 
-Draw a character, prop, or backdrop, then:
+**Draw → Animate → Find.** Three steps, shown above the box, and the one you're on glows. Draw a character, prop,
+or backdrop, then:
 
 Under the canvas sits one box, like a search page: type or speak what happens (or leave it blank for a
 surprise), pick who's **Starring** (this drawing, or any saved asset) and where (a starter or a backdrop you
 drew), then press a button. The button you press is the choice:
 
-- **🎞 Flipbook** (or Enter): Gemini picks the poses; math draws the frames. Every frame is **your own
+- **🎞 Animate** (or Enter) makes a flipbook: Gemini picks the poses; math draws the frames. Every frame is **your own
   strokes**, never redrawn. **Keep** turns it into editable frames, and **⟨/⟩ Code** shows the take as the p5.js
   sketch that draws it.
 - **◎ Find similar**: your drawing is the search (or the words in the box). **Voyage AI** multimodal
@@ -147,7 +148,7 @@ MongoDB Atlas, and Gemini in plain words, using your own canvas as the example.
 | | You | Inkling |
 | --- | --- | --- |
 | **1. Doodle it** | Draw in layers (try **Focus** or a **starter**) | Pressure, palm rejection, auto-tags on save |
-| **2. Bring it to life** | Say what happens, then **🎞 Flipbook**. Revise by talking, or by editing the code | Gemini keyframes your strokes; the scene is saved as p5.js |
+| **2. Bring it to life** | Say what happens, then **🎞 Animate**. Revise by talking, or by editing the code | Gemini keyframes your strokes; the scene is saved as p5.js |
 | **3. Find similar** | Your drawing, words, or voice | Voyage AI + Atlas Vector Search across assets, backdrops, and scenes |
 | **4. Share it** | **🔗 Save & share** a flipbook | A public link with a looping GIF. Your library stays private |
 
@@ -332,7 +333,7 @@ or scene apart:
 
 ### 🎞 Flipbooks, under the hood
 
-**🎞 Flipbook** (Enter in the box, or **A**) saves and tags a new or changed drawing, then Gemini
+**🎞 Animate** (Enter in the box, or **A**) saves and tags a new or changed drawing, then Gemini
 imagines a scene and chooses key poses. The studio calculates the in-between frames from your own strokes.
 **Keep** makes the frames editable; **Try again** creates another preview. Save the scene to find it later.
 

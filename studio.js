@@ -339,10 +339,28 @@
     renderLayersPanel();
     renderStarters();
   }
+  // Draw, animate, find: the whole product in three words. The step you're on glows; the ones behind you are ticked.
+  function renderRhythm() {
+    const at = canvasIsBlank() ? 0 : frames.length > 1 && !motionDraft ? 2 : 1;
+    document.querySelectorAll('#rhythm button').forEach((button, i) => {
+      button.classList.toggle('done', i < at);
+      button.classList.toggle('now', i === at);
+      button.setAttribute('aria-current', i === at ? 'step' : 'false');
+    });
+  }
+  document.querySelectorAll('#rhythm button').forEach(button => button.addEventListener('click', () => {
+    const step = button.dataset.step;
+    if (step === 'draw') { setTool(drawTool); canvas.scrollIntoView({ behavior: 'smooth', block: 'center' }); pulse('#canvas-frame'); }
+    else if (step === 'animate') { $('scene-prompt').focus({ preventScroll: true }); $('scene-direct').scrollIntoView({ behavior: 'smooth', block: 'center' }); }
+    else if (offline) flashTray('Search comes back with the connection. Your canvas works offline.', true);
+    else if (hasInk()) findSimilar();
+    else openFinder();
+  }));
   function updateControls() {
     // Ink on the page wakes up the "bring it to life" box.
     document.body.classList.toggle('has-ink', !canvasIsBlank());
     renderAuthorship();
+    renderRhythm();
     $('undo').disabled = !undoStack.length;
     $('redo').disabled = !redoStack.length;
     $('guide-controls').hidden = !guides.length;
@@ -2755,6 +2773,7 @@
     renderTakes();
     renderWho();
     renderFxChips();
+    renderRhythm();
     if (spec.change) message('drawing-status', spec.change, false, [{ label: '\u25c6 How it moves', tip: 'How it moves|Keyframes, in-betweens, and spacing, shown on your shot.', run: () => explainScene() }]);
     // Closing the sheet hands focus back to the Animate button; Enter must mean "keep", not "reopen".
     if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
@@ -6674,7 +6693,6 @@
       // No signal: no sign-in wall. The studio opens on this device's drawing; the account waits for the connection.
       setOffline(true, { quiet: true });
       await restoreDraft();
-      if (!hasInk()) message('drawing-status', '\u2708 Offline. Your pencil still works: draw, layer, stamp, flip frames, quick moves, and effects.');
       launchShortcut();
       return;
     }

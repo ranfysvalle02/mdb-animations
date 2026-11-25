@@ -192,6 +192,11 @@
           <h3 id="scene-maker-heading" class="sr-only">Bring it to life</h3>
           <form id="scene-direct" autocomplete="off">
             <label class="sr-only" for="scene-prompt">What happens?</label>
+            <ol id="rhythm" class="rhythm" aria-label="Draw, animate, find">
+              <li><button type="button" data-step="draw" data-tip="Draw|Pen, finger, or stylus. Or start from a scene."><b>1</b>Draw</button></li>
+              <li><button type="button" data-step="animate" data-tip="Animate|Say what happens. AI picks the poses; math draws the frames."><b>2</b>Animate</button></li>
+              <li><button type="button" data-step="find" data-tip="Find|Search your art by words, a sketch, or code. Voyage AI + MongoDB Atlas."><b>3</b>Find</button></li>
+            </ol>
             <div id="scene-who" class="scene-who" role="group" aria-label="Who your words reach" hidden></div>
             <div class="scene-pill">
               <span class="scene-spark" aria-hidden="true">&#10022;</span>
@@ -207,7 +212,7 @@
             </div>
             <div class="scene-actions">
               <button type="submit" id="dock-animate" class="scene-go primary" hidden>&#10022; Change it</button>
-              <button type="submit" id="go-flipbook" class="scene-go" data-style="art" data-tip="Flipbook|In-betweening without redrawing: your exact strokes, posed in motion. Enter does this.">&#127902; Flipbook</button>
+              <button type="submit" id="go-flipbook" class="scene-go primary" data-style="art" data-tip="Animate · Enter|A flipbook of your exact strokes: AI picks the poses, math draws the frames, nothing is redrawn.">&#127902; Animate</button>
               <button type="button" id="dock-similar" data-online class="scene-go" data-tip="Find similar|Your drawing is the search, or type words above. Voyage AI embeddings in MongoDB Atlas.">&#9678; Find similar</button>
             </div>
             <p id="scene-style-note" class="scene-style-note">AI picks the poses. Math draws the frames. Every frame is your own strokes.</p>

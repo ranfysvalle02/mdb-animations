@@ -87,7 +87,7 @@ Asset cards show versions, usage, and lineage (*✦ variant of Red Rocket*).
 
 Under the canvas there's one box. Type or speak what happens (or leave it blank for a surprise), check
 who's **Starring** (this drawing, or any saved asset) and where (**in** a starter or your own backdrop),
-then press **🎞 Flipbook** (or Enter). Asset cards in your library have a shortcut:
+then press **🎞 Animate** (or Enter). Asset cards in your library have a shortcut:
 **✦ Bring to life** (or **✦ Use as backdrop**) fills it in for you. A new or changed drawing is saved and
 tagged first.
 
