@@ -45,6 +45,8 @@
   let takes = []; // motion specs, in the order they arrived
   let takeAt = -1;
   let directing = false;
+  let offline = !navigator.onLine; // airplane mode (or no route to Inkling): drawing only, nothing leaves the device
+  let draftRevision = -1; // the canvas revision last kept on this device
   let currentClip = null;
   let clipTakes = []; // AI video takes in this session (each one is already saved)
   let targets = null; // the layers the box talks to (a Set of ids); null means everything that can move
@@ -1549,7 +1551,7 @@
     }, 'image/png');
   });
   window.addEventListener('beforeunload', event => {
-    if (revision !== savedRevision) {
+    if (revision !== savedRevision && revision !== draftRevision) {
       event.preventDefault();
       event.returnValue = '';
     }
@@ -1564,14 +1566,24 @@
       : Array.isArray(body?.detail) && body.detail[0]?.msg ? `${body.detail[0].msg.replace(/^Value error, /, '')}` : null;
     return new Error(detail || `Request failed (${response.status}). Check the API and try again.`);
   }
+  const PROBES = new Set(['/api/ready', '/api/session', '/api/auth/config']);
+  const OFFLINE_NOTE = 'You\u2019re offline. This needs a connection; your pencil doesn\u2019t.';
+  async function reach(path, options) {
+    if (offline && !PROBES.has(path)) throw Object.assign(new Error(OFFLINE_NOTE), { network: true });
+    try {
+      return await fetch(path, options);
+    } catch {
+      throw Object.assign(new Error('Can\u2019t reach Inkling right now. Your drawing is safe on this device.'), { network: true });
+    }
+  }
   async function api(path, options = {}) {
-    const response = await fetch(path, options);
+    const response = await reach(path, options);
     if (!response.ok) throw await failed(response, path);
     return response.status === 204 ? null : response.json();
   }
   // Newline-delimited JSON, one event per line, handed over as each arrives (the director's pipeline, live).
   async function streamEvents(path, body, onEvent) {
-    const response = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
+    const response = await reach(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
     if (!response.ok) throw await failed(response, path);
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -3209,6 +3221,9 @@
     $('scene-style-note').textContent = revising === 'video' ? 'Each change is a new take, saved in your library. Tap any take to watch it again.'
       : revising === 'art' ? 'Each change is a new take built on the one you see. Nothing changes until you keep one.'
       : 'Flipbook moves your own strokes. AI video is filmed by Gemini.';
+    if (offline) $('scene-style-note').textContent = revising ? 'Offline: quick moves, effects, and tweaks. All math, all yours.'
+      : 'Offline: Flipbook picks a quick move from your words. Plain math, no AI.';
+    if (offline && !revising) $('scene-prompt').placeholder = 'What happens? e.g. \u201chop in the snow\u201d';
     renderWho();
     renderFxChips();
     renderReading();
@@ -3666,6 +3681,7 @@
     }
   }
   function startRefineFlow() {
+    if (offline) { flashTray(OFFLINE_NOTE, true); return; }
     if (!hasInk()) {
       flashTray('Draw something first, then refine it with AI.', true);
       canvas.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -3690,12 +3706,16 @@
     // Enter (or Change it) follows the take on screen; otherwise the button you pressed is the choice.
     const style = revisingMode() || event.submitter?.dataset.style || 'art';
     if (style === 'video') {
+      if (offline) { flashTray(OFFLINE_NOTE, true); return; }
       if (motionDraft) skipMotion();
       createClip(prompt);
     } else if (motionDraft) {
       const read = readPrompt(prompt);
       if (prompt && !read.ai && (read.on.length || read.off.length || read.tweak)) applyLocal(read);
+      else if (offline) offlineRevise(prompt, read);
       else reviseMotion(prompt, read);
+    } else if (offline) {
+      offlineFlipbook(prompt);
     } else {
       const star = chosenStar();
       if (star && revision !== savedRevision && hasInk()
@@ -3944,12 +3964,15 @@
       ...(read.tweak ? [part('free', read.tweak.label, `${read.tweak.say}${read.tweak.clock ? ' (whole scene)' : ` for ${aimed ? 'NAMES' : 'everything'}`} \u00b7 free`)] : [])
     ];
     parts.forEach(item => { item.lastChild.textContent = item.lastChild.textContent.replace('NAMES', names); });
-    if (read.ai) parts.push(part('ai', '\u2726 Gemini', `new keyframes for ${names} only (move, turn, squash)`));
+    if (offline && (read.ai || !revising)) {
+      const move = offlineMove(text);
+      parts.push(part('free', `${move.icon} ${move.name}`, `a quick move for ${names} \u00b7 offline, plain math`));
+    } else if (read.ai) parts.push(part('ai', '\u2726 Gemini', `new keyframes for ${names} only (move, turn, squash)`));
     else if (!revising) parts.push(part('ai', '\u2726 Gemini', `picks a motion for ${names}`));
-    if (read.warn) parts.push(part('warn', '\u26a0', 'Flipbook only moves what\u2019s drawn. Draw the new thing first, or try \u2726 AI video.'));
+    if (read.warn) parts.push(part('warn', '\u26a0', `Flipbook only moves what\u2019s drawn. Draw the new thing first${offline ? '' : ', or try \u2726 AI video'}.`));
     box.replaceChildren(el('small', '', revising ? 'This will' : 'Flipbook reads'), ...parts);
     box.hidden = false;
-    if (revising === 'art' && !read.ai) $('dock-animate').textContent = '\u26a1 Apply \u00b7 free';
+    if (revising === 'art' && (!read.ai || offline)) $('dock-animate').textContent = '\u26a1 Apply \u00b7 free';
   }
   $('scene-prompt').addEventListener('input', renderReading);
   function renderFxChips() {
@@ -3972,7 +3995,9 @@
       ...FX.map(fx => chip(`${fx.icon} ${fx.name}`, on.has(fx.id), `${fx.name}|${fx.hint} A layer of tiny strokes drawn by code. Tap again to remove.`,
         () => applyLocal(on.has(fx.id) ? { off: [fx] } : { on: [fx] }))),
       el('i', 'fx-sep'),
-      ...TWEAKS.map(tweak => chip(tweak.label, null, `${tweak.label.replace(/^\W+/, '')}|${tweak.say[0].toUpperCase()}${tweak.say.slice(1)}.`, () => applyLocal({ tweak }))));
+      ...TWEAKS.map(tweak => chip(tweak.label, null, `${tweak.label.replace(/^\W+/, '')}|${tweak.say[0].toUpperCase()}${tweak.say.slice(1)}.`, () => applyLocal({ tweak }))),
+      ...(offline ? [el('i', 'fx-sep'), ...PRESETS.map(preset => chip(`${preset.icon} ${preset.name}`, null, `${preset.name}|${preset.hint} Plain math, works offline.`,
+        () => offlineRevise(preset.name, readPrompt(''))))] : []));
   }
   // Effects and tweaks: a new take in an instant, computed right here. Gemini isn't asked.
   function applyLocal({ on = [], off = [], tweak = null }) {
@@ -5324,6 +5349,7 @@
     }
   }
   function openFinder(query = '') {
+    if (offline) { flashTray('Search comes back with the connection. Your canvas works offline.', true); return; }
     if ($('finder').open) { $('finder-q').focus(); return; }
     closeNudge();
     closeKit();
@@ -6640,11 +6666,15 @@
   $('sign-out').addEventListener('click', async () => {
     if (revision !== savedRevision && !confirm('You have unsaved changes on the canvas. Sign out anyway?')) return;
     await fetch('/api/session', { method: 'DELETE' }).catch(() => {});
+    await draftStore('readwrite', store => store.delete(DRAFT_KEY)).catch(() => {});
+    try { localStorage.removeItem('inkling.lastUser'); } catch { /* fine */ }
     savedRevision = revision; // the confirm above already asked
     location.reload();
   });
   async function signedIn(me, fresh = false) {
     account = me;
+    try { localStorage.setItem('inkling.lastUser', me.user.id); } catch { /* fine */ }
+    restoreDraft();
     if ($('gate').open) $('gate').close();
     renderAccount();
     loadGallery();
@@ -6689,6 +6719,14 @@
     }
   });
   async function boot() {
+    if (offline) {
+      // No signal: no sign-in wall. The studio opens on this device's drawing; the account waits for the connection.
+      setOffline(true, { quiet: true });
+      await restoreDraft();
+      if (!hasInk()) message('drawing-status', '\u2708 Offline. Your pencil still works: draw, layer, stamp, flip frames, quick moves, and effects.');
+      launchShortcut();
+      return;
+    }
     try {
       authConfig = await api('/api/auth/config');
     } catch {
@@ -6696,20 +6734,192 @@
     }
     try {
       await signedIn(await api('/api/session'));
-    } catch {
+    } catch (error) {
+      if (error.network) { setOffline(true, { quiet: true }); await restoreDraft(); return; }
       showGate();
     }
+    launchShortcut();
+  }
+
+  // ---------------------------------------------------------------- offline: airplane mode is a studio, not an error page
+  // Everything that's yours keeps working (pen, layers, frames, kit, stamps, quick moves, effects). Everything that
+  // needs the internet (Gemini, Voyage search, your library, sharing, voice) is hidden here and refused by `reach`.
+  const MOVE_WORDS = [[/take ?off|lift ?off|launch|blast|fly|rocket|rise/i, 'liftoff'], [/hop|jump|leap|bunny|rabbit/i, 'hop'],
+    [/spin|twirl|turn around|roll/i, 'spin'], [/bounc|ball/i, 'bounce'], [/walk|stroll|march|run|across/i, 'walk'],
+    [/shak|nervous|wobbl|shiver|jitter|scared|cold|vibrat/i, 'shake'], [/zoom|push in|closer|grow|bigger/i, 'zoom'],
+    [/float|drift|hover|bob|sway|breez|dream/i, 'float']];
+  function offlineMove(text) {
+    const hit = MOVE_WORDS.find(([words]) => words.test(text));
+    return PRESETS.find(preset => preset.id === (hit ? hit[1] : 'float'));
+  }
+  function offlineFlipbook(prompt) {
+    stopPlay();
+    const read = readPrompt(prompt);
+    const move = offlineMove(prompt);
+    const cast = (targetLayers() || castLayers()).filter(layer => inkBounds(layer.strokes)).slice(0, 4);
+    if (!cast.length) { flashTray('Draw something first, then bring it to life.', true); canvas.scrollIntoView({ behavior: 'smooth', block: 'center' }); return; }
+    const effects = withFx([], read.on, []);
+    const tooMuch = fxFits({ base: layers }, effects);
+    if (tooMuch) { flashTray(tooMuch, true); return; }
+    const spec = { by: 'preset', label: `${move.icon} ${move.name}`, take: `${move.name}${fxList(effects).map(fx => ` ${fx.icon}`).join('')}`,
+      note: `${move.icon} ${move.name}`, seconds: move.seconds, strength: 1, base: layers, effects,
+      tracks: chosenTracks(box => move.keys(box), new Set(cast.map(layer => layer.id))) };
+    spec.change = `\u26a1 Take ${takes.length + 1}: ${move.icon} ${move.name}, offline. Plain math on your strokes, no AI: ${move.hint}${effects.length ? ` ${fxWords(fxList(effects), []).join(' ')}: drawn by code.` : ''}`;
+    $('scene-prompt').value = '';
+    previewMotion(spec);
+  }
+  function offlineRevise(prompt, read) {
+    if (!motionDraft) return;
+    const from = motionDraft.spec;
+    const move = offlineMove(prompt);
+    const aimed = targetLayers();
+    const ids = new Set(aimed ? aimed.map(layer => layer.id) : from.tracks.map(track => track.layerId));
+    const fresh = chosenTracks(box => move.keys(box), ids);
+    const tracks = [...from.tracks.map(track => fresh.find(item => item.layerId === track.layerId) || track),
+      ...fresh.filter(item => !from.tracks.some(track => track.layerId === item.layerId))];
+    if (tracks.length > 4) { flashTray('Four moving things at most. Pick fewer layers.', true); return; }
+    const effects = withFx(from.effects, read.on, read.off);
+    const tooMuch = fxFits(from, effects);
+    if (tooMuch) { flashTray(tooMuch, true); return; }
+    const spec = { ...from, tracks, effects, seconds: Math.max(from.seconds, move.seconds), take: `+ ${move.icon} ${move.name}` };
+    spec.change = `\u26a1 Take ${takes.length + 1}, offline: ${move.icon} ${move.name} for ${fresh.map(track => track.name).join(', ')}. Plain math, no AI. ${diffMotion(from, spec)}.`;
+    $('scene-prompt').value = '';
+    previewMotion(spec);
+  }
+  function setOffline(on, { quiet = false } = {}) {
+    if (offline === on && !quiet) return;
+    offline = on;
+    document.body.classList.toggle('offline', on);
+    $('connection').textContent = on ? '\u2708 Offline \u00b7 drawing only' : 'Library online';
+    $('connection-dot').classList.toggle('online', !on);
+    $('connection').closest('.connection').dataset.tip = on
+      ? 'Offline|Your pencil works anywhere. AI, search, and your library come back with the connection. Your drawing is kept on this device.'
+      : 'Your library|Saved in MongoDB Atlas. Searched by meaning with Voyage AI. AI drafts by Gemini.';
+    for (const id of ['finder', 'seen', 'welcome']) if ($(id)?.open) $(id).close();
+    setDockBusy(false);
+    renderFxChips();
+    if (quiet) return;
+    if (on) {
+      message('drawing-status', '\u2708 Offline. Your pencil still works: draw, layer, stamp, flip frames, quick moves, and effects. AI, search, and your library come back with the signal.');
+    } else {
+      const unsaved = revision !== savedRevision && hasInk();
+      message('drawing-status', `Back online. \u2726 AI, search, and your library are back.${unsaved ? ' Your drawing is still here.' : ''}`, false,
+        unsaved ? [{ label: '\u2193 Save to your library', run: () => MENU_ACTIONS.save() }] : []);
+      if (account) { loadGallery(); loadTags(); loadSceneBackdrops(); } else boot();
+    }
+  }
+  window.addEventListener('offline', () => setOffline(true));
+  window.addEventListener('online', () => checkConnection());
+
+  // ---------------------------------------------------------------- this device: drawings survive reloads, crashes, and airplane mode
+  const DRAFT_KEY = 'current';
+  function draftStore(mode, act) {
+    return new Promise((resolve, reject) => {
+      const open = indexedDB.open('inkling', 1);
+      open.onupgradeneeded = () => open.result.createObjectStore('drafts');
+      open.onerror = () => reject(open.error);
+      open.onsuccess = () => {
+        const tx = open.result.transaction('drafts', mode);
+        const request = act(tx.objectStore('drafts'));
+        tx.oncomplete = () => { open.result.close(); resolve(request.result); };
+        tx.onerror = () => { open.result.close(); reject(tx.error); };
+      };
+    });
+  }
+  const lastUser = () => { try { return localStorage.getItem('inkling.lastUser'); } catch { return null; } };
+  async function keepDraft() {
+    // Never before the restore check, and not mid-stroke. Playback and previews don't change the canvas, so they don't block it.
+    if (!draftChecked || !window.indexedDB || pointer !== null) return;
+    const at = revision;
+    try {
+      if (at === savedRevision || (!hasInk() && frames.length === 1)) {
+        await draftStore('readwrite', store => store.delete(DRAFT_KEY)); // saved to the library (or blank): nothing to keep
+      } else {
+        // The same compact shape a saved scene uses: frames 2..N as poses of frame 1.
+        await draftStore('readwrite', store => store.put({ v: 1, at: Date.now(), owner: account?.user?.id || lastUser(),
+          title: $('title').value, description: $('description').value, fps, motion: sceneMotion,
+          layers: docStack(frames[0]), frames: frames.slice(1).map(stack => ({ layers: compactStack(stack, frames[0]) })) }, DRAFT_KEY));
+      }
+      draftRevision = at;
+    } catch { /* private mode or storage full: the beforeunload warning still guards the work */ }
+  }
+  setInterval(() => { if (revision !== draftRevision) keepDraft(); }, 1500);
+  let draftChecked = false;
+  async function restoreDraft() {
+    if (draftChecked || !window.indexedDB) return;
+    draftChecked = true;
+    let draft = null;
+    try { draft = await draftStore('readonly', store => store.get(DRAFT_KEY)); } catch { return; }
+    const me = account?.user?.id || lastUser();
+    if (!draft?.layers?.length || (draft.owner && me && draft.owner !== me) || hasInk() || frames.length > 1) return;
+    frames = expandRecord(draft).map(stack => stack.map(layer => newLayer(layer.name, {
+      visible: layer.visible, opacity: layer.opacity, strokes: layer.strokes, asset: layer.asset || null, backdrop: layer.backdrop || null,
+      ...(layer.xf ? { xf: layer.xf, xfBase: layer.xfBase, xfStrokes: layer.xfStrokes } : {})
+    })));
+    frameIndex = 0;
+    layers = frames[0];
+    activeId = layers[layers.length - 1].id;
+    sceneMotion = draft.motion || null;
+    fps = draft.fps || 12;
+    $('fps').value = String(fps);
+    $('title').value = draft.title || '';
+    $('description').value = draft.description || '';
+    resyncSeq();
+    revision++;
+    draftRevision = revision; // it's on this device already; it is not in the library yet
+    recount();
+    rebuildOnion();
+    rebuildAll();
+    renderFrames();
+    renderLayersPanel();
+    renderSaveKind();
+    const minutes = Math.round((Date.now() - draft.at) / 60000);
+    message('drawing-status', `\u21ba Picked up where you left off (${minutes < 1 ? 'moments' : minutes < 60 ? `${minutes} min` : `${Math.round(minutes / 60)} h`} ago), kept on this device.`, false,
+      [{ label: 'Start fresh', tip: 'Start fresh|A blank canvas. Undo brings this drawing back.', run: () => clearCanvas() }]);
+  }
+
+  // ---------------------------------------------------------------- install: Inkling on the home screen, like any app
+  let installPrompt = null;
+  const standalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+  const appleMobile = /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  function renderInstall() { $('menu-install').hidden = standalone() || !(installPrompt || appleMobile); }
+  window.addEventListener('beforeinstallprompt', event => { event.preventDefault(); installPrompt = event; renderInstall(); });
+  window.addEventListener('appinstalled', () => { installPrompt = null; renderInstall(); message('drawing-status', '\ud83d\udcf2 Inkling is on your home screen. It opens even in airplane mode.'); });
+  MENU_ACTIONS.install = async () => {
+    if (installPrompt) {
+      installPrompt.prompt();
+      await installPrompt.userChoice.catch(() => null);
+      installPrompt = null;
+      renderInstall();
+    } else {
+      message('drawing-status', '\ud83d\udcf2 In Safari, tap Share, then \u201cAdd to Home Screen\u201d. Inkling then opens like an app, even offline.');
+    }
+  };
+  renderInstall();
+  if ('serviceWorker' in navigator && window.isSecureContext) {
+    window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => { /* no offline shell; online works as before */ }));
+  }
+  // Home-screen shortcuts: ?focus=1 opens the paper full screen, ?find=1 the search.
+  function launchShortcut() {
+    const params = new URLSearchParams(location.search);
+    if (![...params.keys()].length) return;
+    history.replaceState(null, '', location.pathname);
+    if (params.get('focus')) setFocus(true);
+    else if (params.get('find') && !offline) openFinder();
   }
 
   let warming = false;
   async function checkConnection() {
+    if (!navigator.onLine) { setOffline(true); return; }
     try {
       await api('/api/ready');
+      if (offline) setOffline(false);
       $('connection').textContent = 'Library online';
       $('connection').title = '';
       $('connection-dot').classList.add('online');
       if (warming) { warming = false; message('library-status', 'Search is ready.'); loadGallery(); }
     } catch (error) {
+      if (error.network) { setOffline(true); setTimeout(checkConnection, 20000); return; } // no route to Inkling: same as airplane mode
       // A fresh server builds its search indexes in the background: say so, and check again shortly.
       const building = /index|minute|demo library/i.test(error.message);
       $('connection').textContent = building ? 'Warming up\u2026' : 'Offline';

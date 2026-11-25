@@ -8,7 +8,8 @@ COPY backend/requirements.txt backend/requirements.txt
 RUN pip install -r backend/requirements.txt \
     && useradd --create-home --uid 10001 studio
 COPY backend backend
-COPY index.html studio.html studio.js studio.css og.png ./
+COPY index.html studio.html studio.js studio.css og.png manifest.webmanifest sw.js ./
+COPY icons icons
 USER studio
 # Hosts like Render assign the port via $PORT (default 8000 locally).
 ENV PORT=8000

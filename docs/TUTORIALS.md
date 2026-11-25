@@ -2,6 +2,10 @@
 
 Seven short tutorials, about two minutes each. Do them in order the first time; each builds on the last.
 Everything here works with a finger, a stylus, or a mouse. On touch screens, tap with two fingers to undo and three to redo.
+
+**No signal? Keep drawing.** Install Inkling from the ☰ menu (or Share → Add to Home Screen on iPhone) and it opens in
+airplane mode. Drawing, layers, frames, stamps, effects, and quick moves all work offline; AI, search, and saving to
+your library wait for the connection. Your drawing is kept on the device, so nothing is lost on a reload.
 Curious how it works? **☰ › Under the hood** explains every moving part in plain words.
 Screenshots show an earlier layout; follow the current labels in the instructions.
 

@@ -956,6 +956,28 @@ def social_card() -> FileResponse:
     return FileResponse(ROOT / "og.png", media_type="image/png", headers={"Cache-Control": "public, max-age=86400"})
 
 
+# The installable app: manifest, icons, and a service worker that caches only the app shell (never /api/).
+APP_ICONS = {"icon-192.png", "icon-512.png", "maskable-512.png", "apple-touch-icon.png"}
+
+
+@app.get("/manifest.webmanifest", include_in_schema=False)
+def web_manifest() -> FileResponse:
+    return FileResponse(ROOT / "manifest.webmanifest", media_type="application/manifest+json", headers=REVALIDATE)
+
+
+@app.get("/sw.js", include_in_schema=False)
+def service_worker() -> FileResponse:
+    return FileResponse(ROOT / "sw.js", media_type="text/javascript", headers={**REVALIDATE, "Service-Worker-Allowed": "/"})
+
+
+@app.get("/apple-touch-icon.png", include_in_schema=False)
+@app.get("/icons/{name}", include_in_schema=False)
+def app_icon(name: str = "apple-touch-icon.png") -> FileResponse:
+    if name not in APP_ICONS:
+        raise HTTPException(404, "No such icon.")
+    return FileResponse(ROOT / "icons" / name, media_type="image/png", headers={"Cache-Control": "public, max-age=604800"})
+
+
 @app.get("/studio.js", include_in_schema=False)
 def studio_script() -> FileResponse:
     return FileResponse(ROOT / "studio.js", media_type="text/javascript", headers=REVALIDATE)

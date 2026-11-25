@@ -1,0 +1,22 @@
+{
+  "id": "/",
+  "name": "Inkling: AI that works for your pencil",
+  "short_name": "Inkling",
+  "description": "Keep the pencil. Hand AI the in-betweens. Draw anywhere, even in airplane mode; flipbooks of your own strokes; search your sketchbook by drawing.",
+  "start_url": "/?source=app",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#f6f7f1",
+  "theme_color": "#f6f7f1",
+  "categories": ["design", "graphics", "productivity", "education"],
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Draw in Focus", "short_name": "Focus", "description": "Full-screen paper, nothing else", "url": "/?focus=1", "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Search your art", "short_name": "Search", "description": "Find anything by words or a sketch", "url": "/?find=1", "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }] }
+  ]
+}

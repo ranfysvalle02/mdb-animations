@@ -62,6 +62,16 @@ pause, not per keystroke): assets, backdrops, scenes, single frames, and AI vide
 (**Place**, **✦ Bring to life**, **Use as backdrop**, **Open**, **◎ Similar**). **✏️ My drawing** searches with
 the canvas. ↑↓ and Enter work too. Before you type, it offers starter backdrops and your latest work.
 
+**Install it. Draw in airplane mode.** Inkling is a progressive web app: **☰ → Install Inkling** (or Safari's
+Share → Add to Home Screen) puts it on your home screen, and it opens with no signal. Offline is a studio, not an
+error page: pen, layers, frames, the shapes kit, stamps, effects, and **quick moves** all work, and Flipbook picks a
+quick move from your words (*"hop in the snow"* → 🐇 Hop + ❄️ Snow, plain math). Everything that needs the internet
+(Gemini, Voyage search, your library, sharing, voice) is hidden *and* refused before a request is even made.
+Your drawing is kept on this device as you go (IndexedDB), so a reload, a crash, or a dead battery mid-flight
+picks up where you left off; save it to your library when you're back online. The service worker caches only the
+app shell, never `/api/`, so private art never sits in a cache. Signing out removes the on-device draft.
+Your craft doesn't need a signal. AI is the optional part.
+
 **A starter pack.** An empty library gets ready-made assets (Little Fox, Pine Tree, Red Rocket, Rocket Ship),
 copied from the shared demo **with their search vectors**: findable right away, no new AI calls. It arrives
 once per member (not again after you clear them out); the finder offers it again anytime the library is empty.

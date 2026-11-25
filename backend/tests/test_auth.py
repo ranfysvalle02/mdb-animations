@@ -339,3 +339,17 @@ def test_ai_motion_counts_against_the_ai_budget():
     from backend.main import AI_BUDGET, budget_for
     scope = {"type": "http", "method": "POST", "path": "/api/sparks/motion", "query_string": b"", "headers": []}
     assert budget_for(Req(scope)) is AI_BUDGET
+
+
+def test_the_installable_app_ships_a_manifest_icons_and_a_root_scoped_worker(client):
+    client, _ = client  # signed out: the shell must load with no session (and no signal)
+    manifest = client.get("/manifest.webmanifest")
+    assert manifest.status_code == 200 and manifest.headers["content-type"].startswith("application/manifest+json")
+    for icon in manifest.json()["icons"]:
+        image = client.get(icon["src"])
+        assert image.status_code == 200 and image.headers["content-type"] == "image/png"
+    worker = client.get("/sw.js")
+    assert worker.status_code == 200 and worker.headers["service-worker-allowed"] == "/"
+    assert "/api/" not in worker.text.split("SHELL")[1].split(";")[0]  # the private library is never precached
+    assert client.get("/apple-touch-icon.png").status_code == 200
+    assert client.get("/icons/studio.js").status_code == 404  # only the named icons

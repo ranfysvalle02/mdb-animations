@@ -1306,3 +1306,14 @@ body.focus-mode { overflow: hidden; overscroll-behavior: none; }
 
 /* Keep a hyphenated word whole in display headings. */
 .nb { font-style: inherit; white-space: nowrap; }
+
+/* Offline: online-only controls step aside (and `reach` refuses them anyway); what's yours stays. */
+[data-offline] { display: none; }
+body.offline [data-online], body.offline .voice-button { display: none !important; }
+body.offline [data-offline] { display: block; }
+body.offline .connection .dot { background: #f59e0b; box-shadow: 0 0 0 4px #f59e0b22; }
+.offline-save { margin: 12px 0 0; padding: 14px 18px; border: 1px dashed #f59e0b88; border-radius: 16px; background: #fffbeb; color: #78350f; font-size: 14px; line-height: 1.5; animation: rise .4s var(--ease) both; }
+.menu-list button[hidden] { display: none; }
+/* Offline, the header says so on every screen, and holds the menu button on the right where search used to be. */
+body.offline .topbar .connection { display: inline-flex !important; margin-left: auto; padding: 6px 12px; border-radius: 999px; background: #fffbeb; color: #92400e; font-weight: 650; }
+body.offline .topbar .connection #connection { position: static; width: auto; height: auto; clip-path: none; }
