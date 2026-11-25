@@ -19,7 +19,7 @@ Screenshots show an earlier layout; follow the current labels in the instruction
 | 1 | [Your studio in 30 seconds](#1-your-studio-in-30-seconds) | Sign up, pick the demo library |
 | 2 | [Never start from a blank page](#2-never-start-from-a-blank-page) | Starters, Ask AI |
 | 3 | [Draw it once, grow a cast](#3-draw-it-once-grow-a-cast) | Save an asset, variations, the duplicate check |
-| 4 | [Bring it to life, then share it](#4-bring-it-to-life-then-share-it) | A flipbook, revised by talking or by code, a share link |
+| 4 | [Animate it, then share it](#4-animate-it-then-share-it) | A flipbook, revised by talking or by code, a share link |
 | 5 | [Search by meaning](#5-search-by-meaning) | Find assets and animation moments by words, sketch, or asset |
 | 6 | [Always know: where, and how it was made](#6-always-know-where-and-how-it-was-made) | Where used, Breakdown, replay, evolution |
 | 7 | [Your art, multiplied](#7-your-art-multiplied) | Copy, paste, the stamp brush, flow shortcuts |
@@ -83,12 +83,12 @@ blue-pencil strokes that draw themselves in. Then choose:
 
 Asset cards show versions, usage, and lineage (*✦ variant of Red Rocket*).
 
-## 4. Bring it to life, then share it
+## 4. Animate it, then share it
 
 Under the canvas there's one box. Type or speak what happens (or leave it blank for a surprise), check
 who's **Starring** (this drawing, or any saved asset) and where (**in** a starter or your own backdrop),
 then press **🎞 Animate** (or Enter). Asset cards in your library have a shortcut:
-**✦ Bring to life** (or **✦ Use as backdrop**) fills it in for you. A new or changed drawing is saved and
+**🎞 Animate it** (or **✦ Use as backdrop**) fills it in for you. A new or changed drawing is saved and
 tagged first.
 
 **Flipbook** moves your original strokes; nothing is redrawn. Gemini picks the poses, math draws the frames,
@@ -158,7 +158,7 @@ linked to their asset and version in *every* frame, so a redraw of the asset upd
 
 From anywhere, press **⌘/Ctrl+K** (or **/**, or tap **Search your art** in the header). Type, speak, or tap
 **✏️ My drawing**; results appear as you pause, and each one has its action right there: **Place** it,
-**✦ Bring to life**, **Use as backdrop**, or **◎ Similar**. The **Find your art** section below the canvas
+**🎞 Animate it**, **Use as backdrop**, or **◎ Similar**. The **Find your art** section below the canvas
 is the same library for browsing.
 
 Open **Find your art**. Search across **Everything**, or narrow results to **Assets**, **Backdrops**, or

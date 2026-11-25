@@ -357,7 +357,7 @@
     else openFinder();
   }));
   function updateControls() {
-    // Ink on the page wakes up the "bring it to life" box.
+    // Ink on the page wakes up the Animate box.
     document.body.classList.toggle('has-ink', !canvasIsBlank());
     renderAuthorship();
     renderRhythm();
@@ -4387,10 +4387,9 @@
         editing = { kind, id: saved.id, code: saved.code };
         if (wantShare) setTimeout(openShare);
         const first = saved.assets?.[0];
-        // The magic moment, said plainly: saving is embedding. Picture, story, and code are now searchable by meaning.
+        // The magic moment, said plainly: saving is embedding (Voyage multimodal for picture and story; Atlas Automated Embedding for code).
         const hasCode = !!sceneSketch && frames.length > 1;
-        const embedded = `Voyage AI embedded its picture, story${hasCode ? ', and code' : ''}`;
-        message('drawing-status', `\u2713 Saved ${saved.code || 'your scene'}. ${embedded}: find it by words, a sketch${hasCode ? ', or code' : ''}.${note}${saved.assets?.length ? ` Linked to ${saved.assets.map(a => `"${a.name}"`).join(', ')}.` : ''}`, false,
+        message('drawing-status', `\u2713 Saved ${saved.code || 'your scene'}. Embedded on save: its picture, story${hasCode ? ', and code' : ''}. Find it by words, a sketch${hasCode ? ', or code' : ''}.${note}${saved.assets?.length ? ` Linked to ${saved.assets.map(a => `"${a.name}"`).join(', ')}.` : ''}`, false,
           frames.length > 1 ? [{ label: '\ud83d\udd17 Share it', tip: 'Share|A public link: your scene as a looping GIF, with how it moves explained.', run: () => openShare() },
             ...(hasCode && !offline ? [{ label: '\u25ce Similar code', tip: 'Similar code|Scenes in your library whose code moves alike.', run: () => { openLab(); setTimeout(() => $('lab-similar').click(), 700); } }] : [])]
             : first ? [{ label: `Where else is "${first.name}" used?`, run: () => openWhereUsed({ id: first.id, name: first.name }) }]
@@ -4604,8 +4603,8 @@
       el('small', '', `${typeLabel(item.type)} \u00b7 v${item.version} \u00b7 in ${item.uses ?? 0} scene${item.uses === 1 ? '' : 's'}`));
     const actions = el('div', 'card-actions');
     const backdrop = item.type === 'environment';
-    const animateIt = actionButton(backdrop ? '\u2726 Use as backdrop' : '\u2726 Bring to life', 'primary-mini',
-      backdrop ? 'Use as backdrop|Sets the scene for your next flipbook.' : 'Bring to life|Stars it in your next flipbook.',
+    const animateIt = actionButton(backdrop ? '\u2726 Use as backdrop' : '\ud83c\udf9e Animate it', 'primary-mini',
+      backdrop ? 'Use as backdrop|Sets the scene for your next flipbook.' : 'Animate it|Stars it in your next flipbook.',
       () => castInScene(item));
     const similar = actionButton('\u25ce Similar', '', 'Find similar|Look-alikes ranked by its stored Voyage AI vector in Atlas: no new embedding.', () => findSimilar(item));
     const more = el('details', 'card-more');
@@ -5154,7 +5153,7 @@
     $(id).addEventListener('click', event => { if (event.target === $(id)) $(id).close(); });
   }
   // ---------------------------------------------------------------- the finder: search from anywhere (Cmd/Ctrl+K, /)
-  // One box, results by meaning as you type, and every result usable right here: place it, bring it to life,
+  // One box, results by meaning as you type, and every result usable right here: place it, animate it,
   // set the scene, open it, or find more like it.
   const SEARCH_IDEAS = ['a cute animal', 'something that flies', 'a rocket', 'a sunny day', 'the moment it leaves the ground'];
   let finderRequest = null;
@@ -5196,7 +5195,7 @@
     return finderCard({ image: item.image_url, title: item.name, meta: `${typeLabel(item.type)} \u00b7 v${item.version}${item.score != null ? ` \u00b7 ${Math.round(item.score * 100)}% match` : ''}`,
       actions: backdrop
         ? [['Use as backdrop', finderAct(() => castInScene(item))], ['Open', finderAct(() => openAsset(item.id))], ['\u25ce Similar', () => finderSimilar(item)]]
-        : [['Place', finderAct(() => { showTop(); startPlacing(item); })], ['\u2726 Bring to life', finderAct(() => castInScene(item))], ['\u25ce Similar', () => finderSimilar(item)]] });
+        : [['Place', finderAct(() => { showTop(); startPlacing(item); })], ['\ud83c\udf9e Animate it', finderAct(() => castInScene(item))], ['\u25ce Similar', () => finderSimilar(item)]] });
   }
   function finderSection(title, cards) {
     if (!cards.length) return [];
@@ -7378,15 +7377,18 @@ function draw() {
   $('lab-sign-code').addEventListener('click', () => sign(false));
   $('lab-sign-cancel').addEventListener('click', () => sign(null));
 
-  // Similar code: this sketch, embedded by Voyage, against every scene's code and story in your library.
+  // Similar code: Atlas Automated Embedding. Atlas embeds this sketch with a Voyage code model and ranks every saved scene's code.
   $('lab-similar').addEventListener('click', async () => {
     const code = $('lab-code').value.trim();
     const box = $('lab-found');
     if (code.length < 10) { labError('Write or pick a sketch first: the code is the search.'); return; }
     box.hidden = false;
-    box.replaceChildren(el('p', 'lab-found-note', '\u25ce Voyage AI is reading your code\u2026'));
+    box.replaceChildren(el('p', 'lab-found-note', '\u25ce MongoDB Atlas is embedding your code\u2026'));
     try {
-      const { items } = await postJSON('/api/search/code', JSON.stringify({ code: code.slice(0, MAX_SKETCH_CODE) }));
+      const { items, engine } = await postJSON('/api/search/code', JSON.stringify({ code: code.slice(0, MAX_SKETCH_CODE) }));
+      const how = engine?.by === 'atlas-autoembed'
+        ? `Atlas Automated Embedding \u00b7 ${engine.model}: Atlas embedded your code and every saved sketch`
+        : 'Voyage AI \u00b7 Atlas Vector Search';
       const cards = items.slice(0, 8).map(item => {
         const card = el('div', 'lab-found-card');
         const image = el('img');
@@ -7415,7 +7417,7 @@ function draw() {
         card.append(image, text, actions);
         return card;
       });
-      box.replaceChildren(el('p', 'lab-found-note', items.length ? `\u25ce Nearest by meaning in your library (Voyage AI \u00b7 Atlas Vector Search). Scenes with code first.` : 'Nothing close yet. Save scenes with code and they\u2019ll show up here.'), ...cards);
+      box.replaceChildren(el('p', 'lab-found-note', items.length ? `\u25ce Nearest by meaning in your library (${how}${engine?.ms ? `, ${engine.ms} ms` : ''}).` : 'Nothing close yet. Save scenes with code and they\u2019ll show up here.'), ...cards);
     } catch (error) {
       box.hidden = true;
       labError(error.message);

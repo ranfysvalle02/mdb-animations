@@ -9,7 +9,7 @@ services:
     autoDeploy: true
     envVars:
       # Secrets: Render asks for these when you create the Blueprint.
-      - key: MONGODB_URI     # hosted Atlas (Flex or M10+: Inkling uses 5 vector indexes)
+      - key: MONGODB_URI     # hosted Atlas (Flex or M10+: Inkling uses 6 vector indexes)
         sync: false
       - key: VOYAGE_API_KEY
         sync: false

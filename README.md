@@ -46,8 +46,10 @@ through 24 frames (and drew N marks of its own); are these still yours? **✍ Ye
 your hand on the meter, with the code saved as *how* they moved and a *Signed* entry in the scene's history. Marks the
 code invented (particles, effects) always stay labeled as code. Nothing is claimed for you.
 
-**Search by code.** A scene's sketch is part of what Voyage embeds (its title, direction, and the code itself), so
-**◎ Similar code** in the Lab finds scenes whose code is nearest by meaning, scenes with code first. **↻ Remix** loads
+**Search by code.** Scene code is indexed with [MongoDB Automated Embedding](https://www.mongodb.com/docs/vector-search/crud-embeddings/automated-embedding/):
+an `autoEmbed` index on `sketch.code` with `voyage-code-4`, so Atlas embeds every saved sketch, and every code query,
+itself. **◎ Similar code** in the Lab finds scenes whose code is nearest by meaning. (On a cluster without Automated
+Embedding, it falls back to the scenes' multimodal vectors, whose story includes the code.) **↻ Remix** loads
 any of them as a new take, running over your drawing: your library of motions becomes code you can reuse.
 
 **Take any scene apart.** In an animation, layer edits reach **all frames** by default: show or hide a layer, move or
@@ -79,7 +81,7 @@ The **☰** menu reaches every one of them in a tap (swipe it away on a phone).
 **Search is always one keystroke away.** The **Search your art** box in the header (or **⌘/Ctrl+K**, or **/**)
 opens a finder over whatever you're doing. Results arrive by meaning as you type (one Voyage embedding per
 pause, not per keystroke): assets, backdrops, scenes, and single frames, each usable right there
-(**Place**, **✦ Bring to life**, **Use as backdrop**, **Open**, **◎ Similar**). **✏️ My drawing** searches with
+(**Place**, **🎞 Animate it**, **Use as backdrop**, **Open**, **◎ Similar**). **✏️ My drawing** searches with
 the canvas. ↑↓ and Enter work too. Before you type, it offers starter backdrops and your latest work.
 
 **⟨/⟩ The Lab: your strokes, as numbers.** For the mathy and the curious: **Lab** (next to Focus, or **L**) tilts
@@ -148,7 +150,7 @@ MongoDB Atlas, and Gemini in plain words, using your own canvas as the example.
 | | You | Inkling |
 | --- | --- | --- |
 | **1. Doodle it** | Draw in layers (try **Focus** or a **starter**) | Pressure, palm rejection, auto-tags on save |
-| **2. Bring it to life** | Say what happens, then **🎞 Animate**. Revise by talking, or by editing the code | Gemini keyframes your strokes; the scene is saved as p5.js |
+| **2. Animate** | Say what happens, then **🎞 Animate**. Revise by talking, or by editing the code | Gemini keyframes your strokes; the scene is saved as p5.js |
 | **3. Find similar** | Your drawing, words, or voice | Voyage AI + Atlas Vector Search across assets, backdrops, and scenes |
 | **4. Share it** | **🔗 Save & share** a flipbook | A public link with a looping GIF. Your library stays private |
 
@@ -167,7 +169,7 @@ space for drawings and words), **Gemini** (drafts you accept or skip), and **m-s
   `docker compose exec -T studio python -m backend.seed_demo`. Open <http://localhost:8000>.
 - **Deploy it:** [Render + hosted Atlas, step by step](docs/deploy-render.md) (one Blueprint: [`render.yaml`](render.yaml)).
 - **Why it exists:** [The Calculator Didn't Kill Math](hlog.md) (a 5-minute read).
-- **How search works:** [Saving Is Searching](blog2.md): autoembed with Voyage AI, Atlas Vector Search, and animations as code (a 6-minute read).
+- **How search works:** [Saving Is Searching](blog2.md): Voyage multimodal embeddings, MongoDB Atlas Automated Embedding for code, and animations as code (a 6-minute read).
 - **What's next:** [NEXT-STEPS.md](NEXT-STEPS.md). **Notes on m-stash:** [m-stash-newbie.md](m-stash-newbie.md).
 
 > Brand note: "Inkling" has been used by other products (e.g. a discontinued Wacom pen). Do a trademark
@@ -276,7 +278,7 @@ embedding, sparks, and PNG export use what's visible, exactly as composed.
 
 ### ✦ AI helpers: sketch, fix, refine, or grow variations
 
-The canvas keeps **Bring it to life** and **Find similar** up front. Open **AI helpers** for the drawing
+The canvas keeps **🎞 Animate** and **Find similar** up front. Open **AI helpers** for the drawing
 workflows; each has examples you can tap.
 
 - **Sketch a layer**: "a dragon curled up asleep". In 5-10 seconds a blue-pencil draft (up

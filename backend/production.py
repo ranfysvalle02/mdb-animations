@@ -21,12 +21,14 @@ shot's status or assignee only updates metadata: nothing is re-embedded.
 import base64
 import hashlib
 import json
+import os
 import secrets
 import time
 from datetime import datetime, timezone
 from uuid import uuid4
 
 from bson.binary import Binary
+from pymongo.errors import PyMongoError
 from cinematlas.core import Image, Text
 from cinematlas.core.collection import VECTOR_PATH
 
@@ -136,6 +138,15 @@ def metadata_filter(project: str | None, sequence: str | None, status: str | Non
 
 
 CODE_EMBED_CHARS = 6000  # Voyage reads the head of a sketch: its comments, constants, and keyframes
+# Scene code is embedded by Atlas itself (MongoDB Automated Embedding): an autoEmbed index on sketch.code, with a
+# Voyage code model, so Atlas embeds every saved sketch and every code query. No embedding code in Inkling.
+CODE_INDEX = "shots_code_autoembed"
+CODE_EMBED_MODEL = os.environ.get("CODE_EMBED_MODEL", "voyage-code-4")
+
+
+def code_index_definition(model: str = CODE_EMBED_MODEL) -> dict:
+    return {"fields": [{"type": "autoEmbed", "modality": "text", "path": "sketch.code", "model": model},
+                       {"type": "filter", "path": "owner"}]}
 
 
 def code_query(code: str) -> str:
@@ -565,12 +576,32 @@ class Production(Scoped):
         return {**found, "timing": {"embed_ms": round((embedded - started) * 1000),
                                     "search_ms": round((time.perf_counter() - embedded) * 1000), "embeddings": 1}}
 
-    def search_code(self, code: str) -> list[dict]:
-        """Scenes whose code (and story) is nearest to this sketch: one Voyage embedding, one Atlas vector search."""
-        vector = self.shots._query_vector([code_query(code)])
-        rows = self._nearest(self.shots, vector, 12, self.q(), SEARCH_SPREAD)
+    def search_code(self, code: str) -> dict:
+        """Scenes whose code is nearest to this sketch.
+
+        First choice: Atlas Automated Embedding. The query is plain text; Atlas embeds it with the same Voyage code
+        model it used on every saved sketch. If this cluster can't (no autoEmbed index, or it's still building),
+        fall back to one multimodal Voyage embedding against each scene's story, which includes its code.
+        """
+        started = time.perf_counter()
+        try:
+            rows = list(self.shots.mongo.aggregate([
+                {"$vectorSearch": {"index": CODE_INDEX, "path": "sketch.code", "query": code[:CODE_EMBED_CHARS],
+                                   "numCandidates": 120, "limit": 12, "filter": self.q()}},
+                {"$addFields": {"score": {"$meta": "vectorSearchScore"}}},
+                {"$project": {VECTOR_PATH: 0}},
+            ]))
+        except PyMongoError:
+            rows = []
+        if rows:
+            engine = {"by": "atlas-autoembed", "model": CODE_EMBED_MODEL}
+        else:
+            vector = self.shots._query_vector([code_query(code)])
+            rows = self._nearest(self.shots, vector, 12, self.q(), SEARCH_SPREAD)
+            engine = {"by": "voyage-multimodal", "model": "voyage-multimodal-3.5"}
         hits = [{**shot_summary(row), "score": round(float(row["score"]), 4)} for row in rows]
-        return sorted(hits, key=lambda hit: (not hit.get("sketch"), -hit["score"]))  # scenes with code first
+        return {"items": sorted(hits, key=lambda hit: (not hit.get("sketch"), -hit["score"])),  # scenes with code first
+                "engine": {**engine, "ms": round((time.perf_counter() - started) * 1000)}}
 
     def similar_everywhere(self, asset_id: str) -> dict:
         """Look-alikes with zero new embeddings: the asset's own vector, already in Atlas, is the query."""

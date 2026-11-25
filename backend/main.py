@@ -579,9 +579,9 @@ async def search_by_sketch(request: Request) -> dict:
 
 @app.post("/api/search/code")
 async def search_code(request: Request) -> dict:
-    """Find scenes by code: the sketch is embedded by Voyage and compared with every scene's code and story."""
+    """Find scenes by code: Atlas Automated Embedding (a Voyage code model) ranks every scene's saved sketch."""
     body = await read_json(request, CodeSearch)
-    return {"items": await run_in_threadpool(prod(request).search_code, body.code)}
+    return await run_in_threadpool(prod(request).search_code, body.code)
 
 
 @app.get("/api/find")

@@ -393,6 +393,7 @@ def test_code_search_is_validated_and_metered_as_a_search(client):
     scope = {"type": "http", "method": "POST", "path": "/api/search/code", "query_string": b"", "headers": []}
     assert budget_for(Req(scope)) is EMBED_BUDGET
     http, _ = client
-    http.production.search_code.return_value = [{"id": "b"}]
-    assert http.post("/api/search/code", json={"code": "function draw() {}"}).json() == {"items": [{"id": "b"}]}
+    found = {"items": [{"id": "b"}], "engine": {"by": "atlas-autoembed", "model": "voyage-code-4", "ms": 40}}
+    http.production.search_code.return_value = found
+    assert http.post("/api/search/code", json={"code": "function draw() {}"}).json() == found
     assert http.post("/api/search/code", json={"code": "short"}).status_code == 422

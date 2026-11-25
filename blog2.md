@@ -1,197 +1,228 @@
 # Saving Is Searching
 
-*How Inkling turns every drawing, every animation, and every line of code into something you can find by meaning, with MongoDB Atlas, Voyage AI, and Gemini. ~6 min read.*
+*How Inkling makes every drawing, animation, and line of code findable by meaning, with Voyage AI, MongoDB Atlas,
+and Gemini. ~6 min read.*
 
 ---
 
-Here's a small, strange moment in Inkling.
+Most creative tools make you file your work so you can find it later. Inkling flips that: **saving is the filing.**
 
-You draw a rocket. You press **Save**. And the studio says:
+Draw a rocket. Press **Save**. The studio answers:
 
-> ✓ Saved. Voyage AI embedded its picture, story, and code: find it by words, a sketch, or code.
+![The save confirmation: "Embedded on save: its picture, story, and code."](docs/blog/saved.png)
 
-You didn't tag anything. You didn't pick a folder. You didn't name it `rocket_final_v3_REAL.png`.
-And yet, a second later, you can find that rocket by typing *"something blasting off"*, or by scribbling
-a rough cone on the paper, or by pasting a few lines of p5.js that move things the same way.
+You typed no tags and picked no folder. Nothing is called `rocket_final_v3_REAL.png`. A second later, you can
+find that rocket by typing *something blasting off*, by scribbling a rough cone, or by pasting code that moves
+things the same way.
 
-How? Isn't search supposed to be a feature you build *after* the app?
-
-What if saving **was** the search index?
+Here's how it works, including which machine does which embedding.
 
 ---
 
-## The rhythm: Draw → Animate → Find
+## Draw → Animate → Find
 
 Inkling has one rhythm, and it sits at the top of the studio:
 
-1. **Draw.** Your pencil, your strokes. Pressure, order, timing: all kept as live vector math, not pixels.
-2. **Animate.** One tap. Gemini looks at your scene and picks the *poses*. Plain math draws the in-betweens.
-   Every frame is your own strokes, moved. Nothing is redrawn.
-3. **Find.** Everything you've ever made, searchable by words, by a sketch, or by code.
+1. **Draw.** Your pencil, your strokes: pressure, order, and timing, kept as vector math, not pixels.
+2. **Animate.** One tap. Gemini picks the poses; plain math draws every frame between them.
+3. **Find.** Everything you've made, searchable by words, by a sketch, or by code.
 
-Three verbs. Everything else is in service of them. And the third one is the quiet magic: *you never do
-any work to make it happen.*
+![A hand-drawn rocket: nervous shake, crouch, launch, arc, loop, exit](docs/blog/takeoff.gif)
+
+That's one rocket drawn with five mouse strokes, and the direction *"it gets nervous, crouches, then blasts off in a
+big arc and loops across the sky."* Gemini answered with 13 keyframes. Math drew the 80 frames. Every frame is
+those same five strokes, moved. The GIF comes from Inkling's own share link.
 
 ---
 
-## Autoembed: declare it once, never think about it again
+## Two kinds of embedding, one library
 
-Here's the whole search "pipeline" for drawings in Inkling. Not a summary. The actual code:
+Search by meaning needs vectors. Inkling makes them two ways, and it's worth being exact about which is which:
+
+| What | Embedded by | Model | Where the vector lives |
+| --- | --- | --- | --- |
+| Pictures and words: drawings, assets, scenes, layers, frames | Inkling, on save, through the Voyage API | `voyage-multimodal-3.5` | In the same MongoDB document, indexed by Atlas Vector Search |
+| Scene code: every animation's p5.js sketch | **MongoDB Atlas itself** ([Automated Embedding](https://www.mongodb.com/docs/vector-search/crud-embeddings/automated-embedding/)) | `voyage-code-4` | Atlas's own embeddings collection, kept in sync as scenes change |
+
+### Pictures: one Voyage call, one write
+
+This is the real declaration for scenes, from Inkling's `backend/production.py`:
 
 ```python
-self.atlas = Atlas(
-    mongo_client=self.client, voyage_api_key=key,
-    db="animation_studio",
-    model="voyage-multimodal-3.5", rerank_model=None,
-)
-self.drawings = self.atlas.collection(
-    "drawings",
-    embed=Text("title") + Text("description") + Text("tags", label="Tags") + Image("image"),
-    key="id", filters=["owner", "tags"],
+self.shots = atlas.collection(
+    "shots",
+    # "Story" is what happens in it (the direction, the beats, the cast), so scenes are found by
+    # what they're about as well as by how they look: "the fox hops on the beach".
+    embed=Text("code") + Text("description") + Text("tags", label="Tags") + Text("story", label="Story") + Image("image"),
+    key="id", filters=["owner", "project", "sequence", "status", "asset_ids"],
 )
 ```
 
-That `embed=` line is a promise: *every time a drawing is saved, take its title, description, tags, and
-its picture, and turn them into a single vector with Voyage AI.* The vector lands in the same MongoDB
-document as the drawing. One write. No queue, no sync job, no second database to keep in step.
+`atlas.collection` comes from [cinematlas](https://github.com/ranfysvalle02/cinematlas), a small open-source
+library on top of PyMongo and the Voyage SDK. When a scene is saved, it builds **one** multimodal input for the
+scene (its shot code, like `SQ010_0010`, plus its notes, tags, story, and the rendered picture). It calls
+`voyage-multimodal-3.5` once and writes the 1024-number vector into the scene's own document: one upsert, no
+queue, no second database. Its layers and frames get the same treatment, which is how search can land on a single
+moment.
 
-Scenes go further:
+The *story* is where it gets fun. It holds the direction you gave, the cast, and **Gemini's own beat labels**
+("crouch", "takeoff", "apex"). So *"the one where it crouches"* finds the scene, even though nobody typed that
+word.
+
+Why not let Atlas embed the pictures too? Atlas Automated Embedding works on text fields, and Inkling's strongest
+signal is the drawing itself. Pictures need the multimodal model, so Inkling calls it.
+
+### Code: Atlas does the embedding
+
+Code is text, so Inkling hands that job to the database. Setup creates one `autoEmbed` index:
 
 ```python
-embed=Text("code") + Text("description") + Text("tags", label="Tags")
-      + Text("story", label="Story") + Image("image")
+def code_index_definition(model: str = CODE_EMBED_MODEL) -> dict:
+    return {"fields": [{"type": "autoEmbed", "modality": "text", "path": "sketch.code", "model": model},
+                       {"type": "filter", "path": "owner"}]}
 ```
 
-A scene's *story* is the cast, the keyframes, and, since this release, **the p5.js sketch that draws it**.
-So the vector for a scene holds what it looks like, what it's about, and *how it moves*, all at once.
+From then on, every scene saved with a sketch is embedded **by Atlas** with `voyage-code-4`, a code model, and
+re-embedded whenever the code changes. A search sends plain text, and Atlas embeds the query with the same model:
 
-Why does that matter? Because `voyage-multimodal-3.5` puts pictures and words in **one shared space**.
-A sketch of a rocket and the words *"rocket ship"* land near each other. So does a cone-shaped scribble.
-So does code that sends something up-and-to-the-right with a squash before launch.
+```python
+rows = list(self.shots.mongo.aggregate([
+    {"$vectorSearch": {"index": CODE_INDEX, "path": "sketch.code", "query": code[:CODE_EMBED_CHARS],
+                       "numCandidates": 120, "limit": 12, "filter": self.q()}},
+    {"$addFields": {"score": {"$meta": "vectorSearchScore"}}},
+    {"$project": {VECTOR_PATH: 0}},
+]))
+```
 
-One model. One space. Three ways in.
+Inkling has no embedding code for this path at all. On our Atlas cluster, a freshly saved scene was findable by
+its code **1.5 seconds** after the save, and a code search took **222 ms**. If a cluster can't do Automated
+Embedding, setup says so and code search quietly falls back to the scenes' multimodal vectors, whose story
+includes the code.
 
 ---
 
 ## Search that respects the artist
 
-Every query runs through **MongoDB Atlas Vector Search**, and every query is scoped to its owner
-before it ever touches a vector. Your sketchbook is a private library, not a training set.
+Every query, on both paths, carries `self.q()`: the signed-in artist's owner filter, applied **inside** the
+vector search. Your sketchbook is a private library, not a training set.
 
-Three ways to search, one engine:
+Three ways in, one library:
 
-- **Words.** Type *"forest at night"*. Voyage embeds the words; Atlas ranks your art by meaning.
-- **A sketch.** Doodle a rough shape and press **Find similar**. Your drawing *becomes* the query.
-  No words at all.
-- **Code.** Open any scene in the Lab and press **◎ Similar code**. Voyage embeds the sketch; Atlas finds
-  scenes that move alike. Tap **↻ Remix** to start from one.
+- **Words.** Type *"forest at night."* Voyage embeds the words; Atlas ranks your art by meaning.
+- **A sketch.** Doodle a rough shape and press **◎ Find similar**. Your drawing *is* the query.
+- **Code.** In the Lab, press **◎ Similar code**. Atlas finds scenes whose code moves alike; **↻ Remix** starts
+  from one.
 
-And the cheapest search of all: **Similar to this asset.** The asset already has a vector in Atlas, so
-Inkling uses *that* as the query. Zero new embeddings. Instant, and free.
+Here's a two-stroke doodle as the query, against a real library:
 
-```python
-def search_code(self, code: str) -> list[dict]:
-    """Scenes whose code (and story) is nearest to this sketch: one Voyage embedding, one Atlas vector search."""
-    vector = self.shots._query_vector([code_query(code)])
-    rows = self._nearest(self.shots, vector, 12, self.q(), SEARCH_SPREAD)
-    ...
-```
+<p><img src="docs/blog/query-sketch.png" alt="A rough red rocket doodle" width="200"></p>
 
-`self.q()` is the owner filter. It's in every query. That's not a feature; it's a rule.
+![Find your art: "Your drawing was the search." Rockets first, similarity 0.74](docs/blog/find-by-sketch.png)
+
+No words, no tags, just a shape: rockets come first. And the cheapest search of all, **◎ Similar** on an asset,
+reuses the vector Atlas already stores for it. Zero new embeddings.
 
 ---
 
-## Gemini picks the poses. Math does the rest.
+## Gemini picks the poses. Math draws the frames.
 
-Here's where most "AI animation" goes wrong: it regenerates every frame. Lines flicker, the style drifts,
-and the character you drew slowly becomes someone else's.
+Most "AI animation" regenerates every frame. The lines flicker, the style drifts, and your character slowly
+becomes someone else's.
 
-Inkling does what real animation studios have always done. A lead animator draws the **keyframes**:
-the big poses. Assistants draw the **in-betweens**. In Inkling:
+Inkling does what animation studios have always done. A lead animator draws the **keyframes**, the big poses,
+and assistants draw the **in-betweens**. In Inkling:
 
-- **Gemini is the lead's assistant for poses.** It looks at your scene and proposes keyframes:
-  *where, how big, how squashed, how turned, and when.* Numbers, not pixels.
-- **Math is the in-betweener.** A smooth curve through those poses moves your **actual strokes**,
-  frame by frame. Ten seconds, eight frames a second, eighty frames of *your* line.
+- **Gemini proposes the poses**: where, how big, how squashed, how turned, and when. Numbers, not pixels.
+- **Math draws the frames**: a smooth curve through those poses moves your **actual strokes**. Ten seconds at
+  eight frames a second is 80 frames of *your* line.
 
-The AI never holds a pencil. It only says *where the pencil's work should go.*
+The AI never holds the pencil. It only says where the pencil's work should go.
 
 ---
 
-## Every animation is code. And you can read it.
+## Every animation is code, and you can read it
 
-This is the part that made us sit up.
-
-Every animation in Inkling is saved as a small, readable **p5.js** sketch. Here's the shape of one (header verbatim, keyframes trimmed):
+Every animation is saved as a small, readable **p5.js** sketch. Here's the top of the rocket's, exactly as Gemini
+and Inkling wrote it (trimmed for length):
 
 ```js
-// Takeoff: Gemini chose these keyframes. This code draws every frame.
+// Your direction: Gemini chose these keyframes. This code draws every frame.
 // Your strokes are never redrawn: each moving layer is posed (moved, squashed, turned) by the numbers below,
 // and in-betweens come from a smooth curve through them. Change a number, Run, then Bake.
 
 const FPS = 8;
 const STRENGTH = 1;   // 1 = as choreographed. Try 1.4 for bigger moves.
 
-// t: 0..1 through the clip. x, y: offset in paper fractions (y up is negative). sx, sy: squash and stretch. r: degrees.
 const MOTION = {
-  "rocket": {
-    pivot: [0.5, 0.62],  // its center: it turns and squashes around here
+  "Rocket": {
+    pivot: [0.5, 0.56],  // its center: it turns and squashes around here
     keys: [
-      { t: 0, x: 0, y: 0, sx: 1, sy: 1, r: 0, label: "nervous" },
-      { t: 0.25, x: 0, y: 0.03, sx: 1.12, sy: 0.85, r: 0, label: "crouch" },
-      ...
+      { t: 0, x: 0, y: 0, sx: 1, sy: 1, r: 0, label: "start" },
+      { t: 0.08, x: -0.01, y: 0.01, sx: 1.05, sy: 0.95, r: -3, label: "shake left" },
+      { t: 0.22, x: -0.01, y: 0.02, sx: 1.1, sy: 0.88, r: -2, label: "crouch" },
+      { t: 0.28, x: 0, y: 0.04, sx: 1.15, sy: 0.82, r: 0, label: "anticipation" },
+      { t: 0.34, x: 0, y: -0.06, sx: 0.8, sy: 1.3, r: 0, label: "takeoff" },
+      { t: 0.62, x: 0.25, y: -0.52, sx: 1, sy: 1, r: 85, label: "apex" },
+      // ...
+      { t: 1, x: -0.25, y: -0.65, sx: 0.75, sy: 1.25, r: 340, label: "fly away" }
+    ]
+  }
+};
 ```
+
+Look at `crouch` and `anticipation`: squash (`sy` below 1) before the stretch of `takeoff` (`sy: 1.3`). That's a
+classic animation principle, written as numbers you can change.
+
+![The Lab: the rocket's own code, running over its strokes](docs/blog/lab-code.png)
 
 Why code?
 
-- **Traceability.** You can see exactly what the AI decided. Every keyframe is a line you can read.
-- **Auditability.** If Gemini chose a weird pose, it's a number. Change it. Run. Bake.
-- **Efficiency without losing your hand.** Five overlapping strokes along one edge can become one
-  simplified line, while your color, width, and pressure stay yours. **✍ Drawing as code** shows you
-  the receipt: *how many strokes in, how many lines out.*
+- **Traceability.** Every decision the AI made is a line you can read.
+- **Control.** Don't like a pose? It's a number. Change it, **Run**, then **Bake** it back into frames.
+- **Economy without losing your hand.** **✍ Drawing as code** joins strokes that continue a line and simplifies
+  them, keeping your color, width, and pressure, and it shows you a receipt: how many strokes went in, how many
+  lines came out.
 
-And because the code is part of the scene's story, it's **embedded too**. Your animations are searchable
-by *how they move.*
+And because the code is saved with the scene, it's searchable too, by Atlas, with a model built for code.
 
 ---
 
 ## Sign it
 
-Here's a question we couldn't stop asking: *if your drawing becomes code, is it still yours?*
-
-Our answer: **yes, if you say so.**
+If your drawing becomes code, is it still yours? Our answer: **yes, if you say so.**
 
 When you bake a sketch back into frames, Inkling asks one question: **Still yours?**
 
-- **✍ Yes, these are my lines.** Your traced strokes count as your hand. A *Signed* event lands in the history.
-- **⟨/⟩ Mark them as code.** They're tracked as code-made, honestly.
+- **✍ Yes, these are my lines.** Your traced strokes count as your hand, and a *Signed* event lands in the
+  history.
+- **⟨/⟩ Mark them as code.** They're tracked, honestly, as code-made.
 - **Not yet.** Decide later.
 
-The **Your Hand** meter on the canvas keeps score: hand, AI, kit, code, placed. Every stroke has an
-author. Nothing lands without your yes.
+The **Your Hand** meter on the canvas keeps score: hand, AI, kit, code, and placed. Every stroke has an author,
+and nothing lands without your yes.
 
 ---
 
-## And when the Wi-Fi drops?
+## When the Wi-Fi drops
 
-Inkling is a PWA. Install it, go into airplane mode, and keep drawing. Every online feature (AI,
-search, sync) switches off cleanly, so nothing pretends to work. Your drafts wait on the device. Quick
-moves (Lift off, Hop, Float, Spin, Bounce) are plain math, so you can still animate on a plane.
-
-When you land, Save. It embeds. It's findable.
+Inkling is a PWA. Install it, switch on airplane mode, and keep drawing. Everything that needs the network (AI,
+search, saving to your library) switches off cleanly instead of pretending to work. Drafts stay on the device.
+Quick moves (Lift off, Hop, Float, Spin, Bounce) are plain math, so you can still animate on a plane. When you
+land, press Save, and the save is the search.
 
 ---
 
-## So what's the point?
+## So what are "the in-betweens"?
 
-The loudest version of AI-for-art says: *type a prompt, get a picture.* The artist quietly drops out.
+In animation, the in-betweens are the frames between the poses that matter. In Inkling, the phrase stretches a
+little: it's everything between your idea and your line.
 
-Inkling bets on the opposite:
+- **Gemini** picks the poses and suggests the tags.
+- **Voyage AI** and **MongoDB Atlas** remember everything and find it by meaning, whether that's a picture, a
+  sentence, or code.
+- **Math** draws the frames.
 
-- **Your strokes are the source of truth.** AI never draws over them.
-- **AI does the in-betweens:** poses, tags, search, and code you can read.
-- **MongoDB Atlas and Voyage AI give your sketchbook a memory.** Declared once, embedded on every save,
-  private to you.
+The line itself stays yours.
 
 > **Keep the pencil. Hand AI the in-betweens.**
 

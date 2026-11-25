@@ -3,10 +3,11 @@ from unittest.mock import Mock
 
 import pytest
 from pydantic import ValidationError
+from pymongo.errors import OperationFailure
 
 from backend.models import Asset, Shot, ShotUpdate
 from backend.production import (
-    Production, ProductionError, element_records, group_where_used, metadata_filter,
+    CODE_INDEX, Production, ProductionError, element_records, group_where_used, metadata_filter,
 )
 
 ASSET_ID = "11111111-2222-4333-8444-555555555555"
@@ -663,12 +664,46 @@ def test_scenes_keep_the_lab_code_their_frames_were_baked_from():
             Shot.model_validate(shot_payload(sketch={"by": "ai", "title": "t", "code": code, "frames": 2, **bad}))
 
 
-def test_code_search_embeds_once_and_lists_scenes_with_code_first():
+def test_code_search_asks_atlas_to_embed_the_query_and_stays_in_the_owners_library():
     production = offline_production()
+    production.shots._query_vector = Mock()
+    production.shots.mongo.aggregate.return_value = [
+        {"id": "b", "code": "SQ2", "updated_at": "t", "score": 0.61, "sketch": {"title": "Galaxy", "by": "ai", "code": "x"}}]
+    found = production.search_code("function draw() { spiral(); }")
+    stage = production.shots.mongo.aggregate.call_args.args[0][0]["$vectorSearch"]
+    assert stage["index"] == CODE_INDEX and stage["path"] == "sketch.code"
+    assert stage["query"] == "function draw() { spiral(); }" and stage["filter"] == {"owner": "tester"}
+    production.shots._query_vector.assert_not_called()  # Atlas embeds the query: no Voyage call from Inkling
+    assert found["engine"]["by"] == "atlas-autoembed" and [hit["id"] for hit in found["items"]] == ["b"]
+
+
+def test_code_search_falls_back_to_multimodal_vectors_without_autoembed():
+    production = offline_production()
+    production.shots.mongo.aggregate.side_effect = OperationFailure("autoEmbed is not supported")
     production.shots._query_vector = Mock(return_value=[0.1, 0.2])
     rows = [{"id": "a", "code": "SQ1", "updated_at": "t", "score": 0.9},
             {"id": "b", "code": "SQ2", "updated_at": "t", "score": 0.8, "sketch": {"title": "Galaxy", "by": "ai", "code": "x"}}]
     production._nearest = Mock(return_value=rows)
-    hits = production.search_code("function draw() { spiral(); }")
+    found = production.search_code("function draw() { spiral(); }")
     assert production.shots._query_vector.call_args.args[0][0].startswith("Code:\nfunction draw()")
-    assert [hit["id"] for hit in hits] == ["b", "a"] and hits[0]["sketch"] == {"title": "Galaxy", "by": "ai"}
+    assert found["engine"]["by"] == "voyage-multimodal"
+    assert [hit["id"] for hit in found["items"]] == ["b", "a"] and found["items"][0]["sketch"] == {"title": "Galaxy", "by": "ai"}
+
+
+def test_setup_creates_the_autoembed_index_once_and_survives_clusters_without_it():
+    from backend.setup import ensure_code_index
+    shots = Mock()
+    shots.list_search_indexes.return_value = []
+    ensure_code_index(shots)
+    model = shots.create_search_index.call_args.args[0].document
+    assert model["name"] == CODE_INDEX and model["type"] == "vectorSearch"
+    assert model["definition"]["fields"][0] == {"type": "autoEmbed", "modality": "text", "path": "sketch.code", "model": "voyage-code-4"}
+    shots.reset_mock()
+    shots.list_search_indexes.return_value = [{"name": CODE_INDEX, "latestDefinition": {"fields": [
+        {"type": "filter", "path": "owner"}, {"type": "autoEmbed", "modality": "text", "path": "sketch.code", "model": "voyage-code-4", "similarity": "dotProduct"}]}}]
+    ensure_code_index(shots)  # Atlas adds its defaults; same type, path, and model: leave it alone
+    shots.create_search_index.assert_not_called()
+    shots.drop_search_index.assert_not_called()
+    shots.list_search_indexes.return_value = []
+    shots.create_search_index.side_effect = OperationFailure("autoEmbed is not supported", details={"errmsg": "no autoEmbed"})
+    ensure_code_index(shots)  # logged; code search falls back instead of failing setup

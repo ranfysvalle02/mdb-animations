@@ -4,7 +4,7 @@ One Docker web service on [Render](https://render.com), one hosted MongoDB Atlas
 About 15 minutes, most of it waiting for the first build.
 
 ```
-browser ──HTTPS──▶ Render (Docker: FastAPI + the studio) ──▶ MongoDB Atlas   (data + 5 vector indexes: drawings, assets, scenes, elements, frames)
+browser ──HTTPS──▶ Render (Docker: FastAPI + the studio) ──▶ MongoDB Atlas   (data + 6 vector indexes: drawings, assets, scenes, elements, frames, and scene code via Automated Embedding)
                                                          ──▶ Voyage AI       (embeddings)
                                                          ──▶ Gemini          (drafts)
                                                          ──▶ m-stash         (accounts, server to server)
@@ -20,9 +20,11 @@ cookies). So a plain **Web Service** works as well as the Blueprint: it only nee
 
 ## 1. MongoDB Atlas (5 minutes)
 
-1. **Create a cluster** at [cloud.mongodb.com](https://cloud.mongodb.com). Inkling creates **5 vector
-   indexes** (ideas, assets, scenes, layers, frames). The free M0 tier allows only 3 search indexes, so use
-   **Flex** or **M10+**.
+1. **Create a cluster** at [cloud.mongodb.com](https://cloud.mongodb.com). Inkling creates **6 vector
+   indexes**: five Voyage multimodal ones (ideas, assets, scenes, layers, frames) and one
+   [Automated Embedding](https://www.mongodb.com/docs/vector-search/crud-embeddings/automated-embedding/) index
+   on scene code (`voyage-code-4`; Atlas embeds the code itself). The free M0 tier allows only 3 search indexes,
+   so use **Flex** or **M10+**. Without Automated Embedding, code search falls back to the multimodal vectors.
 2. **Database Access → Add user** with *Read and write to any database* (or scope it to your
    `MONGODB_DB`). Setup also creates the search indexes, which this role allows.
 3. **Network Access → Add IP.** Render's outbound addresses are listed in your service's
