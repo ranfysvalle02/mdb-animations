@@ -41,3 +41,13 @@ jobs:
         run: docker build -t inkling:ci .
       - name: The app imports inside the image
         run: docker run --rm inkling:ci python -c "import backend.main, backend.serve; print('ok')"
+      - name: The image boots like it does on Render, and stays up even when setup can't reach Atlas
+        run: |
+          docker run -d --name boot -p 10000:10000 -e RENDER=true -e PORT=10000 \
+            -e MONGODB_URI='mongodb://127.0.0.1:1/' -e VOYAGE_API_KEY=ci -e GEMINI_API_KEY=ci -e MSTASH_APP_KEY=pk_ci inkling:ci
+          for i in $(seq 1 30); do curl -fs localhost:10000/health && break; sleep 1; done
+          curl -fsI localhost:10000/ > /dev/null                    # Render's port probe (HEAD /)
+          sleep 15                                                   # setup gives up on the unreachable cluster
+          test "$(docker inspect -f '{{.State.Running}}' boot)" = true
+          curl -s localhost:10000/api/ready | tee /dev/stderr | grep -q "Can't reach MongoDB Atlas"
+          if docker logs boot 2>&1 | grep -q ImportError; then docker logs boot; exit 1; fi

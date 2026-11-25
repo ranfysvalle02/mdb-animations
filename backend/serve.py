@@ -10,6 +10,7 @@ Atlas cluster takes minutes. So the server starts first, then a background threa
 (Docker Compose runs setup as its own job, so it can skip step 1).
 """
 
+import importlib
 import logging
 import os
 import threading
@@ -80,8 +81,15 @@ def background() -> None:
 
 
 def main() -> None:
+    # Import everything on this thread first. Two threads importing the same packages at once (uvicorn
+    # loading the app while setup loads Cinematlas) can hand one of them a half-initialized module.
+    from backend.main import app
+
+    for module in ("backend.setup", "backend.seed_demo", "backend.library", "backend.production"):
+        importlib.import_module(module)
+
     threading.Thread(target=background, name="inkling-boot", daemon=True).start()
-    uvicorn.run("backend.main:app", host="0.0.0.0", port=PORT, workers=1, timeout_keep_alive=30)
+    uvicorn.run(app, host="0.0.0.0", port=PORT, workers=1, timeout_keep_alive=30)
 
 
 if __name__ == "__main__":

@@ -232,6 +232,8 @@ def health() -> dict:
 
 @app.get("/api/ready")
 def ready(request: Request) -> dict:
+    if boot.phase()["phase"] == "failed":  # say what to fix, without waiting on an unreachable cluster again
+        raise HTTPException(503, boot.phase()["detail"])
     if not request.app.state.library.ready() or not request.app.state.production.ready():
         state = boot.phase()
         raise HTTPException(503, state["detail"] if state["phase"] in ("indexing", "failed") and state["detail"]
