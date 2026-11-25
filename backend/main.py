@@ -25,7 +25,7 @@ from backend.ai import AIError, AIUnavailable, Sparks
 from backend.auth import DEMO_OWNER, SESSION_COOKIE, AuthError, AuthUnavailable, Budget, MStash, OpenAuth, Throttle, jwt_claims, service_owner
 from backend.library import Library, LibraryError, ink_crop, render_image
 from backend.models import (
-    ASSET_TYPES, CODE_PATTERN, MAX_LAYERS, SHOT_STATUSES, AnimateRequest, Asset, CodeRequest, DirectRequest, Drawing, Layer, LayersRequest, MotionRequest, RefineIdeasRequest,
+    ASSET_TYPES, CODE_PATTERN, MAX_LAYERS, SHOT_STATUSES, AnimateRequest, Asset, CodeRequest, CodeSearch, DirectRequest, Drawing, Layer, LayersRequest, MotionRequest, RefineIdeasRequest,
     RefineRequest, Shot, ShotUpdate, SketchRequest, SparkRequest, TagRequest,
     SketchSearch, VariationPlanRequest, VariationRequest,
     normalize_tag,
@@ -110,7 +110,7 @@ EMBED_BUDGET = Budget("embeds", "saves and searches", int(os.environ.get("INKLIN
 _ID = r"[0-9a-fA-F-]{36}"
 METERED = [
     (AI_BUDGET, "POST", re.compile(r"/api/(animate|sparks/(strokes|sketch|guide|motion|direct|refine|refine/ideas|code)|tags/suggest|assets/" + _ID + r"/variations(/plan)?)")),
-    (EMBED_BUDGET, "POST", re.compile(r"/api/(drawings|assets|assets/similar|shots|search/sketch|shots/" + _ID + r"/(sync/" + _ID + r"|link|share))")),
+    (EMBED_BUDGET, "POST", re.compile(r"/api/(drawings|assets|assets/similar|shots|search/sketch|search/code|shots/" + _ID + r"/(sync/" + _ID + r"|link|share))")),
     (EMBED_BUDGET, "PUT", re.compile(r"/api/(assets|shots)/" + _ID)),
     (EMBED_BUDGET, "GET", re.compile(r"/api/(search|assets/" + _ID + r"/where-used)")),
 ]
@@ -577,6 +577,13 @@ async def search_by_sketch(request: Request) -> dict:
     return {"items": items}
 
 
+@app.post("/api/search/code")
+async def search_code(request: Request) -> dict:
+    """Find scenes by code: the sketch is embedded by Voyage and compared with every scene's code and story."""
+    body = await read_json(request, CodeSearch)
+    return {"items": await run_in_threadpool(prod(request).search_code, body.code)}
+
+
 @app.get("/api/find")
 def find(request: Request, q: str = Query(min_length=1, max_length=500)) -> dict:
     """Search everything by meaning: one Voyage embedding, three Atlas vector searches (drawings, animations, frames)."""
@@ -797,7 +804,7 @@ def find_shot(request: Request, shot_id: UUID) -> dict:
 def get_shot(request: Request, shot_id: UUID) -> dict:
     record = find_shot(request, shot_id)
     return {**editable(record, "code", "project", "sequence", "status", "assignee", "description", "tags", "assets"),
-            "frames": record.get("frames", []), "fps": record.get("fps", 12), "motion": record.get("motion"),
+            "frames": record.get("frames", []), "fps": record.get("fps", 12), "motion": record.get("motion"), "sketch": record.get("sketch"),
             "share": prod(request).share_of(str(shot_id))}
 
 

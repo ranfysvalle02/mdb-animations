@@ -40,6 +40,15 @@ seeded code). Frame 1 plus that code reproduces every frame, so any scene can be
 number at a time: **⟨/⟩ Edit as code** opens it in the Lab; bake it and the frames come back *in your layers*, with your
 pen pressure, and with your original strokes reused wherever the code left them untouched.
 
+**Sign it.** Code can move your lines, but it can't sign them. At bake time the Lab asks: the code moved your lines
+through 24 frames (and drew N marks of its own); are these still yours? **✍ Yes, these are my lines** and they count as
+your hand on the meter, with the code saved as *how* they moved and a *Signed* entry in the scene's history. Marks the
+code invented (particles, effects) always stay labeled as code. Nothing is claimed for you.
+
+**Search by code.** A scene's sketch is part of what Voyage embeds (its title, direction, and the code itself), so
+**◎ Similar code** in the Lab finds scenes whose code is nearest by meaning, scenes with code first. **↻ Remix** loads
+any of them as a new take, running over your drawing: your library of motions becomes code you can reuse.
+
 **Take any scene apart.** In an animation, layer edits reach **all frames** by default: show or hide a layer, move or
 resize an asset, rename, add, delete, or reorder, once, and the whole animation follows (one Undo). Tap **All frames**
 in Layers to scope edits to one frame. The Breakdown shows the exposure sheet: every layer, every frame.

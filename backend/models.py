@@ -364,6 +364,12 @@ class SketchRecord(BaseModel):
     frames: int = Field(ge=2, le=MAX_FRAMES)
 
 
+class CodeSearch(BaseModel):
+    """Search scenes by a sketch's code."""
+    model_config = ConfigDict(extra="forbid")
+    code: str = Field(min_length=10, max_length=MAX_SKETCH_CODE)
+
+
 class CodeRequest(BaseModel):
     """Ask AI to write (or revise) a Lab sketch: p5.js over the artist's own strokes, never new drawing."""
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)

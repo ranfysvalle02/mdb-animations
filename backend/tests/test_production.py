@@ -656,7 +656,19 @@ def test_scenes_keep_the_lab_code_their_frames_were_baked_from():
                                             frames=[{"layers": [{"name": "Lab", "strokes": [stroke]}]}]))
     assert shot.model_dump()["sketch"]["code"] == code
     assert shot.frames[0].layers[0].strokes[0].model_dump()["code"] is True  # baked strokes stay marked as code
-    assert "Galaxy spiral" in shot_story(shot, [])
+    story = shot_story(shot, [])
+    assert "Galaxy spiral" in story and story.endswith(code)  # the code itself is embedded: scenes are findable by code
     for bad in ({"by": "robot"}, {"code": "x" * 12_001}, {"frames": 81}):
         with pytest.raises(ValidationError):
             Shot.model_validate(shot_payload(sketch={"by": "ai", "title": "t", "code": code, "frames": 2, **bad}))
+
+
+def test_code_search_embeds_once_and_lists_scenes_with_code_first():
+    production = offline_production()
+    production.shots._query_vector = Mock(return_value=[0.1, 0.2])
+    rows = [{"id": "a", "code": "SQ1", "updated_at": "t", "score": 0.9},
+            {"id": "b", "code": "SQ2", "updated_at": "t", "score": 0.8, "sketch": {"title": "Galaxy", "by": "ai", "code": "x"}}]
+    production._nearest = Mock(return_value=rows)
+    hits = production.search_code("function draw() { spiral(); }")
+    assert production.shots._query_vector.call_args.args[0][0].startswith("Code:\nfunction draw()")
+    assert [hit["id"] for hit in hits] == ["b", "a"] and hits[0]["sketch"] == {"title": "Galaxy", "by": "ai"}

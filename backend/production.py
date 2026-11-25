@@ -103,6 +103,7 @@ def shot_summary(record: dict) -> dict:
         "assets": record.get("assets", []), "updated_at": record["updated_at"],
         "frames": frame_count(record), "fps": record.get("fps", 12),
         "image_url": f"/api/shots/{record['id']}/image?t={record['updated_at']}",
+        **({"sketch": {"title": record["sketch"].get("title", ""), "by": record["sketch"].get("by", "")}} if record.get("sketch") else {}),
     }
 
 
@@ -134,6 +135,14 @@ def metadata_filter(project: str | None, sequence: str | None, status: str | Non
     return where
 
 
+CODE_EMBED_CHARS = 6000  # Voyage reads the head of a sketch: its comments, constants, and keyframes
+
+
+def code_query(code: str) -> str:
+    """A sketch as a search: the same shape as the code part of a scene's story."""
+    return f"Code:\n{code[:CODE_EMBED_CHARS]}"
+
+
 def shot_story(shot: Shot, cast: list[str]) -> str:
     """What happens in a scene, in words: its direction, its beats, its cast, and its layers."""
     parts = []
@@ -144,14 +153,16 @@ def shot_story(shot: Shot, cast: list[str]) -> str:
             parts.append("Beats: " + ", ".join(beats))
         parts.append(f"{len(shot.frames) + 1} frames, {(len(shot.frames) + 1) / shot.fps:.0f} seconds of animation")
     if shot.sketch:
-        parts.append(f"Generative code sketch: {shot.sketch.title}. {shot.sketch.prompt}")
-        parts.append(f"{len(shot.frames) + 1} frames baked from code")
+        parts.append(f"p5.js code sketch: {shot.sketch.title}. {shot.sketch.prompt}")
+        parts.append(f"{len(shot.frames) + 1} frames drawn by code")
     if cast:
         parts.append("Cast: " + ", ".join(cast))
     names = dict.fromkeys(layer.name for layer in shot.layers if layer.visible and layer.strokes)
     if names:
         parts.append("Layers: " + ", ".join(names))
-    return ". ".join(part.strip().rstrip(".") for part in parts if part and part.strip())
+    story = ". ".join(part.strip().rstrip(".") for part in parts if part and part.strip())
+    # The code itself is embedded too, so a sketch finds its cousins: "the one with the spiral", or by pasting code.
+    return f"{story}\nCode:\n{shot.sketch.code[:CODE_EMBED_CHARS]}" if shot.sketch else story
 
 
 def frame_hash(layers: list[Layer]) -> str:
@@ -553,6 +564,13 @@ class Production(Scoped):
                             self._nearest(self.frames, vector, 24, self.q(), SEARCH_SPREAD))
         return {**found, "timing": {"embed_ms": round((embedded - started) * 1000),
                                     "search_ms": round((time.perf_counter() - embedded) * 1000), "embeddings": 1}}
+
+    def search_code(self, code: str) -> list[dict]:
+        """Scenes whose code (and story) is nearest to this sketch: one Voyage embedding, one Atlas vector search."""
+        vector = self.shots._query_vector([code_query(code)])
+        rows = self._nearest(self.shots, vector, 12, self.q(), SEARCH_SPREAD)
+        hits = [{**shot_summary(row), "score": round(float(row["score"]), 4)} for row in rows]
+        return sorted(hits, key=lambda hit: (not hit.get("sketch"), -hit["score"]))  # scenes with code first
 
     def similar_everywhere(self, asset_id: str) -> dict:
         """Look-alikes with zero new embeddings: the asset's own vector, already in Atlas, is the query."""

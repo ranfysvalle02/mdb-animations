@@ -384,3 +384,15 @@ def test_ai_video_is_gone_and_its_data_is_dropped_once(client):
     database.list_collection_names.return_value = ["assets", "users_are_elsewhere"]
     drop_ai_video(database)
     database.drop_collection.assert_not_called()  # nothing to do: a second boot is a no-op
+
+
+def test_code_search_is_validated_and_metered_as_a_search(client):
+    from starlette.requests import Request as Req
+
+    from backend.main import EMBED_BUDGET, budget_for
+    scope = {"type": "http", "method": "POST", "path": "/api/search/code", "query_string": b"", "headers": []}
+    assert budget_for(Req(scope)) is EMBED_BUDGET
+    http, _ = client
+    http.production.search_code.return_value = [{"id": "b"}]
+    assert http.post("/api/search/code", json={"code": "function draw() {}"}).json() == {"items": [{"id": "b"}]}
+    assert http.post("/api/search/code", json={"code": "short"}).status_code == 422

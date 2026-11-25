@@ -119,6 +119,9 @@ first, and then it can move too.
 frame, drag the rocket a little lower once (the whole flight moves), or add a layer to draw a puff of smoke on a few
 frames. One Undo undoes the lot. Tap **All frames** to switch to this frame only.
 
+**Sign it, find it.** When you bake, the Lab asks whether the moved lines are still yours: sign them and the meter
+counts them as your hand. Later, **◎ Similar code** finds scenes whose code moves alike, and **↻ Remix** borrows it.
+
 **Change it as code.** **⟨/⟩ Edit as code** opens the scene's own sketch in the Lab. Change `STRENGTH = 1` to `1.4`,
 or nudge a keyframe's `y`, press ⌘/Ctrl+Enter, then **⤓ Bake to frames**: the frames come back in your layers.
 

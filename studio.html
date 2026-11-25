@@ -82,7 +82,7 @@
       <p class="hero-sub">You draw the moments that matter. AI handles everything in between.</p>
       <ul class="hero-rules" aria-label="The three rules">
         <li><button type="button" data-rule="motion" data-tip="Choreography, not replacement|Gemini picks the poses; plain math moves your actual strokes. Your line never goes through a filter.">&#127902; Choreography, not replacement</button></li>
-        <li><button type="button" data-rule="author" data-tip="Every stroke has an author|AI drafts stay blue-pencil until you keep them, and the meter on the canvas shows the split.">&#9997; Every stroke has an author</button></li>
+        <li><button type="button" data-rule="author" data-tip="Every stroke has an author|AI drafts stay blue-pencil until you keep them. Lines moved by code are yours only when you sign them. The meter shows the split.">&#9997; Every stroke has an author</button></li>
         <li><button type="button" data-rule="memory" data-tip="Your sketchbook, remembered|Draw a rough shape to find matching work in your private library. No tagging, no folders.">&#9678; Your sketchbook, remembered</button></li>
       </ul>
     </section>
@@ -609,6 +609,8 @@
         <div><dt>&#9636; All frames</dt><dd>In an animation, hide, move, resize, add, or delete a layer once: every frame follows.</dd></div>
         <div><dt>&#10022; Talk to</dt><dd>Aim your words at one layer or a few. Everyone else keeps their motion.</dd></div>
         <div><dt>&#10216;/&#10217; Lab</dt><dd>Your strokes as numbers: 3D, Processing-style code, AI-written sketches you can read. Bake it back to frames.</dd></div>
+        <div><dt>&#9997; Sign it</dt><dd>Lines the code only moved are still yours: sign them at bake time and they count as your hand.</dd></div>
+        <div><dt>&#9678; Similar code</dt><dd>Voyage embeds every animation&rsquo;s code. Find scenes that move alike, and remix them.</dd></div>
         <div><dt>&#9992;&#65039; Offline</dt><dd>Install it, then draw in airplane mode. Your drawing is kept on this device; AI and search wait for the signal.</dd></div>
         <div><dt>&#10052;&#65039; Effects</dt><dd>Snow, rain, sparkles, confetti, bubbles: tiny strokes drawn by code. Free, instant, no AI.</dd></div>
         <div><dt>&#9312; Takes</dt><dd>Every AI attempt, side by side. Flip back, branch, hold to compare. Nothing is final until you keep it, and Undo brings the takes back.</dd></div>
@@ -650,8 +652,8 @@
 
       <ol class="hood-rules">
         <li id="rule-motion"><b>&#127902; Choreography, not replacement</b><span>Gemini picks a few poses. Plain math moves your actual strokes between them. Your line never goes through a filter, so it never flickers or drifts off-model.</span></li>
-        <li id="rule-author"><b>&#9997; Every stroke has an author</b><span>AI drafts stay blue-pencil previews until you say yes, and stay marked after. The meter on the canvas shows how much is your hand.</span></li>
-        <li id="rule-memory"><b>&#9678; Your sketchbook, remembered</b><span>Draw a rough shape to find matching work. Voyage AI maps meaning; Atlas searches only your library. No folders called final_v3_REAL.</span></li>
+        <li id="rule-author"><b>&#9997; Every stroke has an author</b><span>AI drafts stay blue-pencil previews until you say yes, and stay marked after. When code moves your lines, you sign them back as yours (or keep them marked as code). The meter shows how much is your hand.</span></li>
+        <li id="rule-memory"><b>&#9678; Your sketchbook, remembered</b><span>Draw a rough shape, type a few words, or paste a sketch&rsquo;s code to find matching work. Voyage AI maps meaning (pictures, words, and code alike); Atlas searches only your library.</span></li>
       </ol>
 
       <section class="hood-card hood-strokes">
@@ -669,7 +671,7 @@
       <section class="hood-card">
         <div>
           <h3>&#129517; Voyage AI: a map of meaning</h3>
-          <p>Voyage&rsquo;s multimodal model (<code>voyage-multimodal-3.5</code>) turns a picture <i>or</i> a sentence into a list of numbers: coordinates on one shared map. Things that look or mean alike land close together, so your fox doodle and the words &ldquo;a cute animal&rdquo; are neighbors. That is how <b>Find similar</b> works without you ever tagging anything.</p>
+          <p>Voyage&rsquo;s multimodal model (<code>voyage-multimodal-3.5</code>) turns a picture <i>or</i> a sentence into a list of numbers: coordinates on one shared map. Things that look or mean alike land close together, so your fox doodle and the words &ldquo;a cute animal&rdquo; are neighbors. That is how <b>Find similar</b> works without you ever tagging anything. Code gets coordinates too: every animation&rsquo;s p5.js sketch is embedded, so <b>&#9678; Similar code</b> in the Lab finds scenes that move alike, and you can remix them.</p>
           <p class="hood-fine">Saving or searching sends that drawing or text to Voyage to compute its coordinates.</p>
         </div>
         <svg class="hood-map" viewBox="0 0 260 170" role="img" aria-label="An illustration: a fox doodle, the words a cute animal, and a cat sketch sit close together; a rocket sits far away.">
@@ -744,8 +746,19 @@
         <div class="lab-actions">
           <button type="button" id="lab-run" class="lab-run" data-tip="Run &middot; Cmd/Ctrl+Enter|Your edits become a new take. Runs in a sandbox with no network.">&#9654; Run</button>
           <label class="lab-frames"><span class="sr-only">Frames to bake</span><select id="lab-frames"><option value="24">24 frames &middot; 3 s</option><option value="48" selected>48 frames &middot; 6 s</option><option value="80">80 frames &middot; 10 s</option></select></label>
+          <button type="button" id="lab-similar" class="lab-run" data-online data-tip="Similar code|Voyage AI embeds this sketch and finds scenes in your library whose code (and story) is nearest. Remix any of them.">&#9678; Similar code</button>
           <button type="button" id="lab-bake" class="lab-bake" data-tip="Bake to frames|Every frame of the loop becomes editable strokes in a flipbook. Undo brings your drawing back.">&#10515; Bake to frames</button>
         </div>
+        <section id="lab-sign" class="lab-sign" aria-live="polite" hidden>
+          <h3>&#9997; Still yours?</h3>
+          <p id="lab-sign-text"></p>
+          <div class="lab-sign-actions">
+            <button type="button" id="lab-sign-yes" class="lab-bake">&#9997; Yes, these are my lines</button>
+            <button type="button" id="lab-sign-code" class="lab-run">&#10216;/&#10217; Mark them as code</button>
+            <button type="button" id="lab-sign-cancel" class="link-button">Not yet</button>
+          </div>
+        </section>
+        <section id="lab-found" class="lab-found" aria-live="polite" hidden></section>
         <details class="lab-api"><summary>The Inkling API</summary>
           <dl>
             <div><dt><code>strokes</code></dt><dd>Your drawing, in the order you drew it: <code>{points: [{x, y, pressure}], color, width, layer, order}</code>. The paper is <code>W</code> &times; <code>H</code> (1000 &times; 650).</dd></div>

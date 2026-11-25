@@ -113,7 +113,8 @@
       const placed = onPaper(pts, width);
       if (placed.points.length) {
         baking.current.push({ points: placed.points, color: toHex(color), width: placed.width, fill: style.fill ? toHex(style.fill) : null,
-          layer: typeof style.layer === 'string' ? style.layer.slice(0, 40) : null }); // which layer it bakes into
+          layer: typeof style.layer === 'string' ? style.layer.slice(0, 40) : null, // which layer it bakes into
+          own: style.own === true }); // one of the artist's own lines (moved by code), not a mark the code invented
       }
     }
     window.push();
@@ -131,7 +132,7 @@
   };
   window.inkStroke = (stroke, map) => {
     if (!stroke || !stroke.points) return;
-    window.ink(map ? stroke.points.map((p, i) => map(p, i, stroke)) : stroke.points, { color: stroke.color, width: stroke.width, layer: stroke.layer });
+    window.ink(map ? stroke.points.map((p, i) => map(p, i, stroke)) : stroke.points, { color: stroke.color, width: stroke.width, layer: stroke.layer, own: true });
   };
   window.loopT = () => ((Math.max(1, window.frameCount) - 1) % window.LOOP) / window.LOOP;
 

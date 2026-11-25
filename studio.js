@@ -6870,7 +6870,7 @@ function draw() {
     for (let i = 0; i < xy.length; i += 2) {
       points.push({ x: xy[i], y: xy[i + 1] });   // try: + noise(i, frameCount * 0.2) * 3 for a hand-drawn "boil"
     }
-    ink(points, { color: color, width: width, fill: fill || null, layer: layer });
+    ink(points, { color: color, width: width, fill: fill || null, layer: layer, own: true });   // your line, re-encoded
   }
 }
 `;
@@ -7076,6 +7076,7 @@ function draw() {
   // Each run gets a fresh sandbox: nothing carries over, and a stuck sketch is simply thrown away.
   let labRun = 0;
   async function runLab(code = $('lab-code').value) {
+    if (signing) { signing = null; $('lab-sign').hidden = true; } // a new run means a new bake to sign
     labReady = false;
     labError('');
     clearTimeout(labWatch);
@@ -7133,7 +7134,7 @@ function draw() {
       const take = labBaking;
       labBaking = null;
       setLabBusy(false);
-      if (message.frames) bakeLab(take, message.frames, message.keep === true);
+      if (message.frames) askToSign(take, message.frames, message.keep === true);
     }
   });
   $('lab-error').addEventListener('click', () => {
@@ -7321,14 +7322,88 @@ function draw() {
       if (out.length >= room.strokes || points + pts.length > room.points) { trimmed = true; break; }
       points += pts.length;
       const fill = /^#[0-9a-f]{6}$/i.test(raw.fill || '') && pts.length > 2 ? raw.fill.toLowerCase() : null;
-      out.push({ layer: typeof raw.layer === 'string' ? raw.layer : null, stroke: {
+      out.push({ layer: typeof raw.layer === 'string' ? raw.layer : null, own: raw.own === true, stroke: {
         points: pts.map(p => ({ x: r4(clampTo(p.x, 0, 1)), y: r4(clampTo(p.y, 0, 1)), pressure: r4(p.pressure) })),
         color: /^#[0-9a-f]{6}$/i.test(raw.color || '') ? raw.color.toLowerCase() : '#123b38',
         width: Math.round(clampTo(Number(raw.width) || 3, 1, 40) * 10) / 10, ...(fill ? { fill } : {}), code: true, seq: 0 } });
     }
     return { strokes: out, trimmed };
   }
-  function bakeLab(take, raw, keep) {
+  // Before code-moved lines join the scene, the artist says whose they are. Lines the code only moved (inkStroke,
+  // Drawing as code) can be signed as their own hand; marks the code invented (particles, effects) stay code.
+  let signing = null;
+  function askToSign(take, raw, keep) {
+    const counts = raw.reduce((n, frame) => {
+      for (const item of frame || []) item.own ? n.own++ : n.made++;
+      return n;
+    }, { own: 0, made: 0 });
+    if (!counts.own) { bakeLab(take, raw, keep, false); return; }
+    signing = { take, raw, keep };
+    $('lab-note').textContent = `\u2713 ${raw.length} frames drawn from the same seed. One question before they join your scene:`;
+    const per = n => Math.round(n / raw.length);
+    $('lab-sign-text').textContent = `The code moved your lines through ${raw.length} frames (about ${plural(per(counts.own), 'line')} a frame)`
+      + `${counts.made ? `, and drew ${plural(per(counts.made), 'mark')} a frame of its own (particles, effects)` : ''}. `
+      + 'Signed, your lines count as your hand; the code is saved with the scene as how they moved.';
+    $('lab-sign').hidden = false;
+    $('lab-sign').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    $('lab-sign-yes').focus({ preventScroll: true });
+  }
+  const sign = signed => {
+    if (!signing) return;
+    const { take, raw, keep } = signing;
+    signing = null;
+    $('lab-sign').hidden = true;
+    if (signed !== null) bakeLab(take, raw, keep, signed);
+  };
+  $('lab-sign-yes').addEventListener('click', () => sign(true));
+  $('lab-sign-code').addEventListener('click', () => sign(false));
+  $('lab-sign-cancel').addEventListener('click', () => sign(null));
+
+  // Similar code: this sketch, embedded by Voyage, against every scene's code and story in your library.
+  $('lab-similar').addEventListener('click', async () => {
+    const code = $('lab-code').value.trim();
+    const box = $('lab-found');
+    if (code.length < 10) { labError('Write or pick a sketch first: the code is the search.'); return; }
+    box.hidden = false;
+    box.replaceChildren(el('p', 'lab-found-note', '\u25ce Voyage AI is reading your code\u2026'));
+    try {
+      const { items } = await postJSON('/api/search/code', JSON.stringify({ code: code.slice(0, MAX_SKETCH_CODE) }));
+      const cards = items.slice(0, 8).map(item => {
+        const card = el('div', 'lab-found-card');
+        const image = el('img');
+        image.src = item.image_url;
+        image.alt = '';
+        image.loading = 'lazy';
+        const text = el('span', 'lab-found-text');
+        text.append(el('b', '', item.sketch?.title || item.code),
+          el('small', '', `${item.code}${item.frames > 1 ? ` \u00b7 ${item.frames} frames` : ''}${item.sketch ? ` \u00b7 ${item.sketch.by === 'ai' ? 'AI-written' : item.sketch.by === 'artist' ? 'your code' : 'preset'}` : ' \u00b7 no code yet'}`));
+        const actions = el('span', 'lab-found-actions');
+        if (item.sketch) {
+          const remix = el('button', 'lab-run', '\u21bb Remix');
+          remix.type = 'button';
+          remix.dataset.tip = 'Remix|Load this scene\u2019s code as a new take, running over your drawing.';
+          remix.addEventListener('click', async () => {
+            try {
+              const record = await api(`/api/shots/${encodeURIComponent(item.id)}`);
+              if (!record.sketch) throw new Error('That scene has no code anymore.');
+              addLabTake({ title: `\u25ce ${record.sketch.title}`, by: record.sketch.by, prompt: record.sketch.prompt || '', code: record.sketch.code,
+                frames: record.sketch.frames, note: `\u25ce Remixed from ${item.code}: its code, now running over your drawing. Found by meaning, not by name.` });
+              box.hidden = true;
+            } catch (error) { labError(error.message); }
+          });
+          actions.append(remix);
+        }
+        card.append(image, text, actions);
+        return card;
+      });
+      box.replaceChildren(el('p', 'lab-found-note', items.length ? `\u25ce Nearest by meaning in your library (Voyage AI \u00b7 Atlas Vector Search). Scenes with code first.` : 'Nothing close yet. Save scenes with code and they\u2019ll show up here.'), ...cards);
+    } catch (error) {
+      box.hidden = true;
+      labError(error.message);
+    }
+  });
+
+  function bakeLab(take, raw, keep, signed = false) {
     const base = frames[0];
     const baseStrokes = base.flatMap(layer => layer.strokes);
     const room = { strokes: MAX_STROKES - baseStrokes.length, points: MAX_POINTS - countPoints(baseStrokes) };
@@ -7355,6 +7430,8 @@ function draw() {
     if (motionDraft) skipMotion(); // baking replaces the frames; a preview on top would be stale
     stopPlay();
     pushUndo();
+    // Signed: your lines (moved by code) are yours. Marks the code made on its own keep their `code` mark.
+    for (const frame of baked) for (const item of frame.strokes) if (signed && item.own) delete item.stroke.code;
     const stacks = baked.map(frame => {
       const groups = new Map();
       for (const item of frame.strokes) if (names.has(item.layer)) (groups.get(item.layer) || groups.set(item.layer, []).get(item.layer)).push(item);
@@ -7384,6 +7461,7 @@ function draw() {
       if (!$('description').value.trim()) $('description').value = (take.prompt || `${title}: a code sketch over my drawing`).slice(0, 200);
     }
     logEvent(take.by === 'ai' ? 'ai' : 'artist', 'Lab bake', `${title} (${take.by === 'ai' ? 'AI-written' : take.by === 'preset' ? 'preset' : 'your code'}): ${stacks.length} frames`);
+    if (signed) logEvent('artist', 'Signed', `Lines moved by \u201c${title}\u201d confirmed as the artist\u2019s own`);
     recount();
     rebuildOnion();
     rebuildAll();
@@ -7395,7 +7473,7 @@ function draw() {
     play();
     const perFrame = Math.round(baked.reduce((n, frame) => n + frame.strokes.length, 0) / baked.length);
     const trimmed = baked.some(frame => frame.trimmed);
-    message('drawing-status', `\u2913 Baked ${stacks.length} frames from \u201c${title}\u201d: about ${plural(perFrame, 'stroke')} a frame, in your layers, all editable.${trimmed ? ' Some frames were trimmed to fit the canvas limits.' : ''} The code is saved with the scene.`, false, [
+    message('drawing-status', `${signed ? '\u270d Signed and baked' : '\u2913 Baked'} ${stacks.length} frames from \u201c${title}\u201d: about ${plural(perFrame, 'stroke')} a frame, in your layers, all editable.${trimmed ? ' Some frames were trimmed to fit the canvas limits.' : ''} The code is saved with the scene, and Voyage can find it by its code.`, false, [
       { label: '\u21b6 Undo', tip: 'Undo|Your drawing exactly as it was.', run: () => { undo(); message('drawing-status', 'Undone. Your drawing is back; the Lab still has your takes.'); } },
       { label: '\u27e8/\u27e9 Back to the Lab', run: () => openLab() }]);
   }
