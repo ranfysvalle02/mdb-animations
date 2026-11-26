@@ -1892,6 +1892,7 @@
   }
   function openRefinePick() {
     if (offline) { flashTray(OFFLINE_NOTE, true); return; }
+    if (playing) stopPlay(); // the preview needs the canvas
     if (sparks.some(spark => spark.kind === 'refine' && spark.status === 'pending')) { flashTray('\u2726 Already refining. Keep drawing.'); return; }
     const choices = [...layers].reverse().filter(layer => layer.visible && layer.strokes.some(stroke => !stroke.erase));
     if (!choices.length) { flashTray('Draw something rough first, then \u2726 Refine cleans it up.', true); return; }
@@ -2202,6 +2203,18 @@
     const changed = next.filter(stroke => !spark.source.includes(stroke));
     const since = layer.strokes.filter(stroke => !spark.source.includes(stroke));
     return { next, changed, since, map: spark.applied.map };
+  }
+  // The plan as code, the way the studio runs it: circle(S0) · smooth(S1, S2) · scale(S7, S8, ×1.3).
+  function planCode(result) {
+    const list = ids => ids.map(i => `S${i}`).join(', ');
+    return [...(result.edits || []).map(edit => {
+      if (edit.op !== 'transform') return `${edit.op}(${list(edit.strokes)})`;
+      const args = [list(edit.strokes)];
+      if (Math.abs(edit.scale - 1) > 0.009) args.push(`\u00d7${Math.round(edit.scale * 100) / 100}`);
+      if (edit.rotate) args.push(`${Math.round(edit.rotate)}\u00b0`);
+      if (edit.dx || edit.dy) args.push(`\u2192${Math.round(edit.dx)},${Math.round(edit.dy)}`);
+      return `transform(${args.join(', ')})`;
+    }), ...(result.add?.length ? [`add(${result.add.length} new)`] : [])].join(' \u00b7 ');
   }
   // What a plan does, in plain words: "rounded 1 · smoothed 3 · bigger 2 · removed 1 · added 2".
   function editSummary(result) {
@@ -3018,6 +3031,7 @@
       message('drawing-status', `\ud83e\uddb4 No moving parts found: ${name} moves as one piece (it squashes, leans, and hops). Draw legs or a tail as their own strokes, then rig again.`, false, [again]);
       return;
     }
+    if (playing) stopPlay(); // the rig view needs the canvas
     rigView = { layerId: layer ? layer.id : null, rig, started: performance.now() };
     $('rig-now').setAttribute('aria-pressed', 'true');
     animate();
@@ -3410,7 +3424,8 @@
   let flipbookTab = null;
   const book = { stacks: [], at: 0, fps: 12, timer: 0, id: null, turning: false };
   function drawPage(target, i) {
-    const box = target.getBoundingClientRect(), dpr = Math.min(2, window.devicePixelRatio || 1);
+    const shown = target.isConnected; // an offscreen sheet (the video) keeps its own size
+    const box = shown ? target.getBoundingClientRect() : { width: target.width }, dpr = shown ? Math.min(2, window.devicePixelRatio || 1) : 1;
     const w = Math.max(200, Math.round(box.width * dpr)), h = Math.round(w * H / W);
     if (target.width !== w) { target.width = w; target.height = h; }
     const g = target.getContext('2d');
@@ -3506,6 +3521,41 @@
     flashTray('\ud83d\udda8 Saving the shot first, then its printable pages open\u2026');
     $('save-form').requestSubmit();
   }
+  // Save a video: the pages played at the chosen speed into a canvas stream, recorded in the browser.
+  async function bookVideo() {
+    const type = ['video/mp4;codecs=avc1', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm'].find(t => window.MediaRecorder?.isTypeSupported?.(t));
+    if (!type) { flashTray('This browser can\u2019t record video. Try Chrome or Safari.', true); return; }
+    stopBook();
+    const button = $('fb-video');
+    const sheet = document.createElement('canvas');
+    sheet.width = 1000;
+    sheet.height = 650;
+    const stream = sheet.captureStream(0), track = stream.getVideoTracks()[0];
+    const chunks = [], recorder = new MediaRecorder(stream, { mimeType: type, videoBitsPerSecond: 4_000_000 });
+    recorder.ondataavailable = event => event.data.size && chunks.push(event.data);
+    const done = new Promise(resolve => { recorder.onstop = resolve; });
+    button.disabled = true;
+    recorder.start();
+    for (let i = 0; i < book.stacks.length; i++) {
+      button.textContent = `\u23fa ${i + 1}/${book.stacks.length}`;
+      drawPage(sheet, i);
+      track.requestFrame?.();
+      showPage(i);
+      await new Promise(resolve => setTimeout(resolve, 1000 / book.fps));
+    }
+    await new Promise(resolve => setTimeout(resolve, 1000 / book.fps));
+    recorder.stop();
+    await done;
+    button.disabled = false;
+    button.textContent = '\u2b07 Video';
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(new Blob(chunks, { type }));
+    link.download = `${($('fb-title').textContent || 'flipbook').replace(/[^\w-]+/g, '_')}.${type.includes('mp4') ? 'mp4' : 'webm'}`;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(link.href), 4000);
+    flashTray(`\u2b07 Saved ${link.download}: ${book.stacks.length} pages at ${book.fps} fps.`);
+  }
+  $('fb-video').addEventListener('click', bookVideo);
   $('fb-play').addEventListener('click', playBook);
   $('fb-print').addEventListener('click', printFlipbook);
   $('fb-close').addEventListener('click', () => $('flipbook').close());
@@ -4062,8 +4112,8 @@
           : `Rough? Tap <b>\u2726 Refine</b> and pick what to clean up. Happy? <b>Save</b>: AI names and tags it.`
       : motionDraft ? `A take of <b>${esc(name)}</b>. <b>Enter</b> keeps it; switch Walk \u00b7 Hop \u00b7 Glide \u00b7 Fly, or drag your own path.`
         : !moving ? `Pick <b>\u3030 Path</b> and drag <b>${esc(name)}</b> where it should go. It travels your trail for ${MIN_SHOT} s.`
-          : editing?.kind === 'shot' && saved ? `Saved, and on ${esc(name)}\u2019s page. Tap <b>\u2462 Flipbook</b> to print every frame.`
-            : `It moves: Space plays. <b>Save</b> the shot, or tap <b>\u2462 Flipbook</b> to print it (it saves first).`;
+          : editing?.kind === 'shot' && saved ? `Saved, and on ${esc(name)}\u2019s page. Tap <b>\u2462 Flipbook</b> to riffle through it, or print it.`
+            : `It moves! <b>Save</b> the shot, or tap <b>\u2462 Flipbook</b> to riffle through it.`;
     const steps = [
       { label: backdrop ? 'Backdrop' : 'Asset', state: shot || savedAsset ? 'done' : 'now',
         run: shot && star ? () => openWhereUsed({ id: star.asset.asset_id, name: star.name }) : null,
@@ -4537,6 +4587,11 @@
       const note = document.createElement('span');
       note.className = 'tray-note';
       note.append(el('b', '', 'Preview'), ` \u00b7 ${ready.result.note || 'AI draft'} \u00b7 nothing changes until you keep it`);
+      if (ready.kind === 'refine') {
+        const plan = el('code', 'tray-plan', planCode(ready.result));
+        plan.dataset.tip = 'The plan|What AI asked for, as code: each edit names an operation and the strokes it runs on (S = stroke number). The studio\u2019s geometry does the drawing.';
+        note.append(plan);
+      }
       tray.append(
         note,
         trayButton(`${ready.kind === 'guide' ? 'Pin guide' : ready.kind === 'sketch' ? 'Use sketch' : ready.kind === 'refine' ? 'Keep it' : 'Use it'} <kbd>\u23ce</kbd>`,

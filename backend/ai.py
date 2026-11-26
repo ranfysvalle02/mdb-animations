@@ -308,6 +308,17 @@ def apply_variation(strokes: list[Stroke], result: "_Variation") -> tuple[list[d
     return out, kept, added
 
 
+def tag_strokes(picture: "PILImage.Image", strokes: list[Stroke], indices: list[int]) -> None:
+    """Number each stroke on the picture (a violet tag at its middle), so the model can say which is which."""
+    pen = ImageDraw.Draw(picture)
+    for i in indices:
+        pts = strokes[i].points
+        p = pts[len(pts) // 2]
+        x, y = p.x * CANVAS_WIDTH, p.y * CANVAS_HEIGHT
+        pen.rectangle((x - 2, y - 7, x + 7 * len(str(i)) + 2, y + 7), fill="#6d28d9")
+        pen.text((x, y - 6), str(i), fill="#ffffff")
+
+
 def crop_box(region: Region) -> tuple[int, int, int, int]:
     left = min(CANVAS_WIDTH - 1, round(region.x * CANVAS_WIDTH))
     top = min(CANVAS_HEIGHT - 1, round(region.y * CANVAS_HEIGHT))
@@ -490,12 +501,18 @@ class Sparks:
             xs, ys = [p.x for p in stroke.points], [p.y for p in stroke.points]
             (a, b), (c, d) = rel(min(xs), min(ys)), rel(max(xs), max(ys))
             rows.append(f"{i}: {stroke.color}{' filled' if stroke.fill else ''}, box {a},{b} to {c},{d}")
-        picture = render_image(layers).crop((round(x0 * CANVAS_WIDTH) - 8, round(y0 * CANVAS_HEIGHT) - 8,
-                                             round(x1 * CANVAS_WIDTH) + 8, round(y1 * CANVAS_HEIGHT) + 8))
+        box = (round(x0 * CANVAS_WIDTH) - 8, round(y0 * CANVAS_HEIGHT) - 8, round(x1 * CANVAS_WIDTH) + 8, round(y1 * CANVAS_HEIGHT) + 8)
+        plain = render_image(layers).crop(box)
+        numbered = render_image(layers)
+        tag_strokes(numbered, strokes, [i for i, stroke in enumerate(strokes[:RIG_TABLE_STROKES]) if not stroke.erase])
         result = self._json([
-            types.Part.from_bytes(data=png_bytes(picture), mime_type="image/png"),
+            "Image 1: the drawing. Image 2: the same drawing with each stroke's number on it (violet tags).",
+            types.Part.from_bytes(data=png_bytes(plain), mime_type="image/png"),
+            types.Part.from_bytes(data=png_bytes(numbered.crop(box)), mime_type="image/png"),
             "Rig this 2D drawing for simple cut-out animation. Coordinates are 0-100 across the drawing's box (x right, "
             "y down). Its strokes, by index (box = the stroke's extent):\n" + "\n".join(rows) + "\n\n"
+            "Look at the picture first: name every part that could swing on its own (a tail, ears are part of the head, "
+            "legs, arms, wings), then find its strokes by their numbers. Most characters have at least a head or a tail. "
             "kind: biped, quadruped, bird, fish, or object (anything without limbs). bones: group the strokes into the "
             "parts that move on their own: head, leg_front, leg_back, arm_front, arm_back, tail, wing_front, wing_back. "
             "Put everything else (torso, belly, details that ride along, any stroke outlining most of the figure) in "
@@ -709,7 +726,7 @@ class Sparks:
         strokes = request.layers[request.target].strokes
         live = [i for i, stroke in enumerate(strokes) if not stroke.erase]
         picture = render_image(request.layers)
-        pen = ImageDraw.Draw(picture)
+        tag_strokes(picture, strokes, live)
         rows = []
         for i in live:
             pts = [(p.x * CANVAS_WIDTH, p.y * CANVAS_HEIGHT) for p in strokes[i].points]
@@ -720,9 +737,6 @@ class Sparks:
             rows.append(f"S{i}: {strokes[i].color.lower()}{' filled' if strokes[i].fill else ''}, {len(pts)} points, "
                         f"{'closed' if closed else 'open'}, box {round(min(xs))},{round(min(ys))} to {round(max(xs))},{round(max(ys))}, "
                         f"length {round(length)}px, ends {round(gap)}px apart")
-            x, y = pts[len(pts) // 2]
-            pen.rectangle((x - 2, y - 7, x + 7 * len(str(i)) + 2, y + 7), fill="#6d28d9")
-            pen.text((x, y - 6), str(i), fill="#ffffff")
         result = self._json([
             "Image: the artist's canvas (1000x650). Each stroke of the layer to refine has its number on it (violet tag).",
             types.Part.from_bytes(data=png_bytes(picture), mime_type="image/png"),

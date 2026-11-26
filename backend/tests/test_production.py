@@ -826,7 +826,8 @@ def test_rig_keeps_moving_parts_each_stroke_once_with_joints_in_the_box():
     rig = sparks.rig([Layer(name="Bug", strokes=strokes)])
     assert rig["kind"] == "object" and rig["strokes"] == 5  # stroke 4 outlines the whole figure: never a limb
     assert rig["bones"] == [{"part": "leg_front", "strokes": [1], "px": 0.5, "py": 0.0}, {"part": "leg_back", "strokes": [2], "px": 1.0, "py": 0.4}]
-    assert "1: #ff0000, box" in sparks._json.call_args.args[0][1] and "\n3:" not in sparks._json.call_args.args[0][1]  # erasers aren't parts
+    prompt = "".join(part for part in sparks._json.call_args.args[0] if isinstance(part, str))
+    assert "1: #ff0000, box" in prompt and "\n3:" not in prompt  # erasers aren't parts
 
 
 def test_rig_is_made_once_per_version_and_new_endpoints_are_metered(client):
