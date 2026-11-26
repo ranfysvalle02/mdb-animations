@@ -8,7 +8,7 @@ from __future__ import annotations
 import html
 import io
 
-from PIL import Image as PILImage
+from PIL import Image as PILImage, ImageDraw, ImageFont
 
 from backend.library import render_image
 from backend.models import Layer
@@ -48,6 +48,53 @@ def render_clip(stacks: list[list[Layer]], fps: int) -> tuple[bytes, bytes]:
     return clip.getvalue(), poster.getvalue()
 
 
+# A printable flipbook: US Letter at 150 dpi, ten frames a page, each with a strip on the left to staple.
+PAGE_W, PAGE_H, MARGIN, HEAD = 1275, 1650, 60, 56
+COLS, ROWS, TAB = 2, 5, 96
+
+
+def dashed_box(draw: ImageDraw.ImageDraw, box: tuple[int, int, int, int], dash: int = 10) -> None:
+    x0, y0, x1, y1 = box
+    for x in range(x0, x1, dash * 2):
+        draw.line([(x, y0), (min(x + dash, x1), y0)], fill="#b6c2bb", width=2)
+        draw.line([(x, y1), (min(x + dash, x1), y1)], fill="#b6c2bb", width=2)
+    for y in range(y0, y1, dash * 2):
+        draw.line([(x0, y), (x0, min(y + dash, y1))], fill="#b6c2bb", width=2)
+        draw.line([(x1, y), (x1, min(y + dash, y1))], fill="#b6c2bb", width=2)
+
+
+def render_flipbook(stacks: list[list[Layer]], code: str) -> bytes:
+    """Every frame on paper: cut on the dashed lines, stack them in order (1 on top), staple the strip, flip."""
+    cell_w, cell_h = (PAGE_W - 2 * MARGIN) // COLS, (PAGE_H - 2 * MARGIN - HEAD) // ROWS
+    pic_h = cell_h - 24
+    pic_w = min(cell_w - TAB - 16, round(pic_h * 1000 / 650))
+    pic_h = round(pic_w * 650 / 1000)
+    small, big = ImageFont.load_default(size=22), ImageFont.load_default(size=30)
+    per = COLS * ROWS
+    pages = []
+    for start in range(0, len(stacks), per):
+        page = PILImage.new("RGB", (PAGE_W, PAGE_H), "white")
+        draw = ImageDraw.Draw(page)
+        draw.text((MARGIN, MARGIN), f"Inkling flipbook \u00b7 {code} \u00b7 {len(stacks)} frames \u00b7 page {start // per + 1} of "
+                  f"{-(-len(stacks) // per)}", fill="#12302c", font=small)
+        draw.text((MARGIN, MARGIN + 26), "Cut on the dashed lines. Stack in order, 1 on top. Staple the left strip. Flip with your thumb.",
+                  fill="#5f726d", font=small)
+        for i, stack in enumerate(stacks[start:start + per]):
+            x0, y0 = MARGIN + (i % COLS) * cell_w, MARGIN + HEAD + (i // COLS) * cell_h
+            dashed_box(draw, (x0, y0, x0 + cell_w - 1, y0 + cell_h - 1))
+            draw.text((x0 + 14, y0 + 12), str(start + i + 1), fill="#12302c", font=big)
+            for dot in (0.3, 0.7):  # where the staples go
+                cy = y0 + round(cell_h * dot)
+                draw.ellipse((x0 + TAB // 2 - 5, cy - 5, x0 + TAB // 2 + 5, cy + 5), outline="#b6c2bb", width=2)
+            picture = render_image(stack).convert("RGB").resize((pic_w, pic_h), PILImage.LANCZOS)
+            page.paste(picture, (x0 + TAB, y0 + (cell_h - pic_h) // 2))
+            draw.rectangle((x0 + TAB, y0 + (cell_h - pic_h) // 2, x0 + TAB + pic_w - 1, y0 + (cell_h - pic_h) // 2 + pic_h - 1), outline="#dbe4dc")
+        pages.append(page)
+    out = io.BytesIO()
+    pages[0].save(out, format="PDF", save_all=True, append_images=pages[1:], resolution=150)
+    return out.getvalue()
+
+
 def explain(motion: dict | None, frames: int, fps: int) -> dict:
     """How it moves, in plain words: keyframes chosen, in-betweens computed, principles used."""
     seconds = frames / fps
@@ -55,8 +102,9 @@ def explain(motion: dict | None, frames: int, fps: int) -> dict:
         return {"lead": f"{frames} frames at {fps} frames a second: {seconds:.1f} seconds, drawn frame by frame.",
                 "beats": [], "principles": []}
     keys = sorted({round(key["t"] * (frames - 1)) for track in motion["tracks"] for key in track["keys"]})
-    who = "An AI director" if motion["by"] == "ai" else "A quick-move preset"
-    lead = (f"{seconds:.1f} seconds, {frames} frames. {who} chose {len(keys)} keyframes, the poses that matter. "
+    who = {"ai": "An AI director", "path": "The artist's drawn path"}.get(motion["by"], "A quick-move preset")
+    chose = "became" if motion["by"] == "path" else "chose"
+    lead = (f"{seconds:.1f} seconds, {frames} frames. {who} {chose} {len(keys)} keyframes, the poses that matter. "
             f"The other {frames - len(keys)} frames are in-betweens: the artist's own drawing, moved, squashed and turned "
             "on a smooth curve. Nothing was redrawn.")
     many = len(motion["tracks"]) > 1
@@ -79,7 +127,8 @@ def page(share: dict, origin: str) -> str:
     direction = ""
     if motion:
         words = motion.get("prompt") if motion["by"] == "ai" else motion.get("note")
-        direction = f'<p class="direction">{"&#10022; Directed with AI" if motion["by"] == "ai" else "Quick move"}: &ldquo;{e(words)}&rdquo;</p>'
+        how = {"ai": "&#10022; Directed with AI", "path": "&#12336; A path the artist drew"}.get(motion["by"], "Quick move")
+        direction = f'<p class="direction">{how}: &ldquo;{e(words)}&rdquo;</p>'
     beats = "".join(f'<li><b>{e(b["label"])}</b><small>{e(b["who"]) + " &middot; " if b["who"] else ""}{b["at"]:.1f} s</small></li>'
                     for b in story["beats"][:24])
     principles = "".join(f"<div><dt>{e(p['name'])}</dt><dd>{e(p['means'])}</dd></div>" for p in story["principles"])

@@ -400,6 +400,10 @@ class Production(Scoped):
     def get_asset(self, asset_id: str) -> dict | None:
         return self.assets.mongo.find_one(self.q({"id": asset_id}), {"_id": 0, "embedding": 0})
 
+    def store_rig(self, asset_id: str, version: int, rig: dict) -> None:
+        """Keep a rig with the asset version it was made for (metadata only: nothing is re-embedded)."""
+        self.assets.mongo.update_one(self.q({"id": asset_id, "version": version}), {"$set": {"rig": rig, "rig_version": version}})
+
     def usage_counts(self, asset_ids: list[str]) -> dict[str, int]:
         # The shot's own links are the source of truth: a hidden or fully erased placement has no
         # element (nothing to embed) but still uses the asset.
@@ -770,6 +774,13 @@ class Production(Scoped):
             "gif": clip, "poster": poster, "updated_at": stamp}, "$setOnInsert": {"created_at": stamp}}, upsert=True)
         return {"token": token, "frames": len(stacks), "bytes": len(clip)}
 
+    def flipbook(self, shot_id: str) -> tuple[str, bytes]:
+        """The scene as a printable flipbook (a PDF): every frame, ready to cut, stack, and staple."""
+        from backend.share import render_flipbook
+
+        shot = self._shot_model(shot_id)
+        return shot.code, render_flipbook(shot.all_frames(), shot.code)
+
     def share_of(self, shot_id: str) -> str | None:
         found = self.shares.find_one(self.q({"shot_id": shot_id}), {"token": 1})
         return found["token"] if found else None
@@ -794,13 +805,16 @@ class Production(Scoped):
         return self.shots.mongo.find_one(self.q({"id": shot_id}), {"_id": 0, "embedding": 0})
 
     def list_shots(self, query: str = "", project: str | None = None, sequence: str | None = None,
-                   status: str | None = None) -> list[dict]:
+                   status: str | None = None, *, asset_id: str | None = None) -> list[dict]:
         where = self.q(metadata_filter(project, sequence, status))
+        if asset_id:
+            where["asset_ids"] = asset_id  # a vector-index filter too: search within one asset's scenes
         if query:
             records = list(self.shots.search(query).rerank(False).limit(24).where(**where))
         else:
             records = list(self.shots.mongo.find(
-                where, {"_id": 0, "embedding": 0, "png": 0, "layers": 0}).sort([("sequence", 1), ("code", 1)]).limit(200))
+                where, {"_id": 0, "embedding": 0, "png": 0, "layers": 0}).sort(
+                    [("updated_at", -1)] if asset_id else [("sequence", 1), ("code", 1)]).limit(200))
         return [shot_summary(record) for record in records]
 
     # ------------------------------------------------------------------ where used

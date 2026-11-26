@@ -157,14 +157,55 @@ def test_where_used_endpoint_passes_each_filter_separately(client):
 def test_production_endpoints_validate_and_map_errors(client):
     http, _ = client
     http.production.save_shot.side_effect = lambda shot, shot_id=None: {"id": SHOT_ID, "elements": 2}
-    response = http.post("/api/shots", json={**shot_payload(), "tags": ["launch"]})
+    response = http.post("/api/shots", json={**shot_payload(), "tags": ["launch"], "description": "Rocket lifts off"})
     assert response.status_code == 201 and response.json()["tags_status"] == "provided"
+    http.ai.describe.assert_not_called()
     assert http.post("/api/shots", json=shot_payload(code="bad code")).status_code == 422
     http.production.update_shot.side_effect = ProductionError("Shot not found.")
     assert http.patch(f"/api/shots/{SHOT_ID}", json={"status": "approved"}).status_code == 404
     http.production.delete_asset.side_effect = ProductionError("This asset is placed in 2 shots; remove those layers first.")
     assert http.delete(f"/api/assets/{ASSET_ID}").status_code == 422
     assert http.get("/api/assets", params={"type": "vehicle"}).status_code == 422
+
+
+def test_blank_metadata_is_written_by_ai_and_artist_words_are_kept(client):
+    http, _ = client
+    http.production.save_asset.side_effect = lambda asset, asset_id=None: {"id": ASSET_ID, "description": asset.description, "tags": asset.tags}
+    asset = {"name": "Red Rocket", "layers": [{"name": "Ink", "strokes": [ink(0.1, 0.1, 0.2, 0.3)]}]}
+    response = http.post("/api/assets", json=asset)
+    assert response.json() == {"id": ASSET_ID, "description": "A friendly robot face.", "tags": ["robot", "face"], "tags_status": "auto"}
+    response = http.post("/api/assets", json={**asset, "description": "My rocket", "tags": []})
+    assert response.json()["description"] == "My rocket" and response.json()["tags"] == ["robot", "face"]
+
+    http.production.save_shot.side_effect = lambda shot, shot_id=None: {"id": SHOT_ID, "description": shot.description}
+    motion = {"by": "path", "note": "Drawn path", "seconds": 10, "tracks": [{"name": "Rocket", "gait": "hop", "keys": [
+        {"t": 0, "x": 0, "y": 0, "sx": 1, "sy": 1, "r": 0}, {"t": 1, "x": 0.3, "y": -0.2, "sx": 1, "sy": 1, "r": 0}]}]}
+    frames = [{"layers": shot_payload()["layers"]}] * 79
+    response = http.post("/api/shots", json={**shot_payload(), "tags": ["launch"], "frames": frames, "fps": 8, "motion": motion})
+    assert response.status_code == 201 and response.json()["description"] == "A friendly robot face."
+    assert http.production.save_shot.call_args.args[0].motion.tracks[0].gait == "hop"
+    assert http.post("/api/shots", json={**shot_payload(), "motion": {**motion, "tracks": [{**motion["tracks"][0], "gait": "moonwalk"}]}}).status_code == 422
+    context = http.ai.describe.call_args.args[1]
+    assert "10 seconds" in context and 'what happens: "Drawn path"' in context and "Rocket" in context
+
+    from starlette.requests import Request as Req
+
+    from backend.main import AI_BUDGET, budget_for
+    scope = {"type": "http", "method": "POST", "path": "/api/describe", "query_string": b"", "headers": []}
+    assert budget_for(Req(scope)) is AI_BUDGET  # one Gemini call each, metered like every AI draft
+
+
+def test_scenes_can_be_searched_within_one_asset(client):
+    http, _ = client
+    http.production.list_shots.return_value = []
+    http.get("/api/shots", params={"asset_id": ASSET_ID, "q": "on the beach"})
+    http.production.list_shots.assert_called_with("on the beach", project=None, sequence=None, status=None, asset_id=ASSET_ID)
+    assert http.get("/api/shots", params={"asset_id": "nope"}).status_code == 422
+    production = offline_production()
+    production.shots.search.return_value.rerank.return_value.limit.return_value.where.return_value = []
+    production.list_shots("on the beach", asset_id=ASSET_ID)
+    where = production.shots.search.return_value.rerank.return_value.limit.return_value.where.call_args.kwargs
+    assert where["asset_ids"] == ASSET_ID
 
 
 def test_only_placed_layers_carry_an_asset_link():
@@ -511,6 +552,11 @@ def test_frames_pose_frame_one_and_expand_exactly():
     squashed = pose_strokes([stroke], Transform(sx=2, sy=0.5, px=0.15, py=0.2))[0]
     assert squashed.width == 8 and [round(p.x, 6) for p in squashed.points] == [0.05, 0.25]
     assert pose_strokes([stroke], Transform(y=-1.2)) == []  # gone off the top: culled, not squashed at the edge
+    mirrored = pose_strokes([stroke], Transform(sx=-1, px=0.15, py=0.2))[0]  # turned around to face the other way
+    assert mirrored.width == 8 and [round(p.x, 6) for p in mirrored.points] == [0.2, 0.1]
+    for flat in (0, 0.02, -0.02):
+        with pytest.raises(ValidationError):
+            Transform(sx=flat)
 
     shot = Shot.model_validate(shot_payload(frames=[ref_frame(x=0.3)] * 79))  # 80 frames, 10 s at 8 fps
     stored = shot.model_dump()["frames"][0]["layers"]
@@ -641,6 +687,14 @@ def test_shared_scenes_are_public_by_token_only_and_escaped(client):
     assert budget_for(Req(scope)) is EMBED_BUDGET
 
 
+def test_shared_path_scenes_credit_the_artists_trail():
+    from backend.share import explain, page
+    motion = {**MOTION, "by": "path", "prompt": "", "note": "Red Rocket travels right, in an arc"}
+    assert "The artist's drawn path became 3 keyframes" in explain(motion, 8, 8)["lead"]
+    html = page({"token": "AbCdEfGhIjKlMnOp", "code": "SQ010_0010", "fps": 8, "frames": 8, "motion": motion}, "https://x.test")
+    assert "A path the artist drew" in html and "Red Rocket travels right, in an arc" in html
+
+
 def test_shared_scenes_show_their_code_escaped_and_hand_it_to_remix(client):
     http, _ = client
     token = "AbCdEfGhIjKlMnOp"
@@ -725,3 +779,75 @@ def test_setup_creates_the_autoembed_index_once_and_survives_clusters_without_it
     shots.list_search_indexes.return_value = []
     shots.create_search_index.side_effect = OperationFailure("autoEmbed is not supported", details={"errmsg": "no autoEmbed"})
     ensure_code_index(shots)  # logged; code search falls back instead of failing setup
+
+
+def test_a_saved_scene_prints_as_a_flipbook():
+    from backend.share import render_flipbook
+    shot = Shot.model_validate(shot_payload(frames=[ref_frame(x=0.03 * i) for i in range(1, 12)]))  # 12 frames: 2 pages
+    pdf = render_flipbook(shot.all_frames(), shot.code)
+    import re
+    assert pdf.startswith(b"%PDF") and len(re.findall(rb"/Type\s*/Page(?!s)", pdf)) == 2  # ten frames a page
+
+
+def test_flipbook_endpoint_is_owner_scoped_and_inline(client):
+    http, _ = client
+    http.production.flipbook.return_value = ("SQ010_0010", b"%PDF-1.4 fake")
+    response = http.get(f"/api/shots/{SHOT_ID}/flipbook.pdf")
+    assert response.status_code == 200 and response.headers["content-type"] == "application/pdf"
+    assert 'filename="SQ010_0010-flipbook.pdf"' in response.headers["content-disposition"]
+    http.production.flipbook.side_effect = ProductionError("Shot not found.")
+    assert http.get(f"/api/shots/{SHOT_ID}/flipbook.pdf").status_code == 404
+
+
+def test_rigged_parts_bend_about_their_joint_before_the_pose():
+    from backend.models import Bend, Layer, Stroke, Transform, expand_frame, pose_strokes
+    leg = Stroke.model_validate({"color": "#000000", "width": 4, "points": [{"x": 0.5, "y": 0.5}, {"x": 0.5, "y": 0.6}]})
+    body = Stroke.model_validate(ink(0.4, 0.4, 0.6, 0.4))
+    swung = pose_strokes([body, leg], Transform(x=0.1), [Bend(s=[1], r=90, px=0.5, py=0.5)])
+    assert [round(p.x, 4) for p in swung[0].points] == [0.5, 0.7]  # the body only moves with the pose
+    end = swung[1].points[1]  # the leg's foot swings 90 degrees clockwise about the hip: from below to the left
+    assert (round(end.x, 4), round(end.y, 4)) == (round(0.6 - 0.1 * 650 / 1000, 4), 0.5)
+    with pytest.raises(ValidationError, match="bend"):
+        Layer.model_validate({"name": "Fox", "ref": 0, "bend": [{"s": [0], "r": 10, "px": 0.5, "py": 0.5}]})
+    first = [Layer(name="Fox", strokes=[body, leg])]
+    frame = expand_frame(first, [Layer.model_validate({"name": "Fox", "ref": 0, "xf": {"x": 0}, "bend": [{"s": [1, 7], "r": 90, "px": 0.5, "py": 0.5}]})])
+    assert frame[0].bend is None and round(frame[0].strokes[1].points[1].x, 4) == round(0.5 - 0.1 * 650 / 1000, 4)  # out-of-range index ignored
+
+
+def test_rig_keeps_moving_parts_each_stroke_once_with_joints_in_the_box():
+    from backend.ai import Sparks, _Bone, _Rig
+    from backend.models import Layer
+    strokes = [ink(0.4, 0.4, 0.6, 0.4), ink(0.45, 0.4, 0.45, 0.6), ink(0.55, 0.4, 0.55, 0.6),
+               {"color": "#000000", "width": 9, "erase": True, "points": [{"x": 0.5, "y": 0.5}]}, ink(0.4, 0.4, 0.6, 0.6)]
+    sparks = Sparks.__new__(Sparks)
+    sparks._json = Mock(return_value=_Rig(kind="cyborg", bones=[
+        _Bone(part="leg_front", strokes=[1, 1, 3, 4, 9], joint_x=50, joint_y=-20), _Bone(part="leg_back", strokes=[1, 2], joint_x=150, joint_y=40),
+        _Bone(part="body", strokes=[0], joint_x=50, joint_y=50), _Bone(part="antenna", strokes=[0], joint_x=1, joint_y=1)]))
+    rig = sparks.rig([Layer(name="Bug", strokes=strokes)])
+    assert rig["kind"] == "object" and rig["strokes"] == 5  # stroke 4 outlines the whole figure: never a limb
+    assert rig["bones"] == [{"part": "leg_front", "strokes": [1], "px": 0.5, "py": 0.0}, {"part": "leg_back", "strokes": [2], "px": 1.0, "py": 0.4}]
+    assert "1: #ff0000, box" in sparks._json.call_args.args[0][1] and "\n3:" not in sparks._json.call_args.args[0][1]  # erasers aren't parts
+
+
+def test_rig_is_made_once_per_version_and_new_endpoints_are_metered(client):
+    from starlette.requests import Request as Req
+
+    from backend.main import AI_BUDGET, budget_for
+    http, _ = client
+    layers = [{"name": "Fox", "strokes": [ink(0.1, 0.1, 0.2, 0.3)]}]
+    rig = {"kind": "quadruped", "strokes": 1, "bones": []}
+    http.production.get_asset.return_value = {"id": ASSET_ID, "name": "Fox", "type": "character", "version": 2, "layers": layers}
+    http.ai.rig.return_value = rig
+    assert http.post(f"/api/assets/{ASSET_ID}/rig").json() == {"rig": rig, "version": 2}
+    http.production.store_rig.assert_called_once_with(ASSET_ID, 2, rig)
+    http.production.get_asset.return_value = {**http.production.get_asset.return_value, "rig": rig, "rig_version": 2}
+    assert http.get(f"/api/assets/{ASSET_ID}").json()["rig"] == rig
+    http.post(f"/api/assets/{ASSET_ID}/rig")
+    assert http.ai.rig.call_count == 1  # cached for this version
+    http.production.get_asset.return_value = {**http.production.get_asset.return_value, "version": 3}
+    assert "rig" not in http.get(f"/api/assets/{ASSET_ID}").json()  # a new version needs a new rig
+    for path in (f"/api/assets/{ASSET_ID}/rig", "/api/sparks/picture"):
+        assert budget_for(Req({"type": "http", "method": "POST", "path": path, "query_string": b"", "headers": []})) is AI_BUDGET
+    http.ai.picture.return_value = {"note": "n", "image": "data:image/png;base64,AA=="}
+    assert http.post("/api/sparks/picture", json={"prompt": "a fox"}).json()["image"].startswith("data:image/png")
+    assert http.post("/api/sparks/picture", json={"prompt": "x"}).status_code == 422

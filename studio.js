@@ -27,7 +27,7 @@
   const TAG_PATTERN = /^[a-z0-9][a-z0-9 -]{0,29}$/;
   const TEXT_INPUTS = new Set(['text', 'search', 'email', 'url', 'tel', 'password', 'number']);
   const SHAPES = new Set(['line', 'rect', 'ellipse']);
-  const TOOL_KEYS = { b: 'pen', p: 'pen', e: 'eraser', l: 'line', r: 'rect', o: 'ellipse', m: 'move', v: 'move', s: 'spark', k: 'stamp' };
+  const TOOL_KEYS = { b: 'pen', p: 'pen', e: 'eraser', l: 'line', r: 'rect', o: 'ellipse', m: 'move', v: 'move', s: 'spark', k: 'stamp', t: 'path' };
   const MAX_FRAMES = 80;
   const MAX_SKETCH_CODE = 12000; // a scene's code, as saved (backend/models.py MAX_SKETCH_CODE)
 
@@ -45,14 +45,12 @@
   // Takes: every AI attempt is kept side by side until the artist keeps one. Nothing touches the canvas before that.
   let takes = []; // motion specs, in the order they arrived
   let takeAt = -1;
-  let directing = false;
   let offline = !navigator.onLine; // airplane mode (or no route to Inkling): drawing only, nothing leaves the device
   let draftRevision = -1; // the canvas revision last kept on this device
   let targets = null; // the layers the box talks to (a Set of ids); null means everything that can move
   let targetGlow = 0; // until when the canvas outlines them
   let everyFrame = true; // in an animation, layer edits reach the same layer in every frame (decompose, then recompose)
   let peeking = false; // while "hold to compare" is held, previews step aside to show the original
-  let motionSeconds = 10;
   let sceneMotion = null; // the accepted direction behind this scene's frames, saved with the scene
   let sceneSketch = null; // or the Lab code its frames were baked from
   let showMath = false;
@@ -90,7 +88,6 @@
   let savedRevision = 0;
   let galleryRequest = null;
   let tags = [];
-  let activeTag = null;
   let currentQuery = '';
   let trayTimer = null;
   let animating = false;
@@ -339,28 +336,10 @@
     renderLayersPanel();
     renderStarters();
   }
-  // Draw, animate, find: the whole product in three words. The step you're on glows; the ones behind you are ticked.
-  function renderRhythm() {
-    const at = canvasIsBlank() ? 0 : frames.length > 1 && !motionDraft ? 2 : 1;
-    document.querySelectorAll('#rhythm button').forEach((button, i) => {
-      button.classList.toggle('done', i < at);
-      button.classList.toggle('now', i === at);
-      button.setAttribute('aria-current', i === at ? 'step' : 'false');
-    });
-  }
-  document.querySelectorAll('#rhythm button').forEach(button => button.addEventListener('click', () => {
-    const step = button.dataset.step;
-    if (step === 'draw') { setTool(drawTool); canvas.scrollIntoView({ behavior: 'smooth', block: 'center' }); pulse('#canvas-frame'); }
-    else if (step === 'animate') { $('scene-prompt').focus({ preventScroll: true }); $('scene-direct').scrollIntoView({ behavior: 'smooth', block: 'center' }); }
-    else if (offline) flashTray('Search comes back with the connection. Your canvas works offline.', true);
-    else if (hasInk()) findSimilar();
-    else openFinder();
-  }));
   function updateControls() {
     // Ink on the page wakes up the Animate box.
     document.body.classList.toggle('has-ink', !canvasIsBlank());
     renderAuthorship();
-    renderRhythm();
     $('undo').disabled = !undoStack.length;
     $('redo').disabled = !redoStack.length;
     $('guide-controls').hidden = !guides.length;
@@ -460,7 +439,7 @@
     // A new frame starts as a copy: change only what moves, like tracing the last drawing on a lightbox.
     frames.splice(frameIndex + 1, 0, layers.map(layer => newLayer(layer.name, {
       visible: layer.visible, opacity: layer.opacity, strokes: layer.strokes.slice(), asset: layer.asset,
-      ...(layer.xf ? { xf: layer.xf, xfBase: layer.xfBase, xfStrokes: layer.xfStrokes } : {}), ...(layer.backdrop ? { backdrop: layer.backdrop } : {}) })));
+      ...(layer.xf ? { xf: layer.xf, bend: layer.bend, xfBase: layer.xfBase, xfStrokes: layer.xfStrokes } : {}), ...(layer.backdrop ? { backdrop: layer.backdrop } : {}) })));
     showFrame(frameIndex + 1);
     logEvent('artist', 'Added frame', `frame ${frameIndex + 1}, a copy of frame ${frameIndex}`);
     if (saveKind !== 'shot' && !editing) setSaveKind('shot');
@@ -595,7 +574,6 @@
     $('layer-scope').textContent = everyFrame ? `All ${frames.length} frames` : `Frame ${frameIndex + 1} only`;
     renderSaveKind(); // the shot panel lists placed assets, which undo/delete can change
     updateHud();
-    renderWho();
   }
   function renameLayer(layer, item, nameButton) {
     const input = document.createElement('input');
@@ -776,12 +754,17 @@
     if (busy() || !event.isPrimary || event.button !== 0) return;
     event.preventDefault();
     if (playing) { stopPlay(); return; }
-    if (motionDraft) { flashTray('\ud83c\udfac Keep (Enter) or skip (Esc) the motion first.'); return; }
     if (event.pointerType === 'pen' && !penSeen) {
       penSeen = true;
       flashTray('\u270f\ufe0f Pencil detected: your palm and fingers won\'t draw. Pressure works.');
     }
     if (penSeen && event.pointerType === 'touch') return; // palm rejection once a pencil is in play
+    if (tool === 'path') {
+      if (document.activeElement instanceof HTMLElement && document.activeElement !== document.body) document.activeElement.blur();
+      startPath(event, normPoint(event));
+      return;
+    }
+    if (motionDraft) { flashTray('\ud83c\udfac Keep (Enter) or skip (Esc) the motion first. Or pick \u3030 Path to drag another layer.'); return; }
     if ($('starter-strip').classList.contains('show')) { startersDismissed = true; renderStarters(); }
     // preventDefault keeps focus where it was; touching the canvas means "drawing now", so shortcuts
     // and Enter (accept spark) must not go to a previously focused field or button (e.g. Delete layer).
@@ -852,7 +835,9 @@
   });
   canvas.addEventListener('pointermove', event => {
     if (event.pointerId !== pointer) return;
-    if (moving) {
+    if (pathDraft) {
+      extendPath(event);
+    } else if (moving) {
       const point = normPoint(event);
       if (!moving.changed) {
         if (Math.hypot((point.x - moving.start.x) * W, (point.y - moving.start.y) * H) < 2) return;
@@ -908,7 +893,9 @@
   function finish(event) {
     if (event.pointerId !== pointer) return;
     pointer = null;
-    if (moving) {
+    if (pathDraft) {
+      commitPath();
+    } else if (moving) {
       const { layer, mode, changed, dx = 0, dy = 0, k = 1, center } = moving;
       moving = null;
       if (changed) {
@@ -962,7 +949,8 @@
   }
   canvas.addEventListener('pointerup', finish);
   canvas.addEventListener('pointercancel', event => {
-    if (event.pointerId === pointer && (selection || shapeDraft || placeDraft)) {
+    if (event.pointerId === pointer && (selection || shapeDraft || placeDraft || pathDraft)) {
+      pathDraft = null;
       placeDraft = null;
       selection = null;
       shapeDraft = null;
@@ -989,6 +977,7 @@
     shapeDraft = null;
     selection = null;
     placeDraft = null;
+    pathDraft = null;
     if (started && undoStack.length) {
       restore(undoStack.pop());
       redoStack.splice(0, redoStack.length, ...redoBackup);
@@ -1161,11 +1150,6 @@
     setClipboard({ name: layer.name, strokes: layer.strokes.map(cloneStroke), link: layer.asset ? { ...layer.asset } : null });
     message('drawing-status', `Copied \u201c${layer.name}\u201d. It's yours to reuse, as a copy or as a brush.`, false, clipboardActions());
   }
-  function copyAsset(item) {
-    setClipboard({ name: item.name, item: { id: item.id, name: item.name, type: item.type, version: item.version } });
-    message('drawing-status', `Copied \u201c${item.name}\u201d. Paste places it (linked, so it knows where it's used).`, false, clipboardActions());
-    showTop();
-  }
   // A pasted layer lands a little down and right, like any design app, then Move is ready to drag it.
   function pasteStrokes(name, strokes, link = null) {
     const bounds = pointBounds(strokes);
@@ -1199,7 +1183,7 @@
     pasteStrokes(layer.name, layer.strokes, layer.asset);
   }
   $('layer-copy').addEventListener('click', duplicateLayer);
-  const showTop = () => { setFocus(false); $('canvas-frame').scrollIntoView({ behavior: 'smooth', block: 'center' }); };
+  const showTop = () => { setFocus(false); setView('studio'); };
 
   // ---------------------------------------------------------------- the stamp brush: your art, multiplied (no AI)
   const stampSize = () => 24 * Number($('width').value);
@@ -1523,7 +1507,7 @@
       buzz();
       // What's next, right where the eyes already are (the status line is tucked away in full screen).
       const next = (label, run) => { const b = el('button', 'flow-next', label); b.type = 'button'; b.addEventListener('click', () => { stopFlow(); run(); }); return b; };
-      $('flow-actions').replaceChildren(next('\ud83c\udf9e Flipbook it', () => autoAnimate()), next('\ud83e\ude84 Another', () => openNudge()));
+      $('flow-actions').replaceChildren(next('\u3030 Make it move', () => setTool('path')), next('\ud83e\ude84 Another', () => openNudge()));
     };
     tick();
     flow.timer = setInterval(tick, 250);
@@ -1543,15 +1527,18 @@
   function setTool(next) {
     if (next === 'stamp' && !stamp) { openKit(); return; }
     const wasPlacing = tool === 'place';
+    const wasTool = tool;
     if (next !== 'place') placing = null;
     tool = next;
-    if (next !== 'spark' && next !== 'place') drawTool = next;
+    if (next !== 'spark' && next !== 'place' && next !== 'path') drawTool = next;
     canvas.classList.toggle('place-mode', tool === 'place');
-    document.querySelectorAll('.tool').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.tool === tool)));
+    document.querySelectorAll('.tool[data-tool]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.tool === tool)));
     canvas.classList.toggle('spark-mode', tool === 'spark');
     canvas.classList.toggle('eraser-mode', tool === 'eraser');
     canvas.classList.toggle('move-mode', tool === 'move');
     canvas.classList.toggle('stamp-mode', tool === 'stamp');
+    canvas.classList.toggle('path-mode', tool === 'path');
+    if (tool === 'path' && next !== wasTool) flashTray(`\u3030 Drag from something you drew: it travels your trail for ${MIN_SHOT} s. One path per layer.`);
     canvas.classList.toggle('ink-mode', tool === 'pen' || tool === 'eraser');
     if (tool !== 'pen' && tool !== 'eraser') { $('brush-cursor').hidden = true; $('canvas-frame').classList.remove('brushing'); }
     if (tool !== 'stamp' && stampHover) { stampHover = null; renderOverlay(); }
@@ -1560,7 +1547,7 @@
     else if (pendingFix === null) flashTray('Drag a box around the stuck spot, or tap it.');
     else if (wasPlacing && next !== 'place') renderTray();
   }
-  document.querySelectorAll('.tool').forEach(button => button.addEventListener('click', () => {
+  document.querySelectorAll('.tool[data-tool]').forEach(button => button.addEventListener('click', () => {
     closePopover();
     if (button.dataset.tool === 'stamp') { toggleKit(); return; }
     setTool(button.dataset.tool === tool && tool === 'spark' ? drawTool : button.dataset.tool);
@@ -1645,26 +1632,6 @@
     const response = await reach(path, options);
     if (!response.ok) throw await failed(response, path);
     return response.status === 204 ? null : response.json();
-  }
-  // Newline-delimited JSON, one event per line, handed over as each arrives (the director's pipeline, live).
-  async function streamEvents(path, body, onEvent) {
-    const response = await reach(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
-    if (!response.ok) throw await failed(response, path);
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    for (;;) {
-      const { value, done } = await reader.read();
-      buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
-      let end;
-      while ((end = buffer.indexOf('\n')) >= 0) {
-        const line = buffer.slice(0, end).trim();
-        buffer = buffer.slice(end + 1);
-        if (line) onEvent(JSON.parse(line));
-      }
-      if (done) break;
-    }
-    if (buffer.trim()) onEvent(JSON.parse(buffer));
   }
   const postJSON = (path, body) => api(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
 
@@ -1896,6 +1863,15 @@
     if (b.dataset.mode === 'refine') suggestRefinements();
   }));
   $('ai-bar').addEventListener('submit', event => { event.preventDefault(); askAI(); });
+  // One tap, no prompt: rough lines in, cleaner lines back as a draft. Drawing never stops while it works.
+  const QUICK_REFINE = 'Clean up these rough lines into smoother, more confident strokes. Keep my pose, proportions, style, and colors.';
+  $('refine-now').addEventListener('click', () => {
+    if (offline) { flashTray(OFFLINE_NOTE, true); return; }
+    if (!hasInk()) { flashTray('Draw something rough first. One tap refines it.', true); return; }
+    if (motionDraft) { flashTray('\ud83c\udfac Keep or discard the motion first, then refine.'); return; }
+    if (sparks.some(spark => spark.kind === 'refine' && spark.status === 'pending')) { flashTray('\u2726 Already refining. Keep drawing.'); return; }
+    startSpark('refine', null, QUICK_REFINE);
+  });
 
   // ---------------------------------------------------------------- Focus mode: the whole screen is paper
   function fitFocus() {
@@ -2051,7 +2027,7 @@
     logEvent('ai', 'Refine', `"${spark.prompt}" on "${layer.name}": kept ${r.kept} of ${r.source_strokes} strokes, added ${r.added} (${r.note})`);
     message('drawing-status', `\u2726 Refined "${layer.name}": kept ${r.kept} of your ${r.source_strokes} strokes exactly, added ${r.added}.`, false, [
       { label: '\u21b6 Undo', tip: 'Undo \u00b7 Cmd/Ctrl+Z|Your layer exactly as it was.', run: () => { undo(); message('drawing-status', 'Undone. Your layer is back as it was.'); } },
-      { label: '\u2726 Refine more', run: () => startRefineFlow() }, { label: '\ud83c\udf9e Flipbook it', run: () => autoAnimate() }]);
+      { label: '\u2726 Refine more', run: () => startRefineFlow() }, { label: '\u3030 Make it move', run: () => setTool('path') }]);
     return true;
   }
 
@@ -2146,12 +2122,20 @@
       octx.restore();
       return;
     }
+    if (pathDraft) {
+      const k = mathScale(canvas.getBoundingClientRect().width);
+      for (const path of motionDraft?.spec.paths || []) if (path.layerId !== pathDraft.layer.id) drawTrail(octx, path.points, k, { faint: true });
+      paintTargetGlow([pathDraft.layer], k, true);
+      drawTrail(octx, pathDraft.points, k, { live: true });
+      return;
+    }
     if (motionDraft && !peeking) {
       paintMotionPreview();
       return;
     }
     if (motionDraft) return; // peeking: the untouched canvas shows through
     paintTargetGlow(layers, mathScale(canvas.getBoundingClientRect().width));
+    if (tool === 'path') paintPathTargets(mathScale(canvas.getBoundingClientRect().width));
     if (tool === 'stamp' && stamp && stampHover && pointer === null) {
       octx.save();
       octx.globalAlpha = 0.35;
@@ -2290,6 +2274,7 @@
   async function startPlacing(item, at = null, record = null) {
     try {
       const asset = record || await api(`/api/assets/${encodeURIComponent(item.id)}`);
+      if (asset.rig) rigCache.set(`${asset.id}@${asset.version}`, asset.rig); // rigged once, kept with the asset
       // A placed asset becomes one linked layer: its visible layers flattened bottom-up.
       const strokes = asset.layers.filter(layer => layer.visible).flatMap(layer => layer.strokes);
       const bbox = inkBounds(strokes);
@@ -2297,14 +2282,13 @@
       if (layers.length >= MAX_LAYERS) throw new Error('A drawing can have 12 layers. Merge or delete one first.');
       placing = { id: asset.id, version: asset.version, name: asset.name, strokes, bbox };
       if (saveKind !== 'shot' && !editing) setSaveKind('shot'); // placing assets means building a scene
-      if (!$('animate-sheet').open) canvas.scrollIntoView({ behavior: 'smooth', block: 'center' });
       // It lands right away at a friendly size (where it was dropped, else center stage); then you drag it.
       const k = Math.min(W * 0.34 / bbox.w, H * 0.42 / bbox.h, 1.5);
       const w = bbox.w * k, h = bbox.h * k;
       const cx = at ? at.x : W / 2, cy = at ? at.y : H * 0.56;
       placeAsset({ x: Math.max(0, Math.min(W - w, cx - w / 2)), y: Math.max(0, Math.min(H - h, cy - h / 2)), w, h });
     } catch (error) {
-      message('library-status', error.message, true);
+      message('drawing-status', error.message, true);
     }
   }
   function placeAsset(box) {
@@ -2328,10 +2312,7 @@
     recount();
     rebuildAll();
     renderSaveKind();
-    if (!directing) {
-      flashTray(`\u25c6 ${name} is in. Drag it anywhere, pull the corner to resize, then animate it.`);
-      message('drawing-status', `Placed "${name}" as a linked layer (it always knows where it's used). Drag to position it, then animate it.`);
-    }
+    flashTray(`\u25c6 ${name} is in. Drag it anywhere, pull the corner to resize, then \u3030 drag it along a path.`);
     logEvent('artist', 'Placed', `${name} v${layer.asset.version}${frames.length > 1 ? ` on frame ${frameIndex + 1}` : ''}`);
   }
 
@@ -2387,6 +2368,7 @@
     return activeLayer();
   }
   function updateHud() {
+    renderShotHint();
     const hud = $('layer-hud');
     const layer = activeLayer();
     hud.hidden = canvasIsBlank() || !!motionDraft || !!playing;
@@ -2510,9 +2492,13 @@
       apply: spec => ({ ...spec, seconds: Math.min(10, Math.round(spec.seconds * 1.4 * MOTION_FPS) / MOTION_FPS) }) }
   ];
   const clampTo = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+  // A scale keeps its sign (negative = mirrored, facing the other way) and is never thinner than 0.03 either way.
+  const signedScale = v => (v < 0 ? -1 : 1) * clampTo(Math.abs(v), 0.03, 4);
+  // Strength (and Bigger/Calmer) grows the squash and stretch, never the mirror.
+  const strongScale = (v, s) => (v < 0 ? -1 : 1) * clampTo(1 + (Math.abs(v) - 1) * s, 0.03, 4);
   function scaleTracks(spec, ids, f) {
     const scale = keys => keys.map(k => ({ ...k, x: r4(clampTo(k.x * f, -1.5, 1.5)), y: r4(clampTo(k.y * f, -1.5, 1.5)),
-      sx: r4(clampTo(1 + (k.sx - 1) * f, 0.03, 4)), sy: r4(clampTo(1 + (k.sy - 1) * f, 0.03, 4)), r: r4(clampTo(k.r * f, -1080, 1080)) }));
+      sx: r4(strongScale(k.sx, f)), sy: r4(strongScale(k.sy, f)), r: r4(clampTo(k.r * f, -1080, 1080)) }));
     return { ...spec, tracks: spec.tracks.map(track => (!ids || ids.has(track.layerId) ? { ...track, keys: scale(track.keys) } : track)) };
   }
   const FILLER = /\b(make|makes|let|lets|let's|please|it|its|it's|the|a|an|bit|little|lot|lots|much|way|whole|just|now|again|some|can|could|you|be|go|do|and|with|plus|also|then|add|start|have|put|turn|on|in|of|to|there|too|falling|fall|everywhere|around|background|effect|effects|heavy|light|motion|movement|moves?|animation|everything|scene)\b/g;
@@ -2543,19 +2529,8 @@
   function trackStats(track, strength = 1) {
     const ks = track.keys;
     return { rise: Math.max(0, -Math.min(...ks.map(k => k.y))) * strength, travel: Math.max(...ks.map(k => Math.abs(k.x))) * strength,
-      spin: Math.max(...ks.map(k => Math.abs(k.r))) * strength, squash: Math.max(...ks.map(k => Math.max(Math.abs(k.sx - 1), Math.abs(k.sy - 1)))) * strength,
+      spin: Math.max(...ks.map(k => Math.abs(k.r))) * strength, squash: Math.max(...ks.map(k => Math.max(Math.abs(Math.abs(k.sx) - 1), Math.abs(Math.abs(k.sy) - 1)))) * strength,
       keys: ks.length };
-  }
-  // Plain words for numbers: what a take does, or what changed since the take it was built on.
-  function summarizeMotion(spec) {
-    return spec.tracks.map(track => {
-      const s = trackStats(track, spec.strength), bits = [plural(s.keys, 'keyframe')];
-      if (s.rise > 0.05) bits.push(`rises ${pctOf(s.rise)} of the height`);
-      else if (s.travel > 0.05) bits.push(`travels ${pctOf(s.travel)} of the width`);
-      if (s.spin > 20) bits.push(`turns ${Math.round(s.spin)}\u00b0`);
-      if (s.squash > 0.06) bits.push('squash & stretch');
-      return `${track.name}: ${bits.join(', ')}`;
-    }).join(' \u00b7 ');
   }
   function diffMotion(prev, next) {
     return next.tracks.filter(track => !prev.tracks.some(item => item.keys === track.keys)).map(track => {
@@ -2592,13 +2567,13 @@
     const p1 = keys[i], p2 = keys[i + 1], p0 = keys[i - 1] || p1, p3 = keys[i + 2] || p2;
     const u = (t - p1.t) / ((p2.t - p1.t) || 1), u2 = u * u, u3 = u2 * u;
     const cr = c => 0.5 * ((2 * p1[c]) + (-p0[c] + p2[c]) * u + (2 * p0[c] - 5 * p1[c] + 4 * p2[c] - p3[c]) * u2 + (-p0[c] + 3 * p1[c] - 3 * p2[c] + p3[c]) * u3);
-    return { t, x: cr('x'), y: cr('y'), sx: Math.max(0.03, cr('sx')), sy: Math.max(0.03, cr('sy')), r: cr('r') };
+    return { t, x: cr('x'), y: cr('y'), sx: signedScale(cr('sx')), sy: signedScale(cr('sy')), r: cr('r') };
   }
   // A frame's pose: offsets and pivot in canvas fractions, r in degrees. Mirrors pose_strokes in backend/models.py.
   function xfAt(keys, t, strength, pivot) {
     const k = sampleKeys(keys, t), s = strength;
     const lim = (v, lo, hi) => Math.round(Math.max(lo, Math.min(hi, v)) * 1e5) / 1e5;
-    return { x: lim(k.x * s, -2, 2), y: lim(k.y * s, -2, 2), sx: lim(1 + (k.sx - 1) * s, 0.03, 4), sy: lim(1 + (k.sy - 1) * s, 0.03, 4),
+    return { x: lim(k.x * s, -2, 2), y: lim(k.y * s, -2, 2), sx: lim(strongScale(k.sx, s), -4, 4), sy: lim(strongScale(k.sy, s), -4, 4),
       r: lim(k.r * s, -1080, 1080), px: lim(pivot.px, -1, 2), py: lim(pivot.py, -1, 2) };
   }
   function poseXf(strokes, xf) {
@@ -2612,10 +2587,103 @@
       });
       // Off-canvas strokes leave the frame; the rest are pinned to the edge (where they're out of sight anyway).
       if (points.every(p => p.x < -0.02 || p.x > 1.02 || p.y < -0.02 || p.y > 1.02)) continue;
-      out.push({ ...stroke, width: Math.max(1, Math.min(40, stroke.width * Math.sqrt(xf.sx * xf.sy))),
+      out.push({ ...stroke, width: Math.max(1, Math.min(40, stroke.width * Math.sqrt(Math.abs(xf.sx * xf.sy)))),
         points: points.map(p => ({ ...p, x: Math.max(0, Math.min(1, p.x)), y: Math.max(0, Math.min(1, p.y)) })) });
     }
     return out;
+  }
+  // ---------------------------------------------------------------- gaits: how something moves along a path
+  // Plain math layered on a path, frame by frame (no AI): steps or hops from how far it has gone, squash where it
+  // lands, a lean, and a breath while it stands. Sizes are the asset's own: stride x its width, lift x its height.
+  const GAITS = {
+    walk: { icon: '\ud83d\udeb6', name: 'Walk', verb: 'walks', speed: 210, stride: 0.6, lift: 0.07, squash: 0.05, stretch: 0, float: 0, lean: 5, bank: 0, turn: 0, face: 1, hop: 0 },
+    hop: { icon: '\ud83d\udc07', name: 'Hop', verb: 'hops', speed: 260, stride: 1.5, lift: 0.5, squash: 0.16, stretch: 0.07, float: 0, lean: 7, bank: 0, turn: 0, face: 1, hop: 1 },
+    glide: { icon: '\u3030', name: 'Glide', verb: 'glides', speed: 230, stride: 0, lift: 0, squash: 0, stretch: 0.04, float: 0.02, lean: 4, bank: 0.35, turn: 0, face: 1, hop: 0 },
+    fly: { icon: '\ud83d\udd4a\ufe0f', name: 'Fly', verb: 'flies', speed: 320, stride: 0, lift: 0, squash: 0, stretch: 0.06, float: 0.04, lean: 0, bank: 0, turn: 1, face: 1, hop: 0 }
+  };
+  // One frame of a gait. `s` carries where it was and how far it has gone; motionToSketch writes this same function
+  // into the scene's code, so the Lab reproduces every frame.
+  function gaitStep(s, g, w, h, x, y, f, fps) {
+    const d = s.f < 0 ? 0 : Math.hypot(x - s.x, y - s.y);
+    s.x = x;
+    s.y = y;
+    s.f = f;
+    s.dist += d;
+    s.m += (Math.min(1, d / Math.max(1, w * 0.03)) - s.m) * 0.4; // how much it's moving: eased, so nothing pops
+    let dy = 0, sx = 1, sy = 1;
+    s.phase = g.stride ? s.dist / (g.stride * w) * Math.PI : s.dist / Math.max(1, w) * Math.PI;
+    if (g.stride) {
+      const up = Math.abs(Math.sin(s.phase));
+      dy -= (g.hop ? Math.sqrt(up) : up) * g.lift * h * s.m;
+      const land = g.squash * s.m * Math.pow(1 - up, 4);
+      sx += land;
+      sy -= land;
+      if (g.hop) { sy += g.stretch * s.m * up; sx -= g.stretch * s.m * up * 0.5; }
+    } else {
+      sx += g.stretch * s.m;
+      sy -= g.stretch * s.m * 0.5;
+    }
+    const t = f / fps;
+    dy += Math.sin(t * Math.PI * 1.4) * g.float * h;
+    const breath = Math.sin(t * Math.PI * 1.2) * 0.015 * (1 - s.m);
+    sy += breath;
+    sx -= breath * 0.5;
+    dy += (1 - sy) * h * 0.5; // squash from the feet, not the middle
+    return { dy, sx, sy };
+  }
+  // A rig: which strokes are legs, arms, a tail, wings, or the head, and the joint each turns on (found once per asset
+  // version by AI, kept with the asset). A gait swings them: legs in step with the stride, arms against them, a tail
+  // that wags, wings that flap. Mirrors bend_strokes in backend/models.py.
+  function bendStrokes(strokes, bend) {
+    if (!bend?.length) return strokes;
+    const out = strokes.slice();
+    for (const b of bend) {
+      const rad = b.r * Math.PI / 180, cos = Math.cos(rad), sin = Math.sin(rad), cx = b.px * W, cy = b.py * H;
+      for (const i of b.s) {
+        if (!out[i]) continue;
+        out[i] = { ...out[i], points: out[i].points.map(p => {
+          const dx = p.x * W - cx, dy = p.y * H - cy;
+          return { ...p, x: (cx + dx * cos - dy * sin) / W, y: (cy + dx * sin + dy * cos) / H };
+        }) };
+      }
+    }
+    return out;
+  }
+  // How far each part turns this frame (degrees), from the gait's state: s.phase (the stride) and s.m (how much it moves).
+  // motionToSketch writes this same function into the scene's code.
+  function rigTurns(part, g, s, f, fps) {
+    const t = f / fps, m = s.m, swing = Math.sin(s.phase || 0), up = Math.abs(swing);
+    if (part === 'leg_front' || part === 'leg_back') {
+      const side = part === 'leg_front' ? 1 : -1;
+      return g.hop ? -28 * m * up : g.stride ? 24 * m * swing * side : 6 * m * side;
+    }
+    if (part === 'arm_front' || part === 'arm_back') {
+      const side = part === 'arm_front' ? -1 : 1;
+      return g.hop ? -35 * m * up : g.stride ? 18 * m * swing * side : 3 * Math.sin(t * Math.PI * 1.2) * side;
+    }
+    if (part === 'tail') return 12 * Math.sin(t * Math.PI * 2.2) + 14 * m * swing;
+    if (part === 'wing_front' || part === 'wing_back') return (g.turn ? 34 : 10 + 20 * m) * Math.sin(t * Math.PI * 4.4) * (part === 'wing_front' ? 1 : 0.8);
+    if (part === 'head') return 4 * m * swing + 2.5 * Math.sin(t * Math.PI * 0.8);
+    return 0;
+  }
+  const rigCache = new Map(); // `${asset_id}@${version}` -> rig, for this session
+  const rigKey = layer => layer?.asset ? `${layer.asset.asset_id}@${layer.asset.version}` : '';
+  // A placed asset's rig, if it still fits its strokes (a placed layer keeps the asset's stroke order).
+  function rigFor(layer) {
+    const rig = rigCache.get(rigKey(layer));
+    return rig && rig.strokes === layer.strokes.length && rig.bones.length ? rig : null;
+  }
+  const rigsComing = new Map(); // key -> the request in flight, so a path drawn meanwhile doesn't ask twice
+  function ensureRig(layer) {
+    const key = rigKey(layer);
+    if (!key || rigCache.has(key) || offline) return Promise.resolve();
+    if (!rigsComing.has(key)) {
+      rigsComing.set(key, api(`/api/assets/${encodeURIComponent(layer.asset.asset_id)}/rig`, { method: 'POST' })
+        .then(data => { if (data.version === layer.asset.version) rigCache.set(key, data.rig); })
+        .catch(() => { /* no rig: it still moves, as one piece */ })
+        .finally(() => rigsComing.delete(key)));
+    }
+    return rigsComing.get(key);
   }
   const frameCount = seconds => Math.max(2, Math.min(MAX_FRAMES, Math.round(seconds * MOTION_FPS)));
   function motionFrames(spec) {
@@ -2624,20 +2692,34 @@
     const tracks = spec.tracks.map(track => {
       const layer = base.find(l => l.id === track.layerId);
       const b = layer && inkBounds(layer.strokes);
-      return { ...track, layer, baseStrokes: layer ? layer.strokes.slice() : [], pivot: b ? { px: (b.x + b.w / 2) / W, py: (b.y + b.h / 2) / H } : { px: 0.5, py: 0.5 } };
+      return { ...track, layer, baseStrokes: layer ? layer.strokes.slice() : [], pivot: b ? { px: (b.x + b.w / 2) / W, py: (b.y + b.h / 2) / H } : { px: 0.5, py: 0.5 },
+        size: b ? { w: b.w, h: b.h } : { w: 100, h: 100 }, walk: { x: 0, y: 0, f: -1, dist: 0, m: 0 },
+        bones: GAITS[track.gait] && b ? (rigFor(layer)?.bones || []).map(bone => ({ part: bone.part, s: bone.strokes,
+          px: (b.x + bone.px * b.w) / W, py: (b.y + bone.py * b.h) / H })) : [] };
     }).filter(track => track.layer);
     const fx = spec.effects || [];
     const withEffects = (stack, f) => (fx.length ? [...stack, ...fx.map(id => fxLayer(id, f))] : stack);
+    const lim = v => Math.round(v * 1e5) / 1e5;
     return Array.from({ length: count }, (_, f) => {
-      if (f === 0) return withEffects(base, 0); // every clip starts exactly as drawn
+      if (f === 0) { // every clip starts exactly as drawn
+        for (const track of tracks) if (GAITS[track.gait]) gaitStep(track.walk, GAITS[track.gait], track.size.w, track.size.h, track.pivot.px * W, track.pivot.py * H, 0, MOTION_FPS);
+        return withEffects(base, 0);
+      }
       const t = f / (count - 1);
       return withEffects(base.map(layer => {
         const props = { visible: layer.visible, opacity: layer.opacity, asset: layer.asset, backdrop: layer.backdrop };
         const track = tracks.find(tr => tr.layer === layer);
         if (!track) return newLayer(layer.name, { ...props, strokes: layer.strokes.slice() });
-        const xf = xfAt(track.keys, t, spec.strength, track.pivot);
-        const strokes = poseXf(track.baseStrokes, xf);
-        return newLayer(layer.name, { ...props, strokes, xf, xfBase: track.baseStrokes, xfStrokes: strokes.slice() });
+        let xf = xfAt(track.keys, t, spec.strength, track.pivot);
+        const g = GAITS[track.gait];
+        if (g) {
+          const o = gaitStep(track.walk, g, track.size.w, track.size.h, (xf.px + xf.x) * W, (xf.py + xf.y) * H, f, MOTION_FPS);
+          xf = { ...xf, y: lim(clampTo(xf.y + o.dy / H, -2, 2)), sx: lim(signedScale(xf.sx * o.sx)), sy: lim(signedScale(xf.sy * o.sy)) };
+        }
+        const bend = track.bones.map(bone => ({ s: bone.s, r: lim(clampTo(rigTurns(bone.part, g, track.walk, f, MOTION_FPS), -180, 180)), px: lim(bone.px), py: lim(bone.py) }))
+          .filter(item => item.r);
+        const strokes = poseXf(bendStrokes(track.baseStrokes, bend), xf);
+        return newLayer(layer.name, { ...props, strokes, xf, ...(bend.length ? { bend } : {}), xfBase: track.baseStrokes, xfStrokes: strokes.slice() });
       }), f);
     });
   }
@@ -2649,7 +2731,7 @@
         ...(layer.asset ? { asset: layer.asset } : {}), ...(layer.backdrop ? { backdrop: layer.backdrop } : {}) };
       if (layer.xf && sameStrokes(layer.strokes, layer.xfStrokes)) {
         const ref = first.findIndex(base => sameStrokes(base.strokes, layer.xfBase));
-        if (ref >= 0) return { ...meta, strokes: [], ref, xf: layer.xf };
+        if (ref >= 0) return { ...meta, strokes: [], ref, xf: layer.xf, ...(layer.bend?.length ? { bend: layer.bend } : {}) };
       }
       if (layer.strokes.length) {
         const ref = first.findIndex(base => sameStrokes(base.strokes, layer.strokes));
@@ -2666,7 +2748,7 @@
       const base = first[layer.ref];
       if (!base) return { ...layer, strokes: [] };
       if (!layer.xf) return { ...layer, strokes: base.strokes.slice() };
-      const strokes = poseXf(base.strokes, layer.xf);
+      const strokes = poseXf(bendStrokes(base.strokes, layer.bend), layer.xf);
       return { ...layer, strokes, xfBase: base.strokes, xfStrokes: strokes.slice() };
     }))];
   }
@@ -2754,12 +2836,14 @@
     }
     c.restore();
   }
-  function previewMotion(spec, { take = true } = {}) {
+  function previewMotion(directed, { take = true } = {}) {
     if (take) {
-      takes = [...takes, spec].slice(-12);
+      takes = [...takes, directed].slice(-12);
       takeAt = takes.length - 1;
       message('drawing-status', '');
     }
+    // A take keeps the move as directed (Faster and Slower change its own length); the shot is never under MIN_SHOT.
+    const spec = fillShot(directed);
     stopPlay();
     stopMotionPreview();
     const stacks = motionFrames(spec);
@@ -2771,9 +2855,7 @@
     updateHud();
     renderTray();
     renderTakes();
-    renderWho();
     renderFxChips();
-    renderRhythm();
     if (spec.change) message('drawing-status', spec.change, false, [{ label: '\u25c6 How it moves', tip: 'How it moves|Keyframes, in-betweens, and spacing, shown on your shot.', run: () => explainScene() }]);
     // Closing the sheet hands focus back to the Animate button; Enter must mean "keep", not "reopen".
     if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
@@ -2784,8 +2866,9 @@
     const at = Math.min(motionDraft.at, stacks.length - 1);
     octx.fillStyle = '#ffffff';
     octx.fillRect(0, 0, W, H);
-    paintStack(octx, stacks[at]);
     const k = mathScale(canvas.getBoundingClientRect().width);
+    for (const path of motionDraft.spec.paths || []) drawTrail(octx, path.points, k, { faint: true });
+    paintStack(octx, stacks[at]);
     if (showMath) drawMath(octx, paths, at, stacks.length, { scale: k });
     paintTargetGlow(stacks[at], k);
     octx.save();
@@ -2803,9 +2886,11 @@
     renderOverlay();
     updateHud();
   }
+  const directedTake = () => takes[takeAt] || motionDraft?.spec;
   function restrength(delta) {
     if (!motionDraft) return;
-    const spec = { ...motionDraft.spec, strength: Math.round(Math.max(0.4, Math.min(1.9, motionDraft.spec.strength + delta)) * 10) / 10 };
+    const from = directedTake();
+    const spec = { ...from, strength: Math.round(Math.max(0.4, Math.min(1.9, from.strength + delta)) * 10) / 10 };
     takes[takeAt] = spec;
     previewMotion(spec, { take: false });
   }
@@ -2815,12 +2900,11 @@
       seconds: Math.round(frameCount(spec.seconds) / MOTION_FPS * 100) / 100, fps: MOTION_FPS, strength: spec.strength,
       tracks: spec.tracks.slice(0, 4).map(track => ({ name: track.name.slice(0, 40), keys: track.keys.slice(0, 24).map(k => ({
         t: clean(Math.max(0, Math.min(1, k.t))), x: clean(Math.max(-1.5, Math.min(1.5, k.x))), y: clean(Math.max(-1.5, Math.min(1.5, k.y))),
-        sx: clean(Math.max(0.03, Math.min(4, k.sx))), sy: clean(Math.max(0.03, Math.min(4, k.sy))), r: clean(Math.max(-1080, Math.min(1080, k.r))),
-        label: (k.label || '').slice(0, 24) })) })), ...(spec.effects?.length ? { effects: spec.effects.slice(0, MAX_FX) } : {}) };
+        sx: clean(signedScale(k.sx)), sy: clean(signedScale(k.sy)), r: clean(Math.max(-1080, Math.min(1080, k.r))),
+        label: (k.label || '').slice(0, 24) })), ...(track.gait ? { gait: track.gait } : {}) })), ...(spec.effects?.length ? { effects: spec.effects.slice(0, MAX_FX) } : {}) };
   }
   function keepMotion() {
     if (!motionDraft) return;
-    provisional = null; // a kept take makes the auto-saved asset real
     const { spec, stacks } = motionDraft;
     const replaced = frames.length;
     const kept = takeAt + 1, of = takes.length;
@@ -2838,14 +2922,11 @@
     $('fps').value = String(MOTION_FPS);
     sceneMotion = motionRecord(spec);
     sceneSketch = sketchRecord(spec);
+    keptPaths = spec.by === 'path' ? { paths: spec.paths } : null;
     if (!editing || editing.kind !== 'shot') {
       // One tap to save: a readable scene code ("LittleFox_0413") and the direction as its notes (Voyage reads those too).
-      if (!CODE.test($('title').value.trim())) {
-        const who = spec.tracks.map(track => track.name.replace(/[^A-Za-z0-9]+/g, ' ').trim().split(' ').map(w => w[0].toUpperCase() + w.slice(1)).join('')).filter(Boolean)[0] || 'Scene';
-        const stamp = new Date();
-        $('title').value = `${who.slice(0, 24)}_${String(stamp.getHours()).padStart(2, '0')}${String(stamp.getMinutes()).padStart(2, '0')}`;
-      }
-      if (!$('description').value.trim()) $('description').value = (spec.title || spec.prompt || spec.note || '').slice(0, 200);
+      if (!CODE.test($('title').value.trim())) $('title').value = shotName();
+      if (!$('description').value.trim() && spec.by !== 'path') $('description').value = (spec.title || spec.prompt || spec.note || '').slice(0, 200);
     }
     recount();
     rebuildOnion();
@@ -2858,10 +2939,8 @@
     const keyCount = spec.tracks.reduce((n, track) => n + track.keys.length, 0);
     const detail = `${spec.by === 'ai' ? `"${spec.prompt}"` : spec.label}: ${frames.length} frames (${keyCount} keyframes) at ${MOTION_FPS} fps, moving ${names}`
       + `${spec.strength !== 1 ? ` (strength ${spec.strength}\u00d7)` : ''}${spec.effects?.length ? `, effects: ${fxList(spec.effects).map(fx => fx.name).join(', ')} (code, no AI)` : ''}`;
-    logEvent(spec.by === 'ai' ? 'ai' : 'artist', spec.by === 'ai' ? 'Motion, accepted' : 'Motion preset', detail);
+    logEvent(spec.by === 'ai' ? 'ai' : 'artist', spec.by === 'ai' ? 'Motion, accepted' : spec.by === 'path' ? 'Motion path' : 'Motion preset', detail);
     renderTray();
-    $('scene-prompt').placeholder = 'A curious fox discovers a tiny planet...';
-    setDockBusy(false);
     message('drawing-status', `\ud83c\udfac Kept ${of > 1 ? `take ${kept} of ${of}` : 'it'}: ${frames.length} frames, ${(frames.length / MOTION_FPS).toFixed(1)} s${replaced > 1 ? `, replacing ${replaced}` : ''}. Every frame is yours to redraw. Space plays.`, false,
       [{ label: of > 1 ? '\u21b6 Undo, back to the takes' : '\u21b6 Undo', tip: 'Undo|Your drawing exactly as it was, with every take still here to choose from.', run: () => {
         undo();
@@ -2869,12 +2948,11 @@
         takes = shelf.takes;
         takeAt = shelf.at;
         previewMotion(takes[takeAt], { take: false });
-        setDockBusy(false);
         message('drawing-status', of > 1 ? 'Undone. Your takes are back: pick another, or change one.' : 'Undone. The preview is back: keep it, change it, or discard it.');
       } },
         { label: '\u27e8/\u27e9 Edit as code', tip: 'Edit as code|This animation is a p5.js sketch: keyframes as numbers. Change one, then bake.', run: () => openTakeAsCode() },
         { label: '\u25c6 How it moves', tip: 'How it moves|Keyframes, in-betweens, and spacing, shown on your shot.', run: () => explainScene() }]);
-    setTool('move');
+    setTool(spec.by === 'path' ? 'path' : 'move');
     play();
   }
   function skipMotion() {
@@ -2886,9 +2964,294 @@
     stopMotionPreview();
     renderTray();
     renderTakes();
-    $('scene-prompt').placeholder = 'A curious fox discovers a tiny planet...';
-    setDockBusy(false);
-    dropProvisional();
+  }
+
+  // ---------------------------------------------------------------- paths: drag a layer along your finger's trail
+  // The finger is the animator: drag from something you drew and it travels that trail over the shot. The trail
+  // becomes ordinary keyframes (offsets along it, evenly spaced or at your own pace, optionally turning with it),
+  // so a path take previews, keeps, saves, and exports as p5.js code exactly like any other take. No AI.
+  const MIN_SHOT = 10; // seconds: every shot is at least this long
+  const PATH_KEYS = 24; // backend/models.py MAX_MOTION_KEYS
+  const MAX_TRACKS = 4; // backend/models.py MotionRecord.tracks
+  const pathOpts = { timing: 'steady' };
+  let pathDraft = null; // { layer, points: [{ x, y, ms }] in canvas px } while a path is being drawn
+  let keptPaths = null; // the trails behind the kept path take: another path adds to them instead of starting over
+  // Shots are never shorter than MIN_SHOT: a shorter move plays out, then holds its last pose.
+  function fillShot(spec) {
+    if (spec.seconds >= MIN_SHOT) return spec;
+    const f = spec.seconds / MIN_SHOT;
+    return { ...spec, seconds: MIN_SHOT, tracks: spec.tracks.map(track => {
+      const keys = track.keys.map(k => ({ ...k, t: r4(k.t * f) }));
+      const last = keys[keys.length - 1];
+      if (keys.length < PATH_KEYS) keys.push({ ...last, t: 1, label: 'hold' });
+      else last.t = 1;
+      return { ...track, keys };
+    }) };
+  }
+  const trailLength = points => points.reduce((n, p, i) => n + (i ? Math.hypot(p.x - points[i - 1].x, p.y - points[i - 1].y) : 0), 0);
+  // A trail becomes keyframes: where it is along the trail (eased in and out, or at your finger's own pace), which
+  // way it faces (it turns around when it changes direction), and how it leans (forward with speed, into curves).
+  // Fly turns to follow the trail instead. Returns the keys and how long the trip takes at the gait's speed.
+  function pathKeys(raw, { timing, gait }) {
+    const g = GAITS[gait] || GAITS.glide;
+    let pts = raw;
+    for (let pass = 0; pass < 2; pass++) { // a steadier hand: 1-2-1 smoothing; the ends stay where they were drawn
+      pts = pts.map((p, i) => (i && i < pts.length - 1
+        ? { x: (pts[i - 1].x + 2 * p.x + pts[i + 1].x) / 4, y: (pts[i - 1].y + 2 * p.y + pts[i + 1].y) / 4, ms: p.ms } : p));
+    }
+    const along = pts.map((p, i) => (i ? Math.hypot(p.x - pts[i - 1].x, p.y - pts[i - 1].y) : 0));
+    for (let i = 1; i < along.length; i++) along[i] += along[i - 1];
+    const total = along[along.length - 1];
+    const span = Math.max(1, pts[pts.length - 1].ms - pts[0].ms);
+    const seconds = Math.round(clampTo(total / g.speed, 3, MIN_SHOT) * MOTION_FPS) / MOTION_FPS;
+    const sample = (measure, value) => {
+      let i = 0;
+      while (i < pts.length - 2 && measure(i + 1) < value) i++;
+      const a = measure(i), b = measure(i + 1), f = b > a ? clampTo((value - a) / (b - a), 0, 1) : 0;
+      return { x: pts[i].x + (pts[i + 1].x - pts[i].x) * f, y: pts[i].y + (pts[i + 1].y - pts[i].y) * f };
+    };
+    // Slow out, cruise, slow in: speed ramps up over the first 15% and down over the last 15%.
+    const ease = u => { const a = 0.15, v = 1 / (1 - a); return u < a ? v * u * u / (2 * a) : u > 1 - a ? 1 - v * (1 - u) ** 2 / (2 * a) : v * (u - a / 2); };
+    const n = clampTo(Math.round(total / 28) + 2, 6, PATH_KEYS);
+    const spots = Array.from({ length: n }, (_, k) => (timing === 'mine'
+      ? sample(i => pts[i].ms - pts[0].ms, k / (n - 1) * span) : sample(i => along[i], ease(k / (n - 1)) * total)));
+    const near = k => [spots[Math.max(0, k - 1)], spots[Math.min(n - 1, k + 1)]];
+    const fast = Math.max(1, ...spots.map((_, k) => { const [a, b] = near(k); return Math.hypot(b.x - a.x, b.y - a.y); }));
+    let first = 0, dir = 0, heading = null, previous = 0;
+    const keys = spots.map((p, k) => {
+      const [a, b] = near(k), dx = b.x - a.x, dy = b.y - a.y, run = Math.hypot(dx, dy);
+      // Facing: set by the first clear move left or right (as drawn), flipped when it clearly heads the other way.
+      if (Math.abs(dx) > 3 && Math.abs(dx) > run * 0.4) { dir = Math.sign(dx); if (!first) first = dir; }
+      const facing = g.face && first && dir && dir !== first ? -1 : 1;
+      let bend = 0, pitch = 0;
+      if (run > 0.5) {
+        const angle = Math.atan2(dy, dx) * 180 / Math.PI;
+        if (heading === null) heading = previous = angle;
+        bend = angle - previous;
+        while (bend > 180) bend -= 360;
+        while (bend < -180) bend += 360;
+        previous = angle;
+        pitch = Math.atan2(dy, Math.abs(dx)) * 180 / Math.PI * (dir || first || 1); // nose up or down, from level flight
+      }
+      const speed = run / fast, level = run ? Math.abs(dx) / run : 0;
+      const r = g.turn ? clampTo(pitch * 0.85, -60, 60) : (dir || 1) * g.lean * speed * level + clampTo(bend * g.bank, -14, 14);
+      const label = k === 0 ? 'start' : k === n - 1 ? 'settle' : timing !== 'mine' && k === 1 ? 'slow out' : timing !== 'mine' && k === n - 2 ? 'slow in' : '';
+      return { t: r4(k / (n - 1)), x: r4(clampTo((p.x - spots[0].x) / W, -1.5, 1.5)), y: r4(clampTo((p.y - spots[0].y) / H, -1.5, 1.5)),
+        sx: k ? facing : 1, sy: 1, r: k && k < n - 1 ? r4(r) : 0, label };
+    });
+    return { keys, seconds };
+  }
+  // Every new shot moves on its own: a first take across the stage, in its gait, limbs and all. Keep it, pick
+  // another gait, or drag your own path. `turn` alternates the direction from one shot to the next.
+  function autoTake(layer, turn = 0) {
+    const b = inkBounds(layer.strokes);
+    if (!b || motionDraft) return;
+    const cx = b.x + b.w / 2, cy = b.y + b.h / 2;
+    let dir = cx < W / 2 ? 1 : -1;
+    if (turn % 2) dir = -dir;
+    const room = dir > 0 ? W - b.x - b.w - 24 : b.x - 24;
+    const dist = Math.max(W * 0.22, Math.min(W * 0.45, room));
+    const gait = gaitFor(layer);
+    const swoop = gait === 'fly' ? H * 0.12 : gait === 'glide' ? H * 0.04 : 0;
+    const points = Array.from({ length: 48 }, (_, i) => {
+      const u = i / 47;
+      return { x: cx + dir * dist * u, y: cy - swoop * Math.sin(u * Math.PI * (gait === 'fly' ? 2 : 1)), ms: u * 2000 };
+    });
+    const spec = pathSpec(layers.filter(item => !item.fx), [{ layerId: layer.id, points, gait }], []);
+    spec.change = `\u2726 A first take: ${layer.name} ${GAITS[gait].verb} ${dir > 0 ? 'right' : 'left'}${rigFor(layer) ? ', limbs and all' : ''}. `
+      + 'Keep it (Enter), switch Walk \u00b7 Hop \u00b7 Glide \u00b7 Fly, or drag your own path.';
+    previewMotion(spec);
+  }
+  // A real flipbook: every frame of a saved shot on printable pages (a PDF the server draws). Cut, stack, staple, flip.
+  const FLIPBOOK_TIP = 'Flipbook|Every frame on printable pages, ten to a page. Cut, stack them in order, staple the strip, and flip it with your thumb.';
+  function openFlipbook(id) {
+    window.open(`/api/shots/${encodeURIComponent(id)}/flipbook.pdf`, '_blank', 'noopener');
+  }
+  // What a layer is likely to do: from its rig first (a bird flies, legs walk), else from its name and asset type.
+  function gaitFor(layer) {
+    const kind = rigFor(layer)?.kind;
+    if (kind === 'bird') return 'fly';
+    if (kind === 'biped' || kind === 'quadruped') return /rabbit|bunny|frog|kangaroo|grasshopper/i.test(layer.name) ? 'hop' : 'walk';
+    if (kind === 'fish') return 'glide';
+    return defaultGait(layer);
+  }
+  function defaultGait(layer) {
+    const name = layer?.name || '';
+    if (/bird|bat|bee|butterfly|plane|jet|rocket|ship|ufo|dragon|ghost|kite|balloon|cloud|fairy|star/i.test(name)) return 'fly';
+    if (/rabbit|bunny|frog|kangaroo|ball|bounce|grasshopper|cricket|kid|jump/i.test(name)) return 'hop';
+    const starType = layer?.asset && shotStar?.id === layer.asset.asset_id ? shotStar.type : '';
+    if (starType === 'character' || /fox|cat|dog|man|woman|girl|boy|person|robot|bear|monster|knight|hero|horse|cow|pig|duck|chicken|figure/i.test(name)) return 'walk';
+    return 'glide';
+  }
+  // A trail in plain words ("travels right, zig-zagging up and down"): search reads it, and so does the AI that
+  // describes the shot, since a picture of frame 1 can't show what happens.
+  function trailWords(points, gait) {
+    const first = points[0], last = points[points.length - 1];
+    const dx = (last.x - first.x) / W, dy = (last.y - first.y) / H;
+    const bits = [];
+    const across = Math.abs(dx) > 0.12 ? (dx > 0 ? 'right' : 'left') : '';
+    const vertical = Math.abs(dy) > 0.12 ? (dy > 0 ? 'down' : 'up') : '';
+    const verb = (GAITS[gait] || GAITS.glide).verb;
+    bits.push(across || vertical ? `${verb} ${[across, vertical].filter(Boolean).join(' and ')}` : `${verb} around and comes back`);
+    let turns = 0, swing = 0, previous = null, sign = 0;
+    for (let i = 4; i < points.length; i += 4) {
+      const a = Math.atan2(points[i].y - points[i - 4].y, points[i].x - points[i - 4].x);
+      if (previous !== null) { let d = a - previous; while (d > Math.PI) d -= 2 * Math.PI; while (d < -Math.PI) d += 2 * Math.PI; turns += d; }
+      previous = a;
+      const s = Math.sign(points[i].y - points[i - 4].y);
+      if (s && s !== sign) { swing += sign ? 1 : 0; sign = s; }
+    }
+    if (Math.abs(turns) > Math.PI * 1.7) bits.push(`looping ${turns > 0 ? 'clockwise' : 'counterclockwise'}`);
+    else if (swing >= 3) bits.push('zig-zagging up and down');
+    else if (swing >= 1) bits.push('in an arc');
+    return bits.join(', ');
+  }
+  const pathHow = () => (pathOpts.timing === 'mine' ? 'at your pace' : 'easing in and out');
+  function pathSpec(base, paths, effects = []) {
+    const tracks = [];
+    let seconds = 3;
+    for (const path of paths) {
+      const layer = base.find(item => item.id === path.layerId);
+      if (!layer) continue;
+      const made = pathKeys(path.points, { timing: pathOpts.timing, gait: path.gait });
+      seconds = Math.max(seconds, made.seconds);
+      tracks.push({ layerId: layer.id, name: layer.name, keys: made.keys, gait: path.gait });
+    }
+    const names = tracks.map(track => track.name).join(' + ');
+    const words = paths.map(path => {
+      const layer = base.find(item => item.id === path.layerId);
+      return layer ? `${layer.name} ${trailWords(path.points, path.gait)}` : '';
+    }).filter(Boolean).join('; ');
+    const how = tracks.map(track => `${GAITS[track.gait].icon} ${track.name} ${GAITS[track.gait].verb}`).join(', ');
+    return { by: 'path', label: `\u3030 ${names}`, take: `\u3030 ${names}`, title: (words || `${names} on a path`).slice(0, 120),
+      note: `${words} (a drawn path, ${pathHow()})`.slice(0, 160), seconds, strength: 1, base, tracks, paths, effects,
+      change: `${how}: ${seconds.toFixed(1)} s along your path, ${pathHow()}${seconds < MIN_SHOT ? `, then a breather until ${MIN_SHOT} s` : ''}. No AI. `
+        + 'Drag another layer to move it too, then keep it.' };
+  }
+  function startPath(event, point) {
+    if (frames.length > 1 && frameIndex && !motionDraft) showFrame(0); // paths start from frame 1, as drawn
+    const can = movable();
+    const hit = pickLayer(point);
+    // Grabbing inside a drawing counts too (the middle of a ring has no ink): the smallest box wins.
+    const pad = 12, x = point.x * W, y = point.y * H;
+    const area = layer => { const b = inkBounds(layer.strokes); return b ? b.w * b.h : Infinity; };
+    const boxed = can.filter(item => {
+      const b = inkBounds(item.strokes);
+      return b && x >= b.x - pad && x <= b.x + b.w + pad && y >= b.y - pad && y <= b.y + b.h + pad;
+    }).sort((a, b) => area(a) - area(b))[0];
+    const layer = can.includes(hit) ? hit : boxed || can.find(item => item.id === activeId) || can[can.length - 1];
+    if (!layer) {
+      flashTray('\u3030 Draw or place something first, then drag it along a path.', true);
+      return;
+    }
+    activeId = layer.id;
+    pointer = event.pointerId;
+    canvas.setPointerCapture(pointer);
+    pathDraft = { layer, points: [{ x: point.x * W, y: point.y * H, ms: performance.now() }] };
+    renderOverlay();
+  }
+  function extendPath(event) {
+    const samples = event.getCoalescedEvents?.();
+    for (const sample of samples?.length ? samples : [event]) {
+      const p = normPoint(sample), last = pathDraft.points[pathDraft.points.length - 1];
+      const x = clampTo(p.x, 0, 1) * W, y = clampTo(p.y, 0, 1) * H;
+      if (Math.hypot(x - last.x, y - last.y) >= 3 && pathDraft.points.length < 2000) pathDraft.points.push({ x, y, ms: performance.now() });
+    }
+    renderOverlay();
+  }
+  let pathsDrawn = 0;
+  async function commitPath() {
+    const { layer, points } = pathDraft;
+    pathDraft = null;
+    if (points.length < 2 || trailLength(points) < 12) {
+      renderOverlay();
+      flashTray('\u3030 Drag farther: the trail you draw is where it travels.');
+      return;
+    }
+    pathsDrawn++;
+    if (rigKey(layer) && !rigCache.has(rigKey(layer)) && !offline) {
+      flashTray(`\u2726 Finding ${layer.name}\u2019s legs, arms, and tail (once)\u2026`);
+      await ensureRig(layer);
+    }
+    const draft = motionDraft?.spec;
+    let base = layers, prior = null;
+    if (draft) {
+      if (draft.base.includes(layer)) base = draft.base;
+      if (draft.by === 'path' && draft.base === base) prior = draft;
+    } else {
+      base = layers.filter(item => !item.fx);
+      const effects = sceneMotion?.effects || [];
+      if (keptPaths && frameIndex === 0) {
+        prior = { paths: keptPaths.paths.filter(path => base.some(item => item.id === path.layerId)), effects };
+      } else prior = { paths: [], effects };
+    }
+    const extending = !!draft && prior === draft;
+    const had = prior?.paths.find(path => path.layerId === layer.id);
+    let paths = [...(prior ? prior.paths : []).filter(path => path.layerId !== layer.id), { layerId: layer.id, points, gait: had?.gait || gaitFor(layer) }];
+    if (paths.length > MAX_TRACKS) {
+      flashTray(`Up to ${MAX_TRACKS} paths per shot: the oldest one was let go.`);
+      paths = paths.slice(-MAX_TRACKS);
+    }
+    const spec = pathSpec(base, paths, (prior || draft)?.effects || []);
+    logEvent('artist', 'Drew a path', `${layer.name}: ${Math.round(trailLength(points))} px ${pathHow()}`);
+    if (extending) {
+      takes[takeAt] = spec;
+      previewMotion(spec, { take: false });
+      renderTakes();
+    } else previewMotion(spec);
+  }
+  // The path the gait chips talk to: the layer you dragged last (or picked), else the newest path.
+  const focusPath = spec => spec.paths.find(path => path.layerId === activeId) || spec.paths[spec.paths.length - 1];
+  function setPathOption(change) {
+    const spec = motionDraft?.spec;
+    if (change.gait && spec?.by === 'path') {
+      const focus = focusPath(spec);
+      if (!focus || focus.gait === change.gait) return;
+      const paths = spec.paths.map(path => (path === focus ? { ...path, gait: change.gait } : path));
+      const next = pathSpec(spec.base, paths, spec.effects);
+      takes[takeAt] = next;
+      previewMotion(next, { take: false });
+      renderTakes();
+      return;
+    }
+    Object.assign(pathOpts, change);
+    if (spec?.by !== 'path') return;
+    const next = pathSpec(spec.base, spec.paths, spec.effects);
+    takes[takeAt] = next;
+    previewMotion(next, { take: false });
+    renderTakes();
+  }
+  function drawTrail(c, points, k, { live = false, faint = false } = {}) {
+    if (points.length < 2) return;
+    const line = () => { c.beginPath(); points.forEach((p, i) => (i ? c.lineTo(p.x, p.y) : c.moveTo(p.x, p.y))); c.stroke(); };
+    c.save();
+    c.lineCap = 'round';
+    c.lineJoin = 'round';
+    c.globalAlpha = faint ? 0.55 : 1;
+    c.strokeStyle = 'rgba(124, 58, 237, 0.16)';
+    c.lineWidth = 14 * k;
+    line();
+    c.strokeStyle = '#7c3aed';
+    c.lineWidth = 3 * k;
+    c.setLineDash([8 * k, 6 * k]);
+    line();
+    c.setLineDash([]);
+    const dot = (p, color) => { c.fillStyle = color; c.strokeStyle = '#ffffff'; c.lineWidth = 2.5 * k; c.beginPath(); c.arc(p.x, p.y, 7 * k, 0, Math.PI * 2); c.fill(); c.stroke(); };
+    dot(points[0], '#10b981');
+    if (!live) dot(points[points.length - 1], '#f43f5e');
+    c.restore();
+  }
+  // With the Path tool, everything that can travel wears a dashed outline: "drag me".
+  function paintPathTargets(k) {
+    octx.save();
+    octx.strokeStyle = 'rgba(124, 58, 237, 0.55)';
+    octx.lineWidth = 1.5 * k;
+    octx.setLineDash([5 * k, 5 * k]);
+    for (const layer of movable()) {
+      const b = inkBounds(layer.strokes);
+      if (b) octx.strokeRect(b.x - 6 * k, b.y - 6 * k, b.w + 12 * k, b.h + 12 * k);
+    }
+    octx.restore();
   }
 
   // ---------------------------------------------------------------- "How it moves": animation, demystified
@@ -2911,11 +3274,12 @@
       return box;
     };
     body.replaceChildren();
-    body.append(el('p', 'explain-direction', motion.by === 'ai' ? `\u2726 AI choreographed: "${motion.prompt}"` : `Preset: ${motion.note}`));
+    body.append(el('p', 'explain-direction', motion.by === 'ai' ? `\u2726 AI choreographed: "${motion.prompt}"`
+      : motion.by === 'path' ? `\u3030 Your path: ${motion.note}` : `Preset: ${motion.note}`));
     if (motion.effects?.length) body.append(el('p', 'muted', `${fxList(motion.effects).map(fx => `${fx.icon} ${fx.name}`).join(' and ')}: an effect layer of tiny strokes, computed by code for every frame from a fixed seed. No AI, the same every time.`));
 
     const one = section('\u2460', 'Keyframes: the poses that matter',
-      `${motion.by === 'ai' ? 'The AI' : 'The preset'} chose ${track.keys.length} keyframes for ${track.name}${motion.tracks.length > 1 ? ` (and ${motion.tracks.slice(1).map(t => `${t.keys.length} for ${t.name}`).join(', ')})` : ''}. Each is a pose: where it is, how squashed, how turned.`);
+      `${motion.by === 'ai' ? 'The AI' : motion.by === 'path' ? 'Your trail' : 'The preset'} ${motion.by === 'path' ? 'became' : 'chose'} ${track.keys.length} keyframes for ${track.name}${motion.tracks.length > 1 ? ` (and ${motion.tracks.slice(1).map(t => `${t.keys.length} for ${t.name}`).join(', ')})` : ''}. Each is a pose: where it is, how squashed, how turned.`);
     const strip = el('div', 'explain-keys');
     for (const key of keyFrames.slice(0, 10)) {
       const card = el('figure', 'explain-key');
@@ -2996,328 +3360,18 @@
   $('explain-math').addEventListener('change', () => { showMath = $('explain-math').checked; renderOverlay(); });
   $('explain-open').addEventListener('click', explainScene);
 
-  // ---------------------------------------------------------------- the Animate sheet: what moves, and the director
-  // What can move: anything visible with ink that isn't scenery. Defaults to what's selected, else the assets.
+  // What can move: anything visible with ink that isn't scenery.
   const movable = () => layers.filter(layer => layer.visible && hasInk([layer]) && !isScenery(layer));
-  let animSubjects = new Set();
-  function defaultSubjects() {
-    // What you grabbed (or an asset you're on); otherwise the placed assets; otherwise your latest drawing.
-    const can = movable();
-    const active = can.find(layer => layer.id === activeId && (layer.asset || tool === 'move'));
-    const picks = active ? [active] : can.filter(layer => layer.asset).slice(0, 3);
-    return new Set((picks.length ? picks : can.slice(-1)).map(layer => layer.id));
-  }
-  function renderAnimSubjects() {
-    const can = movable();
-    animSubjects = new Set([...animSubjects].filter(id => can.some(layer => layer.id === id)));
-    if (!animSubjects.size) animSubjects = defaultSubjects();
-    $('anim-subjects').replaceChildren(...(can.length ? can.map(layer => {
-      const chip = el('button', 'anim-chip', `${layer.asset ? '\u25c6 ' : ''}${layer.name}`);
-      chip.type = 'button';
-      chip.setAttribute('aria-pressed', String(animSubjects.has(layer.id)));
-      chip.addEventListener('click', () => {
-        if (animSubjects.has(layer.id)) animSubjects.delete(layer.id);
-        else if (animSubjects.size < 4) animSubjects.add(layer.id);
-        renderAnimSubjects();
-      });
-      return chip;
-    }) : [el('span', 'anim-empty', 'Nothing to move yet. Drop in an asset below, or draw something first.')]));
-    if (!can.length) $('anim-add').open = true;
-    const ready = animSubjects.size > 0;
-    document.querySelectorAll('#anim-presets button').forEach(button => { button.disabled = !ready; });
-    $('anim-go').disabled = !ready;
-  }
-  function chosenTracks(keysFor, ids = animSubjects) {
+  function chosenTracks(keysFor, ids) {
     return layers.filter(layer => ids.has(layer.id)).map(layer => {
       const b = inkBounds(layer.strokes);
       const box = { x: b.x / W, y: b.y / H, w: b.w / W, h: b.h / H };
       return { layerId: layer.id, name: layer.name, box, keys: keysFor(box, layer) };
     });
   }
-  // Ink (plus its line width) can poke past an edge: clip the box as a whole, so x + w never leaves the canvas.
-  function subjectFor(layer, box) {
-    const unit = v => Math.max(0, Math.min(1, v));
-    const x0 = unit(box.x), y0 = unit(box.y);
-    const w = Math.max(0.02, unit(box.x + box.w) - x0), h = Math.max(0.02, unit(box.y + box.h) - y0);
-    return { id: layers.indexOf(layer), name: layer.name.slice(0, 40), box: { x: Math.min(x0, 1 - w), y: Math.min(y0, 1 - h), w, h } };
-  }
-  function runPreset(preset) {
-    const tracks = chosenTracks(box => preset.keys(box));
-    if (!tracks.length) return;
-    $('animate-sheet').close();
-    previewMotion({ by: 'preset', label: `${preset.icon} ${preset.name}`, take: preset.name, note: `${preset.icon} ${preset.name}`, seconds: preset.seconds, strength: 1, base: layers, tracks });
-  }
-  // Your own direction uses the same animation preview.
-  function runAIMotion(prompt, ids = animSubjects, title = '') {
-    if (!prompt || !ids.size) return;
-    autoAnimate({ prompt, title, ids: new Set(ids) });
-  }
-  // Director's ideas: instant ones from the names on the canvas, then (one AI call per new composition) a
-  // director's pitch that actually looks at the picture: who moves, where they go, what they do.
-  const IDEA_KINDS = [
-    [/rocket|ship|plane|jet|ufo|dragon|bird|bee|butterfly|bat/i, n => ({ title: 'Takeoff', logline: `${n} gets nervous, then launches into the sky.`,
-      prompt: `${n} wobbles nervously for 2 seconds, crouches in anticipation, blasts off in a big arc toward the top right, loops once across the sky, and exits off the top by the end.` })],
-    [/fox|cat|dog|rabbit|bunny|hero|kid|man|woman|girl|boy|robot|monster|creature|character|frog|bear|mouse/i, n => ({ title: 'Big Entrance', logline: `${n} hops in, looks around, and takes a bow.`,
-      prompt: `${n} hops in from the left in three bouncy hops, stops at center with a squash, looks left and right, takes a little bow, then hops off to the right.` })],
-    [/ball|balloon|badge|sun|coin|star|blob|slime/i, n => ({ title: 'Bounce Show', logline: `${n} bounces across the scene, squashing on every landing.`,
-      prompt: `${n} drops in from the top left and bounces three times across the scene, squashing on each landing and stretching on the way up, each bounce lower, then rolls to a stop on the right.` })],
-    [/tree|pine|palm|flower|plant|grass|flag/i, n => ({ title: 'Breezy Day', logline: `${n} sways in a gusting wind.`,
-      prompt: `${n} sways gently left and right for 4 seconds, bends hard in a sudden gust, springs back past upright, and settles.` })]
-  ];
-  let ideas = { key: '', items: null };
-  const backdropName = () => {
-    const layer = layers.find(item => item.backdrop);
-    return layer ? STARTERS.find(s => s.id === layer.backdrop)?.name
-      || savedBackdrops.find(item => item.id === layer.backdrop)?.name || layer.name : '';
-  };
-  const sceneKey = () => `${movable().map(layer => `${layer.name}:${layer.asset?.asset_id || ''}`).join('|')}#${backdropName()}#${motionSeconds}`;
-  function quickIdeas() {
-    const can = movable();
-    const named = can.filter(layer => layer.asset).concat(can.filter(layer => !layer.asset));
-    const out = [];
-    for (const layer of named) {
-      const kind = IDEA_KINDS.find(([re]) => re.test(layer.name));
-      if (kind && out.length < 2) out.push({ ...kind[1](layer.name), movers: [layer.id] });
-    }
-    if (named[0] && out.length < 2) out.push({ title: 'Float & Spin', logline: `${named[0].name} drifts in, spins once, and floats away.`, movers: [named[0].id],
-      prompt: `${named[0].name} drifts in from the left, slows to a stop at center with a little overshoot, does one full spin, grows a bit, then floats up and away.` });
-    if (named.length > 1) out.push({ title: 'The Chase', logline: `${named[0].name} chases ${named[1].name} across the scene.`, movers: [named[0].id, named[1].id],
-      prompt: `${named[1].name} dashes from left to right with ${named[0].name} close behind; halfway, ${named[1].name} jumps over a gap while ${named[0].name} skids to a stop with a squash, then both exit right.` });
-    return out.slice(0, 3);
-  }
-  function renderIdeas(items, { loading = false, note = '' } = {}) {
-    const box = $('anim-ideas');
-    if (!movable().length) {
-      box.replaceChildren(el('span', 'anim-empty', 'Add an asset (or draw something) and the director will pitch shots for it.'));
-      return;
-    }
-    box.replaceChildren(...items.map(idea => {
-      const card = el('article', `idea-card${idea.ai ? ' ai' : ''}`);
-      const head = el('div', 'idea-head');
-      head.append(el('b', '', idea.title), el('span', 'idea-by', idea.ai ? '\u2726 Director' : 'instant idea'));
-      const movers = el('div', 'idea-movers');
-      for (const id of idea.movers) {
-        const layer = layers.find(l => l.id === id);
-        if (layer) movers.append(el('span', '', `${layer.asset ? '\u25c6 ' : ''}${layer.name}`));
-      }
-      const go = el('button', 'pill primary idea-go', `\u2726 Animate this \u00b7 ${(frameCount(motionSeconds) / MOTION_FPS).toFixed(0)} s`);
-      go.type = 'button';
-      go.dataset.tip = `Animate this|One AI call choreographs it: keyframes for ${idea.movers.length === 1 ? 'that drawing' : 'those drawings'}, previewed before anything changes.`;
-      go.addEventListener('click', () => {
-        animSubjects = new Set(idea.movers);
-        renderAnimSubjects();
-        $('anim-prompt').value = idea.prompt;
-        runAIMotion(idea.prompt, new Set(idea.movers), idea.title);
-      });
-      const edit = el('button', 'link-button', 'Edit first');
-      edit.type = 'button';
-      edit.addEventListener('click', () => { animSubjects = new Set(idea.movers); renderAnimSubjects(); $('anim-prompt').value = idea.prompt; $('anim-prompt').focus(); });
-      const actions = el('div', 'idea-actions');
-      actions.append(go, edit);
-      card.append(head, el('p', 'idea-logline', idea.logline), movers, el('p', 'idea-prompt', idea.prompt), actions);
-      return card;
-    }));
-    if (loading) box.append(el('div', 'idea-loading', '\u2726 The director is looking at your scene\u2026'));
-    if (note) box.append(el('p', 'anim-empty', note));
-  }
-  async function loadIdeas(force = false) {
-    const can = movable();
-    if (!can.length) { renderIdeas([]); return; }
-    const key = sceneKey();
-    if (!force && ideas.items && ideas.key === key) { renderIdeas(ideas.items); return; }
-    const quick = quickIdeas();
-    renderIdeas(quick, { loading: true });
-    try {
-      const subjects = can.slice(0, 8).map(layer => {
-        const b = inkBounds(layer.strokes);
-        return subjectFor(layer, { x: b.x / W, y: b.y / H, w: b.w / W, h: b.h / H });
-      });
-      const result = await postJSON('/api/sparks/direct', JSON.stringify({ seconds: frameCount(motionSeconds) / MOTION_FPS, backdrop: backdropName(), subjects, layers: docLayers() }));
-      if (sceneKey() !== key) return; // the scene changed while the director was thinking
-      const items = result.ideas.map(idea => ({ ...idea, ai: true, movers: idea.movers.map(index => layers[index]?.id).filter(Boolean) }))
-        .filter(idea => idea.movers.length);
-      ideas = { key, items: items.length ? items : quick };
-      renderIdeas(ideas.items);
-    } catch (error) {
-      renderIdeas(quick, { note: `${error.message} These instant ideas work too.` });
-    }
-  }
-  // A backdrop from the starters, slid under everything in every frame (one set of strokes, shared).
-  function setBackdrop(starterId) {
-    const starter = STARTERS.find(s => s.id === starterId);
-    const scenery = (starter ? starter.build()[0].filter(layer => layer.name !== 'Draw here') : []).map(layer => ({ ...layer,
-      strokes: layer.strokes.map(stroke => ({ ...stroke, points: stroke.points.slice(), kit: true, seq: 0 })) }));
-    const kept = layers.filter(layer => !layer.backdrop);
-    if (kept.length + scenery.length > MAX_LAYERS) {
-      $('anim-status').textContent = `That backdrop needs ${scenery.length} layers; a drawing can have ${MAX_LAYERS}.`;
-      return;
-    }
-    pushUndo();
-    frames = frames.map(stack => [
-      ...scenery.map(layer => newLayer(layer.name, { backdrop: starterId, opacity: layer.opacity ?? 1, strokes: layer.strokes.slice() })),
-      ...stack.filter(layer => !layer.backdrop)]);
-    layers = frames[frameIndex];
-    if (!layers.some(layer => layer.id === activeId)) activeId = layers[layers.length - 1].id;
-    recount();
-    rebuildOnion();
-    rebuildAll();
-    renderFrames();
-    if (starter) logEvent('artist', 'Backdrop', `the ${starter.name} starter`);
-    renderBackdrops();
-    renderAnimSubjects();
-    renderAnimAssets();
-    loadIdeas();
-  }
-  function renderBackdrops() {
-    const current = layers.find(layer => layer.backdrop)?.backdrop || '';
-    const choices = [['', 'None'], ...STARTERS.filter(s => s.kind === 'shot' && s.id !== 'bounce').map(s => [s.id, `${s.icon} ${s.name}`])];
-    $('anim-backdrops').replaceChildren(...choices.map(([id, label]) => {
-      const chip = el('button', 'anim-chip', label);
-      chip.type = 'button';
-      chip.setAttribute('aria-pressed', String(id === current));
-      chip.addEventListener('click', () => { if (id !== current) setBackdrop(id); });
-      return chip;
-    }));
-  }
-  // Casting: with a backdrop, Voyage's multimodal embeddings rank your assets' pictures against words
-  // about the place ("things you'd find at the Beach"). Same vector space for text and images: no tags needed.
-  const castCache = new Map();
-  async function castFor(place) {
-    if (!castCache.has(place)) {
-      castCache.set(place, api(`/api/assets?q=${encodeURIComponent(`characters and props that belong in a ${place} scene`)}`)
-        .then(result => result.items).catch(() => { castCache.delete(place); return []; }));
-    }
-    return castCache.get(place);
-  }
-  async function renderAnimAssets() {
-    const box = $('anim-assets');
-    const place = backdropName();
-    $('anim-cast-note').textContent = place ? `\u2726 Voyage AI picked these for the ${place}: it compares your words with your drawings.` : '';
-    try {
-      const [{ items: latest }, picks] = await Promise.all([api('/api/assets'), place ? castFor(place) : []]);
-      const fits = new Set(picks.slice(0, 4).map(item => item.id));
-      const items = [...picks.slice(0, 4), ...latest.filter(item => !fits.has(item.id))];
-      box.replaceChildren(...(items.length ? items.slice(0, 16).map(item => {
-        const button = el('button', `anim-asset${fits.has(item.id) ? ' fits' : ''}`);
-        button.type = 'button';
-        button.dataset.tip = `${item.name}|${fits.has(item.id) ? `Voyage AI says it fits the ${place}. ` : ''}Drop it into the scene, ready to move.`;
-        const image = el('img');
-        image.src = item.image_url;
-        image.alt = '';
-        image.loading = 'lazy';
-        button.append(image, el('span', '', item.name));
-        button.addEventListener('click', async () => {
-          await startPlacing(item);
-          animSubjects = new Set([activeId]);
-          renderAnimSubjects();
-          $('anim-status').textContent = `\u25c6 ${item.name} is in.`;
-          $('anim-add').open = false; // the cast is set: the director's pitches are what's next
-          loadIdeas();
-          $('anim-ideas').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-        });
-        return button;
-      }) : [el('span', 'anim-empty', 'No assets yet. Save a drawing as \u25c6 Asset first.')]));
-    } catch (error) {
-      box.replaceChildren(el('span', 'anim-empty', error.message));
-    }
-  }
-  function openAnimate() {
-    if (busy()) return;
-    stopPlay();
-    stopMotionPreview();
-    animSubjects = defaultSubjects();
-    $('anim-status').textContent = '';
-    $('anim-add').open = !movable().length;
-    renderAnimSubjects();
-    renderBackdrops();
-    renderAnimAssets();
-    $('animate-sheet').showModal();
-    loadIdeas();
-  }
-  function buildAnimate() {
-    $('anim-presets').replaceChildren(...PRESETS.map(preset => {
-      const button = el('button', 'anim-preset');
-      button.type = 'button';
-      button.dataset.tip = `${preset.name}|${preset.hint} Free: no AI. ${preset.seconds} s.`;
-      button.append(el('span', 'anim-icon', preset.icon), el('span', '', preset.name));
-      button.addEventListener('click', () => runPreset(preset));
-      return button;
-    }));
-    document.querySelectorAll('.anim-length [data-seconds]').forEach(button => button.addEventListener('click', () => {
-      motionSeconds = Number(button.dataset.seconds);
-      document.querySelectorAll('.anim-length [data-seconds]').forEach(b => b.setAttribute('aria-checked', String(b === button)));
-      if (ideas.items) renderIdeas(ideas.items);
-    }));
-  }
-  $('animate-open').addEventListener('click', openAnimate);
-  $('animate-close').addEventListener('click', () => $('animate-sheet').close());
-  $('animate-sheet').addEventListener('click', event => { if (event.target === $('animate-sheet')) $('animate-sheet').close(); });
-  $('anim-ai').addEventListener('submit', event => { event.preventDefault(); runAIMotion($('anim-prompt').value.trim()); });
-  $('anim-more').addEventListener('click', () => loadIdeas(true));
 
-  // ---------------------------------------------------------------- one tap: Animate
-  const titleCase = text => text.replace(/(^|\s)\S/g, c => c.toUpperCase());
-  function pipelineStart() {
-    $('pipeline').hidden = false;
-    $('pipeline').classList.remove('failed', 'finished');
-    $('pipeline-title').textContent = '\u2726 Creating your animation\u2026';
-  }
-  function pipelineStep({ id }) {
-    const text = { tag: 'Getting your drawing ready', save: 'Saving your drawing', stage: 'Setting the scene',
-      pitch: 'Imagining a scene', choreograph: 'Making your drawing move' }[id];
-    if (text) $('pipeline-title').textContent = `\u2726 ${text}\u2026`;
-  }
-  function pipelineFinish(text) {
-    $('pipeline').classList.add('finished');
-    $('pipeline-title').textContent = text;
-    clearTimeout(pipelineFinish.timer);
-    pipelineFinish.timer = setTimeout(() => { if ($('pipeline').classList.contains('finished')) $('pipeline').hidden = true; }, 2600);
-  }
-  function pipelineFail(text) {
-    $('pipeline').classList.add('failed');
-    $('pipeline-title').textContent = text;
-  }
-  $('pipeline-close').addEventListener('click', () => { $('pipeline').hidden = true; });
-
-  // A take on screen turns the box into its editor: words revise that flipbook.
-  const revisingMode = () => motionDraft ? 'art' : '';
-  const GO_BUTTONS = ['go-flipbook', 'dock-similar'];
-  function setDockBusy(on) {
-    on = on || directing;
-    const revising = revisingMode();
-    document.querySelector('.scene-maker').classList.toggle('busy', on);
-    document.querySelector('.scene-maker').classList.toggle('revising', !!revising);
-    $('dock-animate').hidden = !revising;
-    $('dock-animate').disabled = on;
-    $('dock-animate').classList.toggle('busy', on);
-    $('dock-animate').textContent = on ? 'Creating\u2026' : '\u2726 Change it';
-    for (const id of GO_BUTTONS) $(id).disabled = on;
-    $('go-flipbook').hidden = !!revising;
-    // While a take is on screen the prompt revises it; who and where only matter for a new take.
-    $('scene-picks').hidden = !!revising;
-    $('scene-prompt').placeholder = revising ? 'What would you change? e.g. \u201cjump higher\u201d'
-      : 'What happens? Or leave it blank for a surprise';
-    renderTakes();
-    $('scene-style-note').textContent = revising ? 'Each change is a new take built on the one you see. Nothing changes until you keep one.'
-      : 'AI picks the poses. Math draws the frames. Every frame is your own strokes.';
-    if (offline) $('scene-style-note').textContent = revising ? 'Offline: quick moves, effects, and tweaks. All math, all yours.'
-      : 'Offline: Flipbook picks a quick move from your words. Plain math, no AI.';
-    if (offline && !revising) $('scene-prompt').placeholder = 'What happens? e.g. \u201chop in the snow\u201d';
-    renderWho();
-    renderFxChips();
-    renderReading();
-  }
-  // Who can move: what you drew or placed (not scenery); a single big drawing still counts.
-  const castLayers = () => {
-    const can = movable();
-    return can.length ? can : layers.filter(layer => layer.visible && hasInk([layer]) && !layer.backdrop);
-  };
-  // "One thing" on the canvas with unsaved ink: a new drawing, or an asset you've changed. It's saved (a new
-  // asset, or the asset's next version) before it moves, so all its layers move as one and it stays findable.
-  const unsavedThing = () => frames.length === 1 && hasInk() && (editing?.kind === 'asset' ? revision !== savedRevision
-    : !editing && !layers.some(layer => layer.asset || layer.backdrop || layer.strokes.some(stroke => stroke.kit)));
+  // ---------------------------------------------------------------- shots: an asset on a fresh canvas, and a backdrop
   let savedBackdrops = [];
-  let savedStars = [];
   const pickOption = (value, label) => {
     const node = document.createElement('option');
     node.value = value;
@@ -3337,48 +3391,46 @@
     select.replaceChildren(pickOption('', 'No backdrop'), ...(savedBackdrops.length ? [mine] : []), kit);
     if ([...select.options].some(item => item.value === selected)) select.value = selected;
   }
-  function renderSceneStars() {
-    const select = $('scene-star');
-    const selected = select.value;
-    const mine = document.createElement('optgroup');
-    mine.label = 'Your assets';
-    mine.append(...savedStars.map(item => pickOption(item.id, item.name)));
-    select.replaceChildren(pickOption('', '\u270f\ufe0f This drawing'), ...(savedStars.length ? [mine] : []));
-    if ([...select.options].some(item => item.value === selected)) select.value = selected;
-  }
   async function loadSceneBackdrops() {
     try {
-      const [backdrops, assets] = await Promise.all([api('/api/assets?type=environment'), api('/api/assets')]);
-      savedBackdrops = backdrops.items;
-      savedStars = assets.items.filter(item => item.type !== 'environment');
+      savedBackdrops = (await api('/api/assets?type=environment')).items;
       renderSceneBackdrops();
-      renderSceneStars();
       message('backdrop-status', '');
     } catch (error) {
       message('backdrop-status', `Couldn't load your assets and backdrops: ${error.message}`, true);
     }
   }
-  // From a library card: cast it (or set the scene), then hand over to the prompt.
-  function castInScene(item) {
+  // From an asset: backdrops set the scene; anything else lands on a fresh canvas, ready to be dragged along a path.
+  async function castInScene(item) {
     if (motionDraft) skipMotion();
     if (item.type === 'environment') {
       if (!savedBackdrops.some(b => b.id === item.id)) savedBackdrops.unshift(item);
       renderSceneBackdrops();
       $('scene-backdrop').value = `asset:${item.id}`;
-    } else {
-      if (!savedStars.some(b => b.id === item.id)) savedStars.unshift(item);
-      renderSceneStars();
-      $('scene-star').value = item.id;
+      setFocus(false);
+      if (saveKind === 'shot' && shotStarLayer() && document.body.classList.contains('view-studio')) applyBackdrop();
+      else flashTray(`\u25a3 ${item.name} is the backdrop for your next shot.`);
+      return;
     }
-    setFocus(false);
-    document.querySelector('.scene-maker').scrollIntoView({ behavior: 'smooth', block: 'center' });
-    $('scene-prompt').focus({ preventScroll: true });
-    pulse('.scene-maker');
-  }
-  // Who stars in a new take: a saved asset picked above, else whatever is on the canvas.
-  function chosenStar() {
-    const id = $('scene-star').value;
-    return id ? savedStars.find(item => item.id === id) || null : null;
+    if (revision !== savedRevision && hasInk() && !confirm(`Start a new shot with ${item.name}? Your unsaved canvas is replaced (Undo brings it back).`)) return;
+    try {
+      const same = shotStar?.id === item.id;
+      const star = { id: item.id, name: item.name, uses: item.uses ?? (same ? shotStar.uses : undefined), type: item.type ?? (same ? shotStar.type : undefined) };
+      const layer = await stageAsset(item, $('scene-backdrop').value);
+      if (!layer) return;
+      shotStar = star;
+      activeId = layer.id;
+      setFocus(false);
+      setTool('path');
+      setView('studio');
+      renderSaveKind();
+      message('drawing-status', `\u25c6 ${item.name} is in a new ${MIN_SHOT}-second shot. \u2726 Getting it moving\u2026`);
+      const drawn = pathsDrawn;
+      await ensureRig(layer);
+      if (layers.includes(layer) && pathsDrawn === drawn) autoTake(layer, star.uses || 0); // your own path wins
+    } catch (error) {
+      message('drawing-status', error.message, true);
+    }
   }
   async function backdropLayers(choice) {
     if (!choice) return [];
@@ -3397,43 +3449,6 @@
       visible: layer.visible, opacity: layer.opacity, backdrop: id, strokes: layer.strokes
     }));
   }
-  async function saveAsAsset() {
-    let name = $('title').value.trim().slice(0, 80);
-    let assetTags = tags.slice();
-    if (!assetTags.length || !name) {
-      const started = performance.now();
-      if (!assetTags.length) {
-        assetTags = (await postJSON('/api/tags/suggest', JSON.stringify({ title: name, description: $('description').value.trim(), layers: docLayers() }))).tags;
-      }
-      if (!name) name = titleCase(assetTags[0] || 'My drawing').slice(0, 80);
-      pipelineStep({ id: 'tag', detail: `Named it \u201c${name}\u201d \u00b7 #${assetTags.slice(0, 5).join(' #')}`, ms: performance.now() - started });
-    }
-    const started = performance.now();
-    const savingRevision = revision;
-    const history = pendingEvents();
-    const updating = editing?.kind === 'asset';
-    const saved = await api(updating ? `/api/assets/${encodeURIComponent(editing.id)}` : '/api/assets', {
-      method: updating ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, type: $('asset-type').value, description: $('description').value.trim(), layers: docStack(frames[0]),
-        tags: assetTags, history, ...(pendingOrigin && !updating ? { origin: pendingOrigin } : {}) }) });
-    savedRevision = savingRevision;
-    savedHistory = [...(updating ? savedHistory : []), ...history, { at: new Date().toISOString(), by: 'studio', action: 'Saved', detail: `v${saved.version}` }];
-    journal = [];
-    handStrokes = 0;
-    pendingOrigin = null;
-    editing = { kind: 'asset', id: saved.id, version: saved.version };
-    saveKind = 'asset';
-    $('title').value = saved.name;
-    tags = [...(saved.tags || assetTags)];
-    renderTagChips();
-    renderSaveKind();
-    pipelineStep({ id: 'save', detail: updating ? `\u25c6 ${saved.name} v${saved.version} saved; scenes using older versions get flagged`
-      : `\u25c6 ${saved.name} v${saved.version} is in your library, embedded by Voyage AI: findable by words or a sketch`, ms: performance.now() - started });
-    loadGallery(currentQuery);
-    loadSceneBackdrops();
-    return { id: saved.id, name: saved.name, type: saved.type || $('asset-type').value, tags: saved.tags || assetTags,
-      version: saved.version };
-  }
   // A fresh scene with just this asset in it, linked: the animation lives in a scene that knows what it uses.
   async function stageAsset(asset, choice = '') {
     const startedRevision = revision;
@@ -3448,16 +3463,46 @@
     if (strokes.length > MAX_STROKES || countPoints(strokes) > MAX_POINTS) {
       throw new Error('This asset and backdrop together exceed the canvas limits.');
     }
+    freshCanvas([...background, newLayer('Layer 1')]);
+    saveKind = 'shot';
+    await startPlacing(asset, null, record);
+    return layers.find(layer => layer.asset?.asset_id === asset.id) || null;
+  }
+  // ---------------------------------------------------------------- home and the studio: start something, then make shots
+  // Home is where work starts: + New asset, + New backdrop, and your assets (each one leads to its shots). The studio
+  // is one thing at a time: an asset (or a backdrop) being drawn, or a shot being made with one.
+  let shotStar = null; // the asset new shots are built around: { id, name, uses }
+  let autoMeta = null; // what AI wrote at the last save: { kind, signature, description, tags }
+  const titleCase = text => text.replace(/(^|\s)\S/g, c => c.toUpperCase());
+  // Every way in starts at the top: the canvas (or your assets) in full view.
+  function setView(next) {
+    const was = document.body.classList.contains('view-studio') ? 'studio' : 'home';
+    document.body.classList.toggle('view-home', next === 'home');
+    document.body.classList.toggle('view-studio', next === 'studio');
+    window.scrollTo({ top: 0, behavior: 'auto' });
+    if (next === was) return;
+    if (next === 'home') {
+      setFocus(false);
+      stopPlay();
+      if (!currentQuery && account) loadGallery(); // the latest first: no embedding
+    }
+    renderCrumbs();
+  }
+  // A clean canvas with these layers. Undo brings the previous one back.
+  function freshCanvas(stack) {
     stopPlay();
+    if (motionDraft) skipMotion();
     pushUndo();
-    layers = [...background, newLayer('Layer 1')];
+    layers = stack;
     frames = [layers];
     frameIndex = 0;
     activeId = layers[layers.length - 1].id;
     sceneMotion = null;
     sceneSketch = null;
+    keptPaths = null;
     pendingOrigin = null;
     editing = null;
+    autoMeta = null;
     sparks.length = 0;
     guides.length = 0;
     journal = [];
@@ -3467,192 +3512,359 @@
     renderTagChips();
     $('title').value = '';
     $('description').value = '';
-    setSaveKind('shot');
+    closePopover();
     rebuildOnion();
     recount();
     rebuildAll();
     renderFrames();
-    await startPlacing(asset, null, record);
-    return layers.find(layer => layer.asset?.asset_id === asset.id) || null;
+    renderOverlay();
+    renderTray();
   }
-  async function autoAnimate({ prompt = '', title = '', ids = null, asset = null, another = false, effects = [] } = {}) {
-    if (directing || makingVariations || busy()) return;
-    const read = readPrompt(prompt);
-    const fxIds = withFx(effects, read.on, []);
-    if (fxIds.length > MAX_FX) { flashTray('Two effects at a time keeps a scene light.', true); return; }
-    // Only effects in the words? Gemini still picks a motion (a surprise); the effect is code.
-    if (read.on.length && !read.ai && !read.tweak) prompt = '';
-    stopPlay();
-    if (motionDraft && !another) skipMotion();
-    if ($('animate-sheet').open) $('animate-sheet').close();
-    if (!asset && !ids && !hasInk()) {
-      flashTray('Draw something first (or pick a star), then animate it.', true);
-      canvas.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      return;
-    }
-    directing = true;
-    setDockBusy(true);
-    try {
-      const savedAsset = !asset && !ids && editing?.kind === 'asset' && revision === savedRevision && frames.length === 1;
-      const fresh = !asset && !ids && unsavedThing();
-      const choice = $('scene-backdrop').value;
-      const backdropId = choice.split(':')[1];
-      if (choice && !asset && !savedAsset && !fresh && !ids && !layers.some(layer => layer.backdrop === backdropId)) {
-        throw new Error('Choose an asset for a new scene to use this backdrop, or add it in Direct.');
-      }
-      pipelineStart();
-      if (!document.body.classList.contains('focus-mode')) $('pipeline').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-      if (savedAsset) asset = { id: editing.id, name: $('title').value.trim() };
-      if (fresh) {
-        const drawing = snapshot();
-        asset = await saveAsAsset();
-        // Provisional until a take is kept: discard (or an error) takes it back out of the library.
-        provisional = { id: asset.id, name: asset.name, drawing };
-        if (revision !== savedRevision) throw new Error('Your drawing changed while saving. Try again to include your changes.');
-      }
-      if (asset) {
-        const started = performance.now();
-        const placed = await stageAsset(asset, choice);
-        if (!placed) throw new Error('Couldn\u2019t set up the scene. Try again.');
-        pipelineStep({ id: 'stage', detail: `A fresh scene with \u25c6 ${asset.name}, linked, so it always knows where it\u2019s used`, ms: performance.now() - started });
-        ids = new Set([placed.id]);
-      }
-      const cast = (ids ? layers.filter(layer => ids.has(layer.id)) : castLayers()).filter(layer => inkBounds(layer.strokes));
-      if (!cast.length) throw new Error('Nothing to move yet. Draw something, or place an asset.');
-      const tooMuch = fxFits({ base: layers }, fxIds);
-      if (tooMuch) throw new Error(tooMuch);
-      const picks = cast.slice(0, prompt ? 4 : 8);
-      // Subject ids are stack positions now; the canvas may change while the director thinks.
-      const byIndex = new Map(picks.map(layer => [layers.indexOf(layer), layer]));
-      const subjects = picks.map(layer => {
-        const b = inkBounds(layer.strokes);
-        return subjectFor(layer, { x: b.x / W, y: b.y / H, w: b.w / W, h: b.h / H });
-      });
-      const assetIds = [...new Set([...layers.filter(layer => layer.asset).map(layer => layer.asset.asset_id),
-        ...(editing?.kind === 'asset' ? [editing.id] : [])])].slice(0, 8);
-      $('pipeline-title').textContent = '\u2726 Creating your animation\u2026';
-      const seconds = frameCount(motionSeconds) / MOTION_FPS;
-      let result = null;
-      await streamEvents('/api/animate', JSON.stringify({ prompt, title: title.slice(0, 60), seconds, backdrop: backdropName(), subjects, asset_ids: assetIds, layers: docLayers() }), event => {
-        if (event.type === 'step') {
-          pipelineStep(event);
-        } else if (event.type === 'result') result = event;
-        else if (event.type === 'error') throw new Error(event.detail);
-      });
-      if (!result) throw new Error('The director went quiet. Try again.');
-      const keysFor = new Map(result.motion.tracks.map(track => [byIndex.get(track.subject)?.id, track.keys]));
-      const tracks = chosenTracks((box, layer) => keysFor.get(layer.id), new Set([...keysFor.keys()].filter(Boolean)))
-        .filter(track => track.keys?.length);
-      if (!tracks.length) throw new Error('Those drawings changed while the director was working. Try again.');
-      pipelineFinish(`\u2726 \u201c${result.idea.title}\u201d`);
-      const spec = { by: 'ai', director: !prompt, label: `\u2726 ${result.idea.title}`, take: `${result.idea.title}${fxList(fxIds).map(fx => ` ${fx.icon}`).join('')}`,
-        note: result.motion.note || '', title: result.idea.title, prompt: result.idea.prompt, seconds, strength: 1, base: layers, tracks, effects: fxIds };
-      const fxSaid = fxIds.length ? ` ${fxWords(fxList(fxIds), []).join(' ')}: drawn by code, no AI.` : '';
-      spec.change = `\u2726 Take ${takes.length + 1}, \u201c${result.idea.title}\u201d. Gemini chose the keyframes: ${summarizeMotion(spec)}.${fxSaid}`;
-      previewMotion(spec);
-      $('scene-prompt').value = '';
-      $('scene-prompt').placeholder = 'What would you change?';
-    } catch (error) {
-      pipelineFail(error.message);
-      flashTray(error.message, true);
-      if (!motionDraft) dropProvisional(false);
-    } finally {
-      directing = false;
-      setDockBusy(false);
-    }
+  function newCanvas(kind) {
+    if (revision !== savedRevision && hasInk() && !confirm('Start something new? This canvas isn\u2019t saved (Undo brings it back).')) return;
+    freshCanvas([newLayer(kind === 'backdrop' ? 'Backdrop' : 'Layer 1')]);
+    saveKind = 'asset';
+    $('asset-type').value = kind === 'backdrop' ? 'environment' : 'prop';
+    shotStar = null;
+    startersDismissed = false;
+    savedRevision = revision; // a blank page has nothing to lose
+    setTool('pen');
+    setView('studio');
+    renderSaveKind();
+    renderStarters();
+    message('drawing-status', kind === 'backdrop'
+      ? '\u25a3 A new backdrop: where your shots happen. Draw it, or start from a scene below. Save it, then make shots in it.'
+      : '\u25c6 A new asset, in 2D. Rough is fine: \u2726 Refine in the toolbar cleans it up. Save, and AI names, describes, and tags it.');
   }
-  // Animate saves a fresh drawing as an asset so the scene can link to it. If no take is kept, that asset was never
-  // really made: delete it (only if nothing uses it) and put the drawing back exactly as it was.
-  let provisional = null;
-  async function dropProvisional(say = true) {
-    const item = provisional;
-    provisional = null;
-    if (!item) return;
-    try {
-      await api(`/api/assets/${encodeURIComponent(item.id)}`, { method: 'DELETE' });
-    } catch {
-      return; // in use, or offline: it stays, like any saved asset
+  $('new-asset').addEventListener('click', () => newCanvas('asset'));
+  $('new-backdrop').addEventListener('click', () => newCanvas('backdrop'));
+  $('go-home').addEventListener('click', () => setView('home'));
+  document.querySelector('.topbar .brand').addEventListener('click', event => { event.preventDefault(); setView('home'); });
+  const shotStarLayer = () => frames[0].find(layer => layer.asset) || null;
+  function renderCrumbs() {
+    const shot = saveKind === 'shot';
+    const backdrop = !shot && $('asset-type').value === 'environment';
+    document.body.classList.toggle('mode-shot', shot);
+    document.body.classList.toggle('making-backdrop', backdrop);
+    const star = shot ? shotStarLayer() : null;
+    const parts = [];
+    if (star) {
+      const link = el('button', 'crumb-link', `\u25c6 ${star.name}`);
+      link.type = 'button';
+      link.dataset.tip = `${star.name}|Its page: every shot it stars in, searchable.`;
+      link.addEventListener('click', () => openWhereUsed({ id: star.asset.asset_id, name: star.name }));
+      parts.push(link, el('span', 'crumb-sep', '\u203a'));
     }
-    if (layers.some(layer => layer.asset?.asset_id === item.id)) {
+    const named = $('title').value.trim();
+    const here = shot ? (editing?.kind === 'shot' ? editing.code : shotStar?.uses != null && shotStar.id === star?.asset.asset_id ? `Shot ${shotStar.uses + 1}` : 'New shot')
+      : editing?.kind === 'asset' ? `${backdrop ? '\u25a3' : '\u25c6'} ${named || 'Untitled'} \u00b7 v${editing.version}` : backdrop ? '\u25a3 New backdrop' : '\u25c6 New asset';
+    parts.push(el('b', 'crumb-here', here));
+    $('crumb-trail').replaceChildren(...parts);
+    $('shot-bar').hidden = !shot;
+    $('make-from').hidden = shot || frames.length > 1;
+    if (shot) $('picture-form').hidden = true;
+    renderShotHint();
+  }
+  function renderShotHint() {
+    if (saveKind !== 'shot') return;
+    const star = shotStarLayer();
+    $('shot-hint').hidden = !!motionDraft;
+    $('shot-hint').textContent = frames.length > 1
+      ? `\ud83c\udf9e ${(frames.length / fps).toFixed(0)} s. Space plays. \u3030 Drag another layer to move it too, then Save shot.`
+      : `\u3030 Drag ${star ? star.name : 'something you drew'} along a path: it travels your trail for ${MIN_SHOT} s.`;
+    $('scene-backdrop').disabled = !!motionDraft;
+  }
+  // A backdrop picked for the shot on screen slides under every frame (one set of strokes, shared).
+  async function applyBackdrop() {
+    if (saveKind !== 'shot' || motionDraft) return;
+    const choice = $('scene-backdrop').value;
+    try {
+      const background = await backdropLayers(choice);
+      if (frames[0].filter(layer => !layer.backdrop).length + background.length > MAX_LAYERS) throw new Error(`That backdrop has too many layers (${MAX_LAYERS} max in a shot).`);
       pushUndo();
-      restore(item.drawing);
-      editing = null;
-      savedRevision = -1;
-      setSaveKind('asset');
-      $('title').value = '';
-    }
-    loadGallery(currentQuery);
-    loadSceneBackdrops();
-    if (say) flashTray(`Nothing kept, so \u201c${item.name}\u201d stayed out of your library. Your drawing is back, as you drew it.`);
-  }
-
-  async function reviseMotion(prompt, read = readPrompt(prompt)) {
-    if (directing || makingVariations || !motionDraft || prompt.length < 3) {
-      if (prompt.length < 3) flashTray('Tell us what you want to change.', true);
-      return;
-    }
-    const draft = motionDraft;
-    const effects = withFx(draft.spec.effects, read.on, read.off);
-    const tooMuch = fxFits(draft.spec, effects);
-    if (tooMuch) { flashTray(tooMuch, true); return; }
-    const aimed = targetLayers();
-    const picks = (aimed || draft.spec.tracks.map(track => layers.find(layer => layer.id === track.layerId))).filter(Boolean);
-    if (!picks.length || (!aimed && picks.length !== draft.spec.tracks.length)) {
-      flashTray('The drawing changed. Make a new scene to include your edits.', true);
-      return;
-    }
-    const kept = draft.spec.tracks.filter(track => !picks.some(layer => layer.id === track.layerId));
-    if (kept.length + picks.length > 4) { flashTray('Four moving things at most. Pick fewer layers.', true); return; }
-    const subjects = picks.map(layer => {
-      const b = inkBounds(layer.strokes);
-      return subjectFor(layer, { x: b.x / W, y: b.y / H, w: b.w / W, h: b.h / H });
-    });
-    const before = draft.spec.tracks.filter(track => picks.some(layer => layer.id === track.layerId));
-    const previous = before.length ? { prompt: draft.spec.prompt || '', tracks: before.map(track => ({
-      subject: layers.findIndex(layer => layer.id === track.layerId), keys: track.keys
-    })) } : null;
-    directing = true;
-    setDockBusy(true);
-    pipelineStart();
-    try {
-      let result = null;
-      await streamEvents('/api/animate', JSON.stringify({
-        prompt, title: draft.spec.title || '', seconds: draft.spec.seconds, backdrop: backdropName(), subjects,
-        asset_ids: [...new Set(layers.filter(layer => layer.asset).map(layer => layer.asset.asset_id))].slice(0, 8),
-        layers: docLayers(), ...(previous ? { previous } : {})
-      }), event => {
-        if (event.type === 'step') pipelineStep(event);
-        else if (event.type === 'result') result = event;
-        else if (event.type === 'error') throw new Error(event.detail);
-      });
-      if (!result) throw new Error('The director went quiet. Your previous preview is still here.');
-      const keysFor = new Map(result.motion.tracks.map(track => [layers[track.subject]?.id, track.keys]));
-      const changed = chosenTracks((box, layer) => keysFor.get(layer.id), new Set([...keysFor.keys()].filter(Boolean)))
-        .filter(track => track.keys?.length);
-      if (!changed.length) throw new Error('Could not revise this scene. Your previous preview is still here.');
-      const tracks = [...draft.spec.tracks.map(track => changed.find(item => item.layerId === track.layerId) || track),
-        ...changed.filter(item => !draft.spec.tracks.some(track => track.layerId === item.layerId))];
-      pipelineFinish(`\u2726 Take ${takes.length + 1} is ready`);
-      const direction = `${draft.spec.prompt || ''}; ${prompt}`.replace(/^; /, '').slice(-300);
-      const who = aimed ? `${aimed.map(layer => layer.name).join(' + ')}: ` : '+ ';
-      const spec = { ...draft.spec, director: false, prompt: direction, take: `${who}${prompt}`, note: result.motion.note || '', tracks, effects };
-      const fxSaid = read.on.length || read.off.length ? ` ${fxWords(read.on, read.off).join(' ')}: by code, no AI.` : '';
-      const still = kept.length ? ` ${kept.map(track => track.name).join(', ')} untouched.` : '';
-      spec.change = `\u2726 Take ${takes.length + 1}: Gemini changed only keyframes. ${diffMotion(draft.spec, spec)}.${still}${fxSaid}${spec.note ? ` Its note: \u201c${spec.note}\u201d` : ''}`;
-      previewMotion(spec);
-      $('scene-prompt').value = '';
+      frames = frames.map(stack => [...background.map(layer => newLayer(layer.name, { visible: layer.visible, opacity: layer.opacity, backdrop: layer.backdrop, strokes: layer.strokes })),
+        ...stack.filter(layer => !layer.backdrop)]);
+      layers = frames[frameIndex];
+      if (!layers.some(layer => layer.id === activeId)) activeId = layers[layers.length - 1].id;
+      recount();
+      rebuildOnion();
+      rebuildAll();
+      renderFrames();
+      renderLayersPanel();
+      logEvent('artist', 'Backdrop', choice ? $('scene-backdrop').selectedOptions[0].textContent : 'none');
+      message('backdrop-status', '');
     } catch (error) {
-      pipelineFail(error.message);
-      flashTray(error.message, true);
-    } finally {
-      directing = false;
-      setDockBusy(false);
+      message('backdrop-status', error.message, true);
     }
   }
+  $('scene-backdrop').addEventListener('change', applyBackdrop);
+  // A shot names itself after its star: LittleFox_03 (its number among the asset's shots), else the time.
+  function shotName() {
+    const star = shotStarLayer();
+    const who = (star?.name || 'Shot').replace(/[^A-Za-z0-9]+/g, ' ').trim().split(' ').filter(Boolean)
+      .map(word => word[0].toUpperCase() + word.slice(1)).join('').slice(0, 24) || 'Shot';
+    const two = v => String(v).padStart(2, '0');
+    if (shotStar?.uses != null && star && shotStar.id === star.asset.asset_id) return `${who}_${two(shotStar.uses + 1)}`;
+    const now = new Date();
+    return `${who}_${two(now.getHours())}${two(now.getMinutes())}${two(now.getSeconds())}`;
+  }
+  // No name? One AI call names it, describes it, and tags it; the save then sends all three (no second call).
+  async function nameIt() {
+    if (offline) { message('drawing-status', 'Give it a name to keep it on this device.', true); $('title').focus(); return ''; }
+    message('drawing-status', '\u2726 AI is naming it, describing it, and tagging it\u2026');
+    try {
+      const data = await postJSON('/api/describe', JSON.stringify({ title: '', description: $('description').value.trim(), layers: docLayers() }));
+      if (!$('description').value.trim() && data.description) $('description').value = data.description;
+      if (!tags.length) data.tags.forEach(addTag);
+      const name = (data.name || titleCase(data.tags[0] || 'Untitled')).slice(0, 80);
+      $('title').value = name;
+      autoMeta = { kind: saveKind, signature: 'fresh', description: $('description').value.trim(), tags: [...tags] };
+      return name;
+    } catch (error) {
+      message('drawing-status', `${error.message} Give it a name and save again.`, true);
+      $('title').focus();
+      return '';
+    }
+  }
+  // What the art is, for "did it change since AI described it?": everything saved except the words about it.
+  const artSignature = body => JSON.stringify([body.layers, body.frames || null, body.motion || null, body.type || null]);
+  // ---------------------------------------------------------------- pictures become strokes (raster to vector, in the browser)
+  // Luminance and a threshold (dark lines; edges if the picture has none), thinned to one-pixel centerlines
+  // (Zhang-Suen, so a thick line is one stroke, not two outlines), traced into chains, and simplified
+  // (Ramer-Douglas-Peucker). Each chain keeps the color and thickness it had. Nothing leaves the device.
+  const TRACE_SIDE = 640;
+  function zhangSuen(mask, w, h) {
+    const at = (x, y) => mask[y * w + x];
+    for (let changed = true; changed;) {
+      changed = false;
+      for (const pass of [0, 1]) {
+        const drop = [];
+        for (let y = 1; y < h - 1; y++) {
+          for (let x = 1; x < w - 1; x++) {
+            if (!at(x, y)) continue;
+            const n = [at(x, y - 1), at(x + 1, y - 1), at(x + 1, y), at(x + 1, y + 1), at(x, y + 1), at(x - 1, y + 1), at(x - 1, y), at(x - 1, y - 1)];
+            const b = n.reduce((a, v) => a + v, 0);
+            if (b < 2 || b > 6) continue;
+            let a = 0;
+            for (let i = 0; i < 8; i++) if (!n[i] && n[(i + 1) % 8]) a++;
+            if (a !== 1) continue;
+            if (pass === 0 ? n[0] * n[2] * n[4] || n[2] * n[4] * n[6] : n[0] * n[2] * n[6] || n[0] * n[4] * n[6]) continue;
+            drop.push(y * w + x);
+          }
+        }
+        for (const i of drop) mask[i] = 0;
+        if (drop.length) changed = true;
+      }
+    }
+    return mask;
+  }
+  function simplifyChain(points, epsilon) {
+    if (points.length < 3) return points;
+    const [a, b] = [points[0], points[points.length - 1]];
+    const dx = b[0] - a[0], dy = b[1] - a[1], len = Math.hypot(dx, dy);
+    let far = 0, at = 0;
+    for (let i = 1; i < points.length - 1; i++) {
+      const d = len > 1e-6 ? Math.abs(dy * points[i][0] - dx * points[i][1] + b[0] * a[1] - b[1] * a[0]) / len : Math.hypot(points[i][0] - a[0], points[i][1] - a[1]);
+      if (d > far) { far = d; at = i; }
+    }
+    if (far <= epsilon) return [a, b];
+    return [...simplifyChain(points.slice(0, at + 1), epsilon).slice(0, -1), ...simplifyChain(points.slice(at), epsilon)];
+  }
+  async function pictureStrokes(blob, flags) {
+    const bitmap = await createImageBitmap(blob);
+    const k = Math.min(1, TRACE_SIDE / Math.max(bitmap.width, bitmap.height));
+    const w = Math.max(16, Math.round(bitmap.width * k)), h = Math.max(16, Math.round(bitmap.height * k));
+    const sheet = document.createElement('canvas');
+    sheet.width = w;
+    sheet.height = h;
+    const g = sheet.getContext('2d', { willReadFrequently: true });
+    g.fillStyle = '#ffffff';
+    g.fillRect(0, 0, w, h);
+    g.drawImage(bitmap, 0, 0, w, h);
+    const px = g.getImageData(0, 0, w, h).data;
+    const lum = new Float32Array(w * h);
+    for (let i = 0; i < w * h; i++) lum[i] = 0.299 * px[i * 4] + 0.587 * px[i * 4 + 1] + 0.114 * px[i * 4 + 2];
+    // Dark lines first (line art, outlines); a picture without any gets its edges instead (Sobel).
+    let mask = new Uint8Array(w * h);
+    let dark = 0;
+    for (let i = 0; i < w * h; i++) if (lum[i] < 110) { mask[i] = 1; dark++; }
+    if (dark < w * h * 0.003 || dark > w * h * 0.45) {
+      mask = new Uint8Array(w * h);
+      for (let y = 1; y < h - 1; y++) {
+        for (let x = 1; x < w - 1; x++) {
+          const L = (dx, dy) => lum[(y + dy) * w + x + dx];
+          const gx = -L(-1, -1) + L(1, -1) - 2 * L(-1, 0) + 2 * L(1, 0) - L(-1, 1) + L(1, 1);
+          const gy = -L(-1, -1) - 2 * L(0, -1) - L(1, -1) + L(-1, 1) + 2 * L(0, 1) + L(1, 1);
+          if (Math.hypot(gx, gy) > 120) mask[y * w + x] = 1;
+        }
+      }
+    }
+    for (let x = 0; x < w; x++) { mask[x] = 0; mask[(h - 1) * w + x] = 0; }
+    for (let y = 0; y < h; y++) { mask[y * w] = 0; mask[y * w + w - 1] = 0; }
+    const inkPixels = mask.reduce((a, v) => a + v, 0);
+    const skeleton = zhangSuen(mask.slice(), w, h);
+    const bonePixels = Math.max(1, skeleton.reduce((a, v) => a + v, 0));
+    const thick = clampTo(inkPixels / bonePixels, 1, 14); // average line thickness, in picture pixels
+    // Trace the centerlines into chains: from line ends, then out of every junction, then closed loops. A junction
+    // is where 3+ lines meet (3+ ink runs around the pixel; a diagonal step in a thin line is not one).
+    const N = [[0, -1], [1, -1], [1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1]]; // clockwise ring
+    const on = (x, y) => x >= 0 && y >= 0 && x < w && y < h && skeleton[y * w + x] === 1;
+    const runs = i => { const x = i % w, y = (i - x) / w; let n = 0; for (let k = 0; k < 8; k++) if (!on(x + N[k][0], y + N[k][1]) && on(x + N[(k + 1) % 8][0], y + N[(k + 1) % 8][1])) n++; return n; };
+    const kind = new Uint8Array(w * h); // 1 line, 2 end, 3 junction
+    for (let i = 0; i < w * h; i++) if (skeleton[i]) { const r = runs(i); kind[i] = r >= 3 ? 3 : r <= 1 ? 2 : 1; }
+    const seen = new Uint8Array(w * h);
+    const chains = [];
+    const walk = (from, first) => {
+      const start = from, sx = from % w, sy = (from - sx) / w;
+      const chain = [[sx, sy]];
+      let i = first;
+      for (;;) {
+        const x = i % w, y = (i - x) / w;
+        chain.push([x, y]);
+        if (kind[i] === 3) break; // into a junction: this line ends here
+        seen[i] = 1;
+        let next = -1;
+        // Touching a junction (not the one this line left from): step onto it and end there.
+        for (const [dx, dy] of N) {
+          const j = (y + dy) * w + x + dx;
+          if (on(x + dx, y + dy) && kind[j] === 3 && j !== start && !(Math.abs(x + dx - sx) <= 1 && Math.abs(y + dy - sy) <= 1 && chain.length < 4)) { next = j; break; }
+        }
+        if (next >= 0) { i = next; continue; }
+        for (const straight of [true, false]) { // prefer a side neighbor over a diagonal: no zig-zags
+          for (const [dx, dy] of N) {
+            if ((dx && dy) === straight) continue;
+            const j = (y + dy) * w + x + dx;
+            if (on(x + dx, y + dy) && !seen[j] && j !== from) { next = j; break; }
+          }
+          if (next >= 0) break;
+        }
+        if (next < 0) break;
+        from = -1;
+        i = next;
+      }
+      const [a, b] = [chain[0], chain[chain.length - 1]];
+      if (chain.length > 8 && Math.abs(a[0] - b[0]) <= 1 && Math.abs(a[1] - b[1]) <= 1) chain.push(a); // a loop closes
+      return chain;
+    };
+    const firstSteps = i => { const x = i % w, y = (i - x) / w; return N.map(([dx, dy]) => (y + dy) * w + x + dx).filter((j, k) => on(x + N[k][0], y + N[k][1]) && !seen[j] && kind[j] !== 3); };
+    for (let i = 0; i < w * h; i++) if (kind[i] === 2 && !seen[i]) { seen[i] = 1; const [j] = firstSteps(i); chains.push(j === undefined ? [[i % w, (i - i % w) / w]] : walk(i, j)); }
+    for (let i = 0; i < w * h; i++) if (kind[i] === 3) for (const j of firstSteps(i)) if (!seen[j]) chains.push(walk(i, j));
+    for (let i = 0; i < w * h; i++) if (kind[i] === 1 && !seen[i]) { seen[i] = 1; const [j] = firstSteps(i); if (j !== undefined) chains.push(walk(i, j)); }
+    // At each junction, the two chains that continue each other most straight become one stroke (a body through its
+    // shoulders stays one line; the arms branch off).
+    const heading = (chain, atEnd) => { const c = atEnd ? chain.slice().reverse() : chain; const a = c[0], b = c[Math.min(c.length - 1, 6)]; const d = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1; return [(b[0] - a[0]) / d, (b[1] - a[1]) / d]; };
+    const parts = chains.filter(chain => chain.length);
+    const tip = (c, e) => e ? parts[c][parts[c].length - 1] : parts[c][0];
+    const cells = new Map();
+    parts.forEach((chain, c) => { if (chain.length >= 6) for (const e of [0, 1]) { const [x, y] = tip(c, e), key = `${x >> 2},${y >> 2}`; cells.set(key, [...(cells.get(key) || []), [c, e]]); } });
+    const pairs = [];
+    for (const [key, here] of cells) {
+      const [cx, cy] = key.split(',').map(Number);
+      for (let gx = cx - 1; gx <= cx + 1; gx++) for (let gy = cy - 1; gy <= cy + 1; gy++) {
+        for (const [c1, e1] of here) for (const [c2, e2] of cells.get(`${gx},${gy}`) || []) {
+          if (c1 >= c2) continue;
+          const [p, q] = [tip(c1, e1), tip(c2, e2)];
+          if (Math.abs(p[0] - q[0]) > 2 || Math.abs(p[1] - q[1]) > 2) continue;
+          const [ha, hb] = [heading(parts[c1], e1), heading(parts[c2], e2)];
+          const straight = -(ha[0] * hb[0] + ha[1] * hb[1]); // 1 = they continue each other exactly
+          if (straight > 0.8) pairs.push([straight, c1, e1, c2, e2]);
+        }
+      }
+    }
+    const partner = new Map();
+    for (const [, c1, e1, c2, e2] of pairs.sort((a, b) => b[0] - a[0])) {
+      if (partner.has(`${c1},${e1}`) || partner.has(`${c2},${e2}`)) continue;
+      partner.set(`${c1},${e1}`, [c2, e2]); partner.set(`${c2},${e2}`, [c1, e1]);
+    }
+    const used = new Uint8Array(parts.length);
+    const follow = (c, e) => { // enter chain c at end e, keep going through partners
+      const line = [];
+      while (c !== undefined && !used[c]) {
+        used[c] = 1;
+        line.push(...(e ? parts[c].slice().reverse() : parts[c]));
+        [c, e] = partner.get(`${c},${1 - e}`) || [];
+      }
+      return line;
+    };
+    let lines = [];
+    parts.forEach((_, c) => { if (!used[c]) for (const e of [0, 1]) if (!used[c] && !partner.has(`${c},${e}`)) lines.push(follow(c, e)); });
+    parts.forEach((_, c) => { if (!used[c]) lines.push(follow(c, 0)); }); // rings of chains
+    const loose = ([x, y]) => kind[y * w + x] === 2;
+    lines = lines.filter(chain => chain.length >= 6 || (loose(chain[0]) && loose(chain[chain.length - 1]))) // dots (eyes) stay
+      .map(chain => chain.length > 1 ? chain : [chain[0], chain[0]]);
+    // Fit the picture onto the page (centered, 70% of its height at most), in canvas pixels.
+    const fit = Math.min(W * 0.7 / w, H * 0.7 / h), ox = (W - w * fit) / 2, oy = (H - h * fit) / 2;
+    const hex = v => v.toString(16).padStart(2, '0');
+    let epsilon = 1.2;
+    let strokes = [];
+    for (let tries = 0; tries < 5; tries++, epsilon *= 1.8) {
+      strokes = lines.map(chain => {
+        let r = 0, gg = 0, b = 0;
+        for (const [x, y] of chain) { const j = (y * w + x) * 4; r += px[j]; gg += px[j + 1]; b += px[j + 2]; }
+        const n = chain.length, color = `#${hex(Math.round(r / n))}${hex(Math.round(gg / n))}${hex(Math.round(b / n))}`;
+        return { color, width: clampTo(Math.round(thick * fit * 10) / 10, 1, 24), seq: 0, ...flags,
+          points: simplifyChain(chain, epsilon).map(([x, y]) => ({ x: r4((ox + x * fit) / W), y: r4((oy + y * fit) / H), pressure: 0.5 })) };
+      }).sort((a, b) => b.points.length - a.points.length);
+      if (countPoints(strokes) <= MAX_POINTS * 0.6) break;
+    }
+    return strokes.slice(0, Math.min(600, MAX_STROKES - allStrokes().length));
+  }
+  async function addPicture(blob, { flags, name, how }) {
+    const strokes = await pictureStrokes(blob, flags);
+    if (!strokes.length) { flashTray('No lines found in that picture. Try one with clearer outlines.', true); return; }
+    if (layers.length >= MAX_LAYERS || pointCount + countPoints(strokes) > MAX_POINTS) { flashTray('No room for that picture on this canvas.', true); return; }
+    pushUndo();
+    const blank = layers.find(layer => !layer.strokes.length && !layer.asset && !layer.backdrop);
+    const layer = blank || newLayer(name.slice(0, 40));
+    layer.strokes = strokes.map(stroke => ({ ...stroke, seq: nextSeq() }));
+    if (!blank) layers.push(layer);
+    activeId = layer.id;
+    recount();
+    rebuildAll();
+    renderLayersPanel();
+    logEvent(flags.ai ? 'ai' : 'artist', flags.ai ? 'Picture, traced' : 'Image, traced', `${how}: ${plural(strokes.length, 'stroke')}, ${countPoints(strokes).toLocaleString()} points`);
+    message('drawing-status', `\u2713 ${how}: ${plural(strokes.length, 'stroke')} you can edit. \u2726 Refine cleans it up; Save, and it\u2019s an asset.`, false, [
+      { label: '\u21b6 Undo', run: () => { undo(); message('drawing-status', 'Undone.'); } }]);
+  }
+  $('from-image').addEventListener('click', () => $('image-file').click());
+  $('image-file').addEventListener('change', async () => {
+    const file = $('image-file').files[0];
+    $('image-file').value = '';
+    if (!file) return;
+    flashTray('\u2726 Tracing your picture into strokes\u2026');
+    try { await addPicture(file, { flags: { kit: true }, name: file.name.replace(/\.\w+$/, ''), how: `Traced ${file.name}` }); }
+    catch { flashTray('That file couldn\u2019t be read as a picture.', true); }
+  });
+  $('make-picture').addEventListener('click', () => {
+    $('picture-form').hidden = !$('picture-form').hidden;
+    if (!$('picture-form').hidden) $('picture-prompt').focus();
+  });
+  $('picture-cancel').addEventListener('click', () => { $('picture-form').hidden = true; });
+  $('picture-form').addEventListener('submit', async event => {
+    event.preventDefault();
+    const prompt = $('picture-prompt').value.trim();
+    $('picture-go').disabled = true;
+    $('picture-go').textContent = '\u2726 Drawing\u2026';
+    message('drawing-status', `\u2726 AI is drawing \u201c${prompt}\u201d as line art; then it becomes strokes\u2026`);
+    try {
+      const data = await postJSON('/api/sparks/picture', JSON.stringify({ prompt }));
+      const bytes = Uint8Array.from(atob(data.image.split(',')[1]), c => c.charCodeAt(0));
+      const blob = new Blob([bytes], { type: 'image/png' });
+      await addPicture(blob, { flags: { ai: true }, name: prompt, how: `\u2726 Drawn by AI and traced` });
+      if (!$('title').value.trim()) $('title').value = titleCase(prompt.replace(/^(an?|the)\s+/i, '')).slice(0, 80);
+      $('picture-form').hidden = true;
+      $('picture-prompt').value = '';
+    } catch (error) {
+      message('drawing-status', error.message, true);
+    } finally {
+      $('picture-go').disabled = false;
+      $('picture-go').textContent = '\u2726 Draw it';
+    }
+  });
 
   // ---------------------------------------------------------------- Find similar: the drawing is the query
   function showLibrary() {
-    setFocus(false);
+    setView('home');
     document.querySelector('.library').scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
   async function findSimilar(item = null) {
@@ -3666,23 +3878,22 @@
     galleryRequest?.abort();
     const controller = new AbortController();
     galleryRequest = controller;
-    setLibraryTab('all', false);
+    resetLibrarySearch(false);
     try {
       if (asset) {
-        message('library-status', `Ranking your library against ${asset.name}\u2019s stored vector\u2026`);
+        message('library-status', `Ranking your assets against ${asset.name}\u2019s stored vector\u2026`);
         const data = await api(`/api/assets/${encodeURIComponent(asset.id)}/similar`, { signal: controller.signal });
         if (controller.signal.aborted) return;
-        renderEverything(data, { receipt: `Similar to ${data.of.name}, plus animations using it.${timingNote(data.timing)}` });
+        renderResults(data.assets, { sketch: true });
+        message('library-status', `Assets like ${data.of.name}, most similar first.${timingNote(data.timing)}`);
       } else {
         message('library-status', 'Voyage AI is embedding your drawing\u2026');
-        const ask = scope => api('/api/search/sketch', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ scope, layers: docLayers(), ...(scope === 'frame' ? { animated: true } : {}) }), signal: controller.signal });
-        const [assets, moments] = await Promise.all([ask('asset'), ask('frame')]);
+        const data = await api('/api/search/sketch', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ scope: 'asset', layers: docLayers() }), signal: controller.signal });
         if (controller.signal.aborted) return;
         const self = editing?.kind === 'asset' ? editing.id : null;
-        const timing = assets.timing && moments.timing ? { embeddings: 2, ms: Math.max(assets.timing.ms, moments.timing.ms) } : null;
-        renderEverything({ assets: assets.items.filter(hit => hit.id !== self), frames: moments.items },
-          { receipt: `\u25ce Your drawing was the search: art and scenes that look like it.${timingNote(timing)}` });
+        renderResults(data.items.filter(hit => hit.id !== self), { sketch: true });
+        message('library-status', `\u25ce Your drawing was the search: assets that look like it.${timingNote(data.timing)}`);
       }
     } catch (error) {
       if (error.name !== 'AbortError') message('library-status', error.message, true);
@@ -3729,37 +3940,8 @@
   }
   async function refineAsset(item) {
     await openAsset(item.id);
-    if (editing?.kind === 'asset' && editing.id === item.id) startRefineFlow();
+    if (editing?.kind === 'asset' && editing.id === item.id) $('refine-now').click();
   }
-  let makingVariations = false;
-  $('scene-direct').addEventListener('submit', event => {
-    event.preventDefault();
-    const prompt = $('scene-prompt').value.trim();
-    if (motionDraft) {
-      const read = readPrompt(prompt);
-      if (prompt && !read.ai && (read.on.length || read.off.length || read.tweak)) applyLocal(read);
-      else if (offline) offlineRevise(prompt, read);
-      else reviseMotion(prompt, read);
-    } else if (offline) {
-      offlineFlipbook(prompt);
-    } else {
-      const star = chosenStar();
-      if (star && revision !== savedRevision && hasInk()
-        && !confirm(`Bring ${star.name} to life in a fresh scene? Your unsaved canvas is replaced (Undo brings it back).`)) return;
-      const aimed = star ? null : targetLayers();
-      autoAnimate({ prompt, ...(star ? { asset: star } : {}), ...(aimed ? { ids: new Set(aimed.map(layer => layer.id)) } : {}) });
-    }
-  });
-  // Words in the box search by meaning; an empty box searches with the drawing itself.
-  $('dock-similar').addEventListener('click', () => {
-    const words = $('scene-prompt').value.trim();
-    if (!words) { findSimilar(); return; }
-    showLibrary();
-    setLibraryTab('all', false);
-    $('query').value = words;
-    loadGallery(words);
-  });
-
   // Drag an asset card's picture onto the canvas: it lands where you drop it (desktop).
   $('canvas-frame').addEventListener('dragover', event => {
     if (!event.dataTransfer.types.includes('application/x-inkling-asset')) return;
@@ -3801,11 +3983,23 @@
         ` \u00b7 ${spec.take || spec.label}`, el('span', 'long', ' \u00b7 your drawing hasn\'t changed'));
       tray.replaceChildren(note,
         trayButton('\u2713 Keep<span class="long"> this take</span> <kbd>\u23ce</kbd>', 'Keep \u00b7 Enter|Turns this take into editable frames. Undo brings your drawing back.', keepMotion));
-      if (spec.by === 'ai') {
-        tray.append(trayButton('\u21bb Another<span class="long"> take</span>', 'Another take|A fresh attempt. The takes you have stay right here.', () => {
-          const again = spec.director ? {} : { prompt: spec.prompt, title: spec.title, ids: new Set(spec.tracks.map(track => track.layerId)) };
-          autoAnimate({ ...again, effects: spec.effects || [], another: true });
-        }));
+      if (spec.by === 'path') {
+        const mine = pathOpts.timing === 'mine';
+        tray.append(trayButton(mine ? '\u270b Your pace' : '\u2192 Smooth', mine
+          ? 'Your pace|It travels the way your finger did: slow where you slowed, quick where you rushed. Tap for smooth.'
+          : 'Eased|It speeds up, cruises, and slows down to a stop. Tap to use your finger\u2019s own pace instead.', () => setPathOption({ timing: mine ? 'steady' : 'mine' })));
+        const focus = focusPath(spec);
+        const gaits = el('span', 'gait-chips');
+        gaits.setAttribute('role', 'group');
+        gaits.setAttribute('aria-label', `How ${focus?.layerId ? (spec.base.find(l => l.id === focus.layerId)?.name || 'it') : 'it'} moves`);
+        for (const [id, g] of Object.entries(GAITS)) {
+          const chip = trayButton(`${g.icon} ${g.name}`, `${g.name}|${{ walk: 'Steps along with a bob, faces where it goes, and leans in.', hop: 'Bounces along in arcs: squash on landing, stretch in the air.', glide: 'Smooth and steady, leaning into the curves.', fly: 'Faces where it goes, tilts nose-up to climb and down to dive, and floats.' }[id]} Free, no AI.`,
+            () => setPathOption({ gait: id }));
+          chip.classList.toggle('on', focus?.gait === id);
+          chip.setAttribute('aria-pressed', String(focus?.gait === id));
+          gaits.append(chip);
+        }
+        tray.append(gaits);
       }
       tray.append(compareButton(), trayButton('\u27e8/\u27e9 Code', 'Edit as code|This take is p5.js code: keyframes as numbers you can change. Opens in the Lab.', () => openTakeAsCode()),
         trayButton('Discard <kbd>Esc</kbd>', 'Discard \u00b7 Esc|Close the preview. Your drawing stays exactly as it was.', () => {
@@ -3859,7 +4053,7 @@
       note.className = 'tray-note pending';
       const sketching = sparks.find(spark => spark.status === 'pending' && spark.kind === 'sketch');
       const refining = sparks.find(spark => spark.status === 'pending' && spark.kind === 'refine');
-      note.textContent = refining && pending === 1 ? `\u2726 Refining: "${refining.prompt}"\u2026`
+      note.textContent = refining && pending === 1 ? (refining.prompt === QUICK_REFINE ? '\u2726 Refining your lines\u2026 keep drawing' : `\u2726 Refining: "${refining.prompt}"\u2026`)
         : sketching && pending === 1 ? `\u2726 Sketching "${sketching.prompt}" in blue pencil\u2026 keep drawing`
         : `\u2726 AI is on it${pending > 1 ? ` (${pending})` : ''}\u2026 keep drawing`;
       tray.append(note);
@@ -3880,7 +4074,6 @@
   }
   // Who the box talks to: everything that can move (the default), or the layers you pick. Words only reach those.
   function targetable() {
-    if (!motionDraft && chosenStar()) return [];
     const stack = motionDraft ? motionDraft.spec.base : layers;
     return stack.filter(layer => layer.visible && !layer.fx && hasInk([layer]) && !isScenery(layer));
   }
@@ -3892,8 +4085,6 @@
   function setTargets(next) {
     targets = next && next.size ? next : null;
     glowTargets();
-    renderWho();
-    renderReading();
   }
   function followSelection(id, add) {
     if (targetable().length < 2) return;
@@ -3905,9 +4096,9 @@
     clearTimeout(glowTargets.timer);
     glowTargets.timer = setTimeout(() => { if (!motionDraft) renderOverlay(); }, ms + 40);
   }
-  function paintTargetGlow(stack, k) {
-    if (performance.now() > targetGlow) return;
-    const aimed = targetLayers() || targetable();
+  function paintTargetGlow(stack, k, force = false) {
+    if (!force && performance.now() > targetGlow) return;
+    const aimed = force ? stack : targetLayers() || targetable();
     if (!aimed.length) return;
     const names = new Set(aimed.map(layer => layer.name)), ids = new Set(aimed.map(layer => layer.id));
     octx.save();
@@ -3930,91 +4121,17 @@
     }
     octx.restore();
   }
-  function layerChipThumb(layer) {
-    const thumb = document.createElement('canvas');
-    const size = 26, dpr = Math.min(2, window.devicePixelRatio || 1);
-    thumb.width = thumb.height = size * dpr;
-    const b = inkBounds(layer.strokes);
-    const source = layerCanvas(layer.id), k = source.width / W, side = Math.max(b.w, b.h) + 16;
-    thumb.getContext('2d').drawImage(source, (b.x + b.w / 2 - side / 2) * k, (b.y + b.h / 2 - side / 2) * k, side * k, side * k, 0, 0, thumb.width, thumb.height);
-    return thumb;
-  }
-  function renderWho() {
-    const row = $('scene-who');
-    const can = targetable();
-    if (can.length < 2) { row.hidden = true; row.replaceChildren(); return; }
-    if (targets && !can.some(layer => targets.has(layer.id))) targets = null;
-    const busyNow = document.querySelector('.scene-maker').classList.contains('busy');
-    const chip = (pressed, tip, run, ...content) => {
-      const button = el('button', `who-chip${pressed ? ' on' : ''}`);
-      button.type = 'button';
-      button.setAttribute('aria-pressed', String(pressed));
-      button.dataset.tip = tip;
-      button.disabled = busyNow;
-      button.append(...content);
-      button.addEventListener('click', run);
-      button.addEventListener('pointerenter', () => glowTargets(900));
-      return button;
-    };
-    row.replaceChildren(el('small', '', 'Talk to'),
-      chip(!targets, 'Everything|Your words reach everything that can move.', () => setTargets(null), el('span', '', 'Everything')),
-      ...can.map(layer => chip(!!targets?.has(layer.id), `${layer.name}|Aim your words at this layer only. Pick up to four. Tip: grab it on the canvas (Shift adds).`,
-        () => {
-          const next = new Set(targets || []);
-          if (next.has(layer.id)) next.delete(layer.id);
-          else if (next.size < 4) next.add(layer.id);
-          setTargets(next);
-        }, layerChipThumb(layer), el('span', '', layer.name))));
-    row.hidden = false;
-  }
-  $('scene-prompt').addEventListener('focus', () => glowTargets(2200));
-  $('scene-star').addEventListener('change', () => { renderWho(); renderReading(); });
-
-  // Before anything runs, the box says how it reads your words: what is free code, and what goes to Gemini.
-  function renderReading() {
-    const box = $('scene-read');
-    const text = $('scene-prompt').value.trim();
-    const revising = revisingMode();
-    const busyNow = document.querySelector('.scene-maker').classList.contains('busy');
-    if (revising === 'art' && !busyNow) $('dock-animate').textContent = '\u2726 Change it';
-    if (text.length < 3 || busyNow) { box.hidden = true; return; }
-    const read = readPrompt(text);
-    if (!revising && read.tweak) { read.ai = true; read.tweak = null; } // nothing to tweak yet: it's direction
-    if (!revising) read.off = [];
-    const aimed = targetLayers();
-    const who = aimed ? aimed.map(layer => layer.name) : revising ? motionDraft.spec.tracks.map(track => track.name) : [chosenStar()?.name || 'your drawing'];
-    const names = who.length > 1 ? `${who.slice(0, -1).join(', ')} and ${who[who.length - 1]}` : who[0];
-    const part = (kind, label, detail) => { const span = el('span', `read-part ${kind}`); span.append(el('b', '', label), ` ${detail}`); return span; };
-    const parts = [
-      ...read.on.map(fx => part('free', `${fx.icon} ${fx.name}`, 'effect layer \u00b7 free \u00b7 no AI')),
-      ...read.off.map(fx => part('free', `\u2212 ${fx.icon} ${fx.name}`, 'removed \u00b7 free')),
-      ...(read.tweak ? [part('free', read.tweak.label, `${read.tweak.say}${read.tweak.clock ? ' (whole scene)' : ` for ${aimed ? 'NAMES' : 'everything'}`} \u00b7 free`)] : [])
-    ];
-    parts.forEach(item => { item.lastChild.textContent = item.lastChild.textContent.replace('NAMES', names); });
-    if (offline && (read.ai || !revising)) {
-      const move = offlineMove(text);
-      parts.push(part('free', `${move.icon} ${move.name}`, `a quick move for ${names} \u00b7 offline, plain math`));
-    } else if (read.ai) parts.push(part('ai', '\u2726 Gemini', `new keyframes for ${names} only (move, turn, squash)`));
-    else if (!revising) parts.push(part('ai', '\u2726 Gemini', `picks a motion for ${names}`));
-    if (read.warn) parts.push(part('warn', '\u26a0', `Flipbook only moves what\u2019s drawn. Draw the new thing first, then it can move.`));
-    box.replaceChildren(el('small', '', revising ? 'This will' : 'Flipbook reads'), ...parts);
-    box.hidden = false;
-    if (revising === 'art' && (!read.ai || offline)) $('dock-animate').textContent = '\u26a1 Apply \u00b7 free';
-  }
-  $('scene-prompt').addEventListener('input', renderReading);
   function renderFxChips() {
     const row = $('scene-fx');
     const spec = motionDraft ? motionDraft.spec : null;
     row.hidden = !spec;
     if (!spec) { row.replaceChildren(); return; }
     const on = new Set(spec.effects || []);
-    const busyNow = document.querySelector('.scene-maker').classList.contains('busy');
     const chip = (label, pressed, tip, run) => {
       const button = el('button', `fx-chip${pressed ? ' on' : ''}`, label);
       button.type = 'button';
       if (pressed !== null) button.setAttribute('aria-pressed', String(pressed));
       button.dataset.tip = tip;
-      button.disabled = busyNow;
       button.addEventListener('click', run);
       return button;
     };
@@ -4028,8 +4145,8 @@
   }
   // Effects and tweaks: a new take in an instant, computed right here. Gemini isn't asked.
   function applyLocal({ on = [], off = [], tweak = null }) {
-    if (!motionDraft || directing) return false;
-    const from = motionDraft.spec;
+    if (!motionDraft) return false;
+    const from = directedTake();
     const effects = withFx(from.effects, on, off);
     const tooMuch = fxFits(from, effects);
     if (tooMuch) { flashTray(tooMuch, true); return false; }
@@ -4050,9 +4167,7 @@
       on.length ? 'An effect is a layer of tiny strokes drawn by code, the same every time.' : '',
       tweak ? `${tweak.say[0].toUpperCase()}${tweak.say.slice(1)}${timing}.` : 'Your keyframes didn\u2019t change.'
     ].filter(Boolean).join(' ')}`;
-    $('scene-prompt').value = '';
     previewMotion(spec);
-    renderReading();
     return true;
   }
   // The takes strip under the box: every attempt, side by side. Tap one to see it; changes build on the one you see.
@@ -4064,7 +4179,7 @@
   }
   function renderTakes() {
     const strip = $('takes');
-    const list = motionDraft || directing ? takes : [];
+    const list = motionDraft ? takes : [];
     const chips = list.map((item, i) => {
       const active = i === takeAt;
       const label = item.take || item.label;
@@ -4075,9 +4190,8 @@
       chip.addEventListener('click', () => showTake(i));
       return chip;
     });
-    if (directing && (list.length || motionDraft)) chips.push(Object.assign(el('span', 'take pending'), { textContent: `Take ${list.length + 1}\u2026` }));
     strip.replaceChildren(...(chips.length ? [el('small', '', 'Takes'), ...chips] : []));
-    strip.hidden = !chips.length || (list.length < 2 && !directing);
+    strip.hidden = list.length < 2;
     // Scroll only when the current take is out of view, so the strip's label stays put whenever it can.
     const current = strip.querySelector('.take.active, .take.pending');
     if (current && !strip.hidden) {
@@ -4116,9 +4230,6 @@
     } else if (event.key === '?') {
       event.preventDefault();
       $('help').showModal();
-    } else if (!mod && !event.altKey && key === 'w' && !busy()) {
-      event.preventDefault();
-      $('nudge').hidden ? openNudge() : closeNudge();
     } else if (!mod && !event.altKey && TOOL_KEYS[key] && !busy()) {
       event.preventDefault();
       closePopover();
@@ -4147,9 +4258,6 @@
     } else if (motionDraft && (event.key === 'Enter' || event.key === 'Escape') && !event.target.closest?.('button, a, [role="button"]')) {
       event.preventDefault();
       event.key === 'Enter' ? keepMotion() : skipMotion();
-    } else if (!mod && key === 'a' && !busy()) {
-      event.preventDefault();
-      autoAnimate();
     } else if (event.key === 'Enter' && activeSpark() && !event.target.closest?.('button, a, [role="button"]')) {
       // Focused controls (Dismiss, Save, library cards) keep their own Enter behavior.
       event.preventDefault();
@@ -4209,22 +4317,23 @@
   $('tag-input').addEventListener('blur', event => { if (event.target.value.trim() && addTag(event.target.value)) event.target.value = ''; });
   $('suggest-tags').addEventListener('click', async () => {
     if (!hasInk()) {
-      message('drawing-status', 'Draw something on a visible layer first, then ask for tags.', true);
+      message('drawing-status', 'Draw something on a visible layer first, then AI can describe it.', true);
       return;
     }
     const button = $('suggest-tags');
     button.disabled = true;
-    button.textContent = '\u2726 Suggesting\u2026';
+    button.textContent = '\u2726 Writing\u2026';
     try {
-      const body = JSON.stringify({ title: $('title').value.trim(), description: $('description').value.trim(), layers: docLayers() });
-      const data = await postJSON('/api/tags/suggest', body);
+      const body = JSON.stringify({ title: $('title').value.trim().slice(0, 120), description: $('description').value.trim(), layers: docLayers() });
+      const data = await postJSON('/api/describe', body);
+      if (!$('description').value.trim() && data.description) { $('description').value = data.description; revision++; }
       data.tags.forEach(addTag);
-      message('drawing-status', 'Suggested tags added. Remove any that do not fit.');
+      message('drawing-status', 'AI wrote a description and tags from your drawing. Change anything; it\u2019s how you\u2019ll find it.');
     } catch (error) {
       message('drawing-status', error.message, true);
     } finally {
       button.disabled = false;
-      button.textContent = '\u2726 Suggest';
+      button.textContent = '\u2726 Write them';
     }
   });
 
@@ -4232,12 +4341,11 @@
   const CODE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,39}$/;
   const TYPE_LABELS = { character: 'Character', prop: 'Prop', environment: 'Backdrop', fx: 'Effect', other: 'Other' };
   const typeLabel = type => TYPE_LABELS[type] || type;
-  const STATUS_LABELS = { todo: 'To do', in_progress: 'In progress', review: 'In review', approved: 'Approved' };
   const KIND_TEXT = {
-    asset: { label: 'Name', placeholder: 'Red Rocket', save: 'Save asset',
-      hint: 'Draw an asset or backdrop. Reuse it anywhere.' },
-    shot: { label: 'Scene name', placeholder: 'Rocket takeoff', save: 'Save scene',
-      hint: 'Save your animation to find it again.' },
+    asset: { label: 'Name', placeholder: 'Leave blank: AI names it', save: 'Save',
+      hint: 'AI describes and tags it on save, so you can find it by words.' },
+    shot: { label: 'Shot name', placeholder: 'Names itself, e.g. LittleFox_03', save: 'Save shot',
+      hint: 'It shows up on the page of every asset in it, searchable by what happens.' },
     idea: { label: 'Name', placeholder: 'Chase scene thumbnail', save: 'Save idea',
       hint: 'A loose idea to find later by describing it. <i>e.g. "that moody forest".</i>' }
   };
@@ -4270,14 +4378,16 @@
     // An animated scene is one tap from a link: unsaved, the button saves first.
     const savedScene = editing && editing.kind === 'shot';
     $('share-open').hidden = !(saveKind === 'shot' && (savedScene || frames.length > 1));
-    $('share-open').textContent = savedScene ? '\ud83d\udd17 Share this scene' : '\ud83d\udd17 Save & share';
+    $('share-open').textContent = savedScene ? '\ud83d\udd17 Share this shot' : '\ud83d\udd17 Save & share';
     const placed = [...new Map(frames.flat().filter(layer => layer.asset).map(layer => [layer.asset.asset_id, layer])).values()];
     $('shot-links').textContent = placed.length
-      ? `\u25c6 In this scene: ${placed.map(layer => `${layer.name} v${layer.asset.version}`).join(', ')}`
+      ? `\u25c6 In this shot: ${placed.map(layer => `${layer.name} v${layer.asset.version}`).join(', ')}`
         + (frames.length > 1 ? ` \u00b7 \ud83c\udf9e ${frames.length} frames at ${fps} fps` : '')
       : 'Tip: open Assets below and tap \u25c6 Place to add one.';
+    renderCrumbs();
   }
   document.querySelectorAll('.kind-switch button').forEach(b => b.addEventListener('click', () => setSaveKind(b.dataset.kind)));
+  $('asset-type').addEventListener('change', renderCrumbs);
   // A field that needs attention can't hide inside a closed panel.
   $('save-form').addEventListener('invalid', () => { $('save-card').open = true; }, true);
   $('save-new').addEventListener('click', () => {
@@ -4294,13 +4404,17 @@
     return CODE.test(code) ? code : `Scene_${String(stamp.getHours()).padStart(2, '0')}${String(stamp.getMinutes()).padStart(2, '0')}`;
   }
   function savePayload(name) {
-    if (frames.length > 1 && saveKind !== 'shot') throw new Error('Frames are saved with scenes. Choose \u25a3 Scene, or delete the extra frames.');
+    // Frames, or placed assets, make it a shot: no need to ask (and the name you typed stays).
+    if (saveKind === 'asset' && (frames.length > 1 || layers.some(layer => layer.asset))) {
+      if (editing?.kind === 'asset') editing = null;
+      saveKind = 'shot';
+      renderSaveKind();
+    }
     const base = { description: $('description').value.trim(), layers: docStack(frames[0]), tags };
     if (saveKind === 'idea') return { path: '/api/drawings', method: 'POST', body: { title: name, ...base } };
     const updating = editing && editing.kind === saveKind;
     const history = pendingEvents();
     if (saveKind === 'asset') {
-      if (layers.some(layer => layer.asset)) throw new Error('This has placed assets in it, so save it as a Scene.');
       return { path: updating ? `/api/assets/${editing.id}` : '/api/assets', method: updating ? 'PUT' : 'POST', history,
         body: { name, type: $('asset-type').value, ...base, history, ...(pendingOrigin && !updating ? { origin: pendingOrigin } : {}) } };
     }
@@ -4354,24 +4468,32 @@
     event.preventDefault();
     const wantShare = shareAfterSave; // one-shot: any early return below drops it
     shareAfterSave = false;
-    const name = $('title').value.trim();
-    if (!name) {
-      message('drawing-status', `Add a ${KIND_TEXT[saveKind].label.toLowerCase()} before saving.`, true);
-      $('title').focus();
-      return;
-    }
     if (!hasInk(frames[0]) || busy()) {
       message('drawing-status', frames.length > 1 ? 'Frame 1 needs some ink on a visible layer before saving.'
         : 'Draw something on a visible layer before saving.', true);
       return;
     }
     if ($('tag-input').value.trim() && addTag($('tag-input').value)) $('tag-input').value = '';
+    let name = $('title').value.trim();
+    if (!name) {
+      // No name? AI names it (with its description and tags, in the same call), or a shot names itself.
+      name = saveKind === 'shot' ? shotName() : await nameIt();
+      if (!name) return;
+      $('title').value = name;
+    }
     let request;
     try {
       request = savePayload(name);
     } catch (error) {
       message('drawing-status', error.message, true);
       return;
+    }
+    // AI wrote the description and tags of the last save, and the art (or motion) changed since: write them again.
+    const signature = artSignature(request.body);
+    if (autoMeta && autoMeta.kind === saveKind && autoMeta.signature !== 'fresh' && signature !== autoMeta.signature && request.body.description === autoMeta.description
+      && request.body.tags.join('|') === autoMeta.tags.join('|')) {
+      request.body.description = '';
+      request.body.tags = [];
     }
     const kind = saveKind;
     const payload = JSON.stringify(request.body);
@@ -4387,8 +4509,8 @@
     }
     skipDuplicateCheck = false;
     const savingRevision = revision;
-    message('drawing-status', kind === 'shot' ? 'Saving the scene. Voyage indexes each layer...'
-      : tags.length ? 'Saving. Voyage embeds it into Atlas...' : 'Saving. AI tags it, Voyage embeds it into Atlas...');
+    const auto = !request.body.tags.length || !request.body.description;
+    message('drawing-status', `Saving.${auto ? ' AI describes and tags it,' : ''} Voyage embeds it into Atlas...`);
     try {
       const saved = await api(request.path, { method: request.method, headers: { 'Content-Type': 'application/json' }, body: payload });
       savedRevision = savingRevision;
@@ -4406,9 +4528,13 @@
       if (saved.tags_status === 'auto' && revision === savingRevision) {
         tags = [...saved.tags];
         renderTagChips();
+        if (saved.description && (!$('description').value.trim() || $('description').value.trim() === autoMeta?.description)) $('description').value = saved.description;
       }
-      const note = saved.tags_status === 'auto' ? ` Auto-tagged: ${saved.tags.join(', ')}.`
-        : saved.tags_status === 'unavailable' ? ' Auto-tags were unavailable this time.' : '';
+      // Remember what AI wrote, so a later change to the art can have it rewritten (what the artist typed is never touched).
+      autoMeta = saved.tags_status === 'auto' ? { kind, signature, description: $('description').value.trim(), tags: [...tags] }
+        : saved.tags_status === 'provided' && autoMeta?.kind === kind && $('description').value.trim() === autoMeta.description ? { ...autoMeta, signature } : null;
+      const note = saved.tags_status === 'auto' ? ` AI described it${saved.description ? `: \u201c${saved.description}\u201d` : ''} \u00b7 #${(saved.tags || []).slice(0, 5).join(' #')}.`
+        : saved.tags_status === 'unavailable' ? ' AI couldn\u2019t describe it this time; add words in Description & tags.' : '';
       if (kind === 'asset') {
         editing = { kind, id: saved.id, version: saved.version };
         loadSceneBackdrops();
@@ -4417,30 +4543,37 @@
           pendingVary = null;
           openVariations({ ...saved, type: saved.type || $('asset-type').value, tags: saved.tags || tags }, goal);
         }
-        message('drawing-status', `Saved "${saved.name}" v${saved.version}.${note} Next:`, false, [
-          { label: '\ud83c\udf9e Flipbook it', tip: 'Flipbook|AI choreographs your own strokes, frame by frame.', run: () => autoAnimate({ asset: saved }) },
-          { label: '\u25ce Find similar', tip: 'Find similar|Look-alikes, ranked by the vector Voyage just stored: no new embedding.', run: () => findSimilar(saved) },
-          { label: '\u2726 Make variations', tip: 'Variations|Lookalikes for a crowd or a battle, made by editing your strokes.', run: () => openVariations(saved) },
-          { label: 'Where is it used?', run: () => openWhereUsed(saved) }
+        const savedItem = { ...saved, type: saved.type || $('asset-type').value, ...(request.method === 'POST' ? { uses: 0 } : {}) };
+        const backdrop = savedItem.type === 'environment';
+        message('drawing-status', `\u2713 Saved ${backdrop ? '\u25a3' : '\u25c6'} ${saved.name} v${saved.version}.${note} Next:`, false, backdrop ? [
+          { label: '\u25c6 Pick an asset for a shot here', tip: `Shots in ${saved.name}|It\u2019s now the backdrop for your next shot. Pick who stars in it.`, run: () => { castInScene(savedItem); setView('home'); } },
+          { label: '+ New backdrop', run: () => newCanvas('backdrop') },
+          { label: '+ New asset', run: () => newCanvas('asset') }
+        ] : [
+          { label: '\u3030 Make a shot with it', tip: `New shot|A fresh ${MIN_SHOT}-second shot starring it, with the Path tool ready.`, run: () => castInScene(savedItem) },
+          { label: '+ New asset', run: () => newCanvas('asset') },
+          { label: '\u25c6 Its page', tip: 'Its page|Description, tags, and every shot it stars in.', run: () => openWhereUsed(savedItem) }
         ]);
       } else if (kind === 'shot') {
         editing = { kind, id: saved.id, code: saved.code };
         if (wantShare) setTimeout(openShare);
         const first = saved.assets?.[0];
-        // The magic moment, said plainly: saving is embedding (Voyage multimodal for picture and story; Atlas Automated Embedding for code).
-        const hasCode = !!sceneSketch && frames.length > 1;
-        message('drawing-status', `\u2713 Saved ${saved.code || 'your scene'}. Embedded on save: its picture, story${hasCode ? ', and code' : ''}. Find it by words, a sketch${hasCode ? ', or code' : ''}.${note}${saved.assets?.length ? ` Linked to ${saved.assets.map(a => `"${a.name}"`).join(', ')}.` : ''}`, false,
-          frames.length > 1 ? [{ label: '\ud83d\udd17 Share it', tip: 'Share|A public link: your scene as a looping GIF, with how it moves explained.', run: () => openShare() },
-            ...(hasCode && !offline ? [{ label: '\u25ce Similar code', tip: 'Similar code|Scenes in your library whose code moves alike.', run: () => { openLab(); setTimeout(() => $('lab-similar').click(), 700); } }] : [])]
-            : first ? [{ label: `Where else is "${first.name}" used?`, run: () => openWhereUsed({ id: first.id, name: first.name }) }]
-            : [{ label: '\u25c6 Place an asset', tip: 'Place an asset|Opens Assets. Tap Place, then drag a box on the canvas.', run: () => goPlace() }]);
+        // The magic moment, said plainly: saving is embedding, and a shot is found from the assets in it.
+        const names = (saved.assets || []).map(a => a.name);
+        if (first && shotStar?.id === first.id && request.method === 'POST') shotStar = { ...shotStar, uses: (shotStar.uses ?? 0) + 1 };
+        message('drawing-status', `\u2713 Saved ${saved.code || 'your shot'}.${note}${names.length ? ` It\u2019s on ${names.join(' and ')}\u2019s page, searchable by what happens.` : ''}`, false,
+          [...(first ? [{ label: '\u3030 Another shot', tip: `Another shot|${first.name} again, on a fresh ${MIN_SHOT}-second canvas, same backdrop. Drag a new path.`, run: () => castInScene({ id: first.id, name: first.name, uses: shotStar?.id === first.id ? shotStar.uses : undefined }) },
+            { label: `\u25c6 ${first.name}`, tip: `${first.name}|Its page: every shot it stars in, searchable.`, run: () => openWhereUsed({ id: first.id, name: first.name }) }] : []),
+            ...(frames.length > 1 ? [{ label: '\ud83c\udf9e Flipbook', tip: FLIPBOOK_TIP, run: () => openFlipbook(saved.id) },
+              { label: '\ud83d\udd17 Share it', tip: 'Share|A public link: your shot as a looping GIF, with how it moves explained.', run: () => openShare() }] : []),
+            { label: '\u2190 Your assets', run: () => setView('home') }]);
       } else {
         message('drawing-status', `Idea saved.${note} Find it later by describing it.`, false, [
           { label: '\u25c6 Make it an asset', tip: 'Make it an asset|Assets can be placed in scenes, and always know where they\'re used.', run: () => { setSaveKind('asset'); $('save-form').scrollIntoView({ behavior: 'smooth', block: 'center' }); $('title').focus({ preventScroll: true }); } }
         ]);
       }
       renderSaveKind();
-      await Promise.all([loadGallery(currentQuery), loadTags()]);
+      await loadGallery(currentQuery);
     } catch (error) {
       message('drawing-status', `${error.message} Your work is still on the canvas.`, true);
     } finally {
@@ -4461,7 +4594,7 @@
       stopPlay();
       frames = expandRecord(record).map(stack => stack.map(layer => newLayer(layer.name, {
         visible: layer.visible, opacity: layer.opacity, strokes: layer.strokes, asset: layer.asset || null, backdrop: layer.backdrop || null,
-        ...(layer.xf ? { xf: layer.xf, xfBase: layer.xfBase, xfStrokes: layer.xfStrokes } : {})
+        ...(layer.xf ? { xf: layer.xf, bend: layer.bend, xfBase: layer.xfBase, xfStrokes: layer.xfStrokes } : {})
       })));
       sceneMotion = record.motion || null;
       sceneSketch = record.sketch || null;
@@ -4494,20 +4627,17 @@
       renderFrames();
       renderOverlay();
       renderTray();
+      autoMeta = null;
+      keptPaths = null;
+      shotStar = null;
+      setView('studio');
       renderSaveKind();
       message('drawing-status', note);
-      canvas.scrollIntoView({ behavior: 'smooth', block: 'center' });
     } catch (error) {
       message('drawing-status', error.message, true);
     }
   }
   const layerCount = () => `${layers.length} layer${layers.length === 1 ? '' : 's'}`;
-  const openDrawing = id => openRecord(`/api/drawings/${encodeURIComponent(id)}`, record => {
-    editing = null;
-    saveKind = 'idea';
-    $('title').value = record.title;
-    return `Opened with ${layerCount()}. Edit freely; saving creates a new copy.`;
-  });
   const openAsset = id => openRecord(`/api/assets/${encodeURIComponent(id)}`, record => {
     editing = { kind: 'asset', id: record.id, version: record.version };
     saveKind = 'asset';
@@ -4528,30 +4658,13 @@
   });
 
   // ---------------------------------------------------------------- library tabs
-  const TAB_TEXT = {
-    all: { placeholder: 'Describe anything\u2026', noun: 'results' },
-    asset: { placeholder: 'Describe an asset\u2026', noun: 'assets' },
-    backdrop: { placeholder: 'Describe a backdrop\u2026', noun: 'backdrops' },
-    frame: { placeholder: 'Describe how it moves\u2026', noun: 'animated scenes' },
-    shot: { placeholder: 'Describe a scene\u2026', noun: 'scenes' },
-    idea: { placeholder: 'Describe an idea\u2026', noun: 'ideas' }
-  };
-  let libraryTab = 'all';
-  let shotStatus = '';
-  function setLibraryTab(tab, load = true) {
-    libraryTab = tab;
-    document.querySelectorAll('.library-tabs [role="tab"]').forEach(t => t.setAttribute('aria-selected', String(t.dataset.tab === tab)));
-    $('tag-filters').hidden = tab !== 'idea';
-    $('status-filters').hidden = tab !== 'shot';
-    $('frame-filters').hidden = true;
-    $('asset-filters').hidden = true;
-    $('query').placeholder = TAB_TEXT[tab].placeholder;
+  function resetLibrarySearch(load = true) {
     $('query').value = '';
     currentQuery = '';
     if (load) loadGallery();
   }
   // Searches that show off meaning, not keywords: none of these words need to be in a name or a tag.
-  const SEARCH_HINTS = ['a spaceship', 'a cute animal', 'something broken', 'the moment it leaves the ground'];
+  const SEARCH_HINTS = ['a spaceship', 'a cute animal', 'something broken', 'something that flies'];
   function renderSearchHints() {
     $('search-hints').replaceChildren(el('small', '', 'Try'), ...SEARCH_HINTS.map(hint => {
       const chip = el('button', 'example', hint);
@@ -4562,45 +4675,6 @@
       });
       return chip;
     }));
-  }
-  document.querySelectorAll('.library-tabs [role="tab"]').forEach(t => t.addEventListener('click', () => setLibraryTab(t.dataset.tab)));
-
-  function renderStatusFilters() {
-    const options = [['', 'All'], ['open', 'Not approved'], ...Object.entries(STATUS_LABELS)];
-    $('status-filters').replaceChildren(...options.map(([value, label]) => {
-      const chip = document.createElement('button');
-      chip.type = 'button';
-      chip.className = 'filter-chip';
-      chip.textContent = label;
-      chip.setAttribute('aria-pressed', String(value === shotStatus));
-      chip.addEventListener('click', () => { shotStatus = value; renderStatusFilters(); loadGallery(currentQuery); });
-      return chip;
-    }));
-  }
-
-  async function loadTags() {
-    try {
-      const data = await api('/api/tags');
-      if (activeTag && !data.items.some(item => item.tag === activeTag)) data.items.unshift({ tag: activeTag, count: 0 });
-      $('tag-filters').replaceChildren(...data.items.map(({ tag, count }) => {
-        const chip = document.createElement('button');
-        chip.type = 'button';
-        chip.className = 'filter-chip';
-        chip.setAttribute('aria-pressed', String(tag === activeTag));
-        chip.textContent = `#${tag}`;
-        const badge = document.createElement('span');
-        badge.textContent = count;
-        chip.append(badge);
-        chip.addEventListener('click', () => {
-          activeTag = activeTag === tag ? null : tag;
-          loadTags();
-          loadGallery(currentQuery);
-        });
-        return chip;
-      }));
-    } catch {
-      $('tag-filters').replaceChildren();
-    }
   }
 
   const el = (tag, className, text) => {
@@ -4621,202 +4695,42 @@
     button.addEventListener('click', onOpen);
     return button;
   }
-  function ideaCard(item, query) {
-    const card = el('button', 'card');
-    card.type = 'button';
-    card.setAttribute('aria-label', `Open ${item.title}`);
-    const image = el('img');
-    image.src = item.image_url;
-    image.alt = item.title;
-    image.loading = 'lazy';
-    const text = el('span', 'card-text');
-    text.append(el('strong', '', item.title),
-      el('small', '', (item.tags || []).slice(0, 4).map(tag => `#${tag}`).join(' ') || (query ? 'Semantic match' : 'Saved idea')));
-    card.append(image, text);
-    card.addEventListener('click', () => openDrawing(item.id));
-    return card;
-  }
   function assetCard(item) {
     const card = el('div', 'card asset-card');
     const text = el('span', 'card-text');
+    const uses = item.uses ?? 0;
     text.append(el('strong', '', item.name),
-      el('small', '', `${typeLabel(item.type)} \u00b7 v${item.version} \u00b7 in ${item.uses ?? 0} scene${item.uses === 1 ? '' : 's'}`));
+      el('small', '', `${typeLabel(item.type)} \u00b7 ${uses ? `in ${plural(uses, 'shot')}` : 'no shots yet'}`));
+    if (item.description) text.append(el('small', 'asset-card-about', item.description));
+    if (item.tags?.length) text.append(el('small', 'asset-card-tags', item.tags.slice(0, 5).map(tag => `#${tag}`).join(' ')));
+    if (item.score != null) text.append(el('small', 'score-line', `similarity ${item.score.toFixed(2)}`));
     const actions = el('div', 'card-actions');
     const backdrop = item.type === 'environment';
-    const animateIt = actionButton(backdrop ? '\u2726 Use as backdrop' : '\ud83c\udf9e Animate it', 'primary-mini',
-      backdrop ? 'Use as backdrop|Sets the scene for your next flipbook.' : 'Animate it|Stars it in your next flipbook.',
-      () => castInScene(item));
-    const similar = actionButton('\u25ce Similar', '', 'Find similar|Look-alikes ranked by its stored Voyage AI vector in Atlas: no new embedding.', () => findSimilar(item));
-    const more = el('details', 'card-more');
-    more.append(el('summary', '', 'More'));
-    const refine = el('button', 'link-button', 'Refine');
-    refine.type = 'button';
-    refine.dataset.tip = 'Refine with AI|Opens it with AI suggestions for what it could use next. You keep or skip.';
-    refine.addEventListener('click', () => refineAsset(item));
-    const where = el('button', 'link-button', 'Where used?');
-    where.type = 'button';
-    where.dataset.tip = 'Where is it used?|Every scene using it, which are outdated, and look-alikes.';
-    where.addEventListener('click', () => openWhereUsed(item));
-    const edit = el('button', 'link-button', 'Edit');
-    edit.type = 'button';
-    edit.dataset.tip = 'Edit|Opens it on the canvas. Saving makes a new version; scenes using older ones get flagged.';
-    edit.addEventListener('click', () => openAsset(item.id));
-    const vary = el('button', 'link-button', 'Variations');
-    vary.type = 'button';
-    vary.dataset.tip = 'Variations|Need 9 of these for a battle? Plan lookalikes, AI edits your strokes, you keep and finish them.';
-    vary.addEventListener('click', () => openVariations(item));
-    if (item.origin) text.append(el('small', 'lineage', `\u2726 variant of ${item.origin.name}`));
-    if (item.stats) {
-      const made = el('small', 'made-line');
-      made.dataset.tip = `Art math|${plural(item.stats.strokes, 'stroke')}, ${shortNumber(item.stats.ink_px || 0)} px of line, ${duration(item.stats.draw_ms || 0)} with the pencil down.`;
-      made.append(`\u270d ${Math.round(item.stats.hand_share * 100)}% hand`);
-      for (const color of (item.stats.palette || []).slice(0, 5)) {
-        const dot = el('span', 'mini-dot');
-        dot.style.background = color;
-        made.append(dot);
-      }
-      text.append(made);
-    }
-    actions.append(animateIt, similar);
-    const copy = el('button', 'link-button', 'Copy');
-    copy.type = 'button';
-    copy.dataset.tip = 'Copy|Paste it into any scene (linked), or use it as a stamp brush.';
-    copy.addEventListener('click', () => copyAsset(item));
-    const brush = el('button', 'link-button', '\ud83d\udd8c Brush');
-    brush.type = 'button';
-    brush.dataset.tip = 'Use as brush|Your own art as a stamp brush. Tap to stamp, drag to scatter.';
-    brush.addEventListener('click', () => brushFromAsset(item));
-    more.append(edit, copy, brush, vary, refine, where);
-    const thumb = thumbButton(item, `Edit asset ${item.name}`, () => openAsset(item.id));
+    actions.append(actionButton(backdrop ? '\u25a3 Use as backdrop' : '\u3030 New shot', 'primary-mini',
+      backdrop ? 'Use as backdrop|Sets the scene for your next shots.' : `New shot|A fresh ${MIN_SHOT}-second shot starring it, with the Path tool ready.`,
+      () => castInScene(item)),
+      actionButton(uses ? `\ud83c\udf9e Shots (${uses})` : 'Open', '', 'Open|Its description, tags, and every shot it stars in, searchable.', () => openWhereUsed(item)));
+    const thumb = thumbButton(item, `Open ${item.name}`, () => openWhereUsed(item));
     thumb.draggable = true;
     thumb.addEventListener('dragstart', event => {
       event.dataTransfer.setData('application/x-inkling-asset', JSON.stringify({ id: item.id, name: item.name }));
       event.dataTransfer.effectAllowed = 'copy';
     });
-    if (item.score != null) text.append(el('small', 'score-line', `similarity ${item.score.toFixed(2)}`));
-    card.append(thumb, text, actions, more);
-    return card;
-  }
-  function statusSelect(item, onChanged) {
-    const select = el('select', `status-select status-${item.status}`);
-    select.setAttribute('aria-label', `Status of ${item.code}`);
-    select.dataset.tip = 'Status|Change it right here. Only the label changes; nothing is re-processed.';
-    for (const [value, label] of Object.entries(STATUS_LABELS)) {
-      const option = el('option', '', label);
-      option.value = value;
-      select.append(option);
-    }
-    select.value = item.status;
-    select.addEventListener('change', async () => {
-      const previous = item.status;
-      select.disabled = true;
-      try {
-        const updated = await api(`/api/shots/${encodeURIComponent(item.id)}`, {
-          method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: select.value })
-        });
-        item.status = updated.status;
-        select.className = `status-select status-${updated.status}`;
-        message('library-status', `${updated.code} is now ${STATUS_LABELS[updated.status]}. Metadata only: nothing was re-embedded.`);
-        onChanged?.(updated);
-      } catch (error) {
-        select.value = previous;
-        message('library-status', error.message, true);
-      } finally {
-        select.disabled = false;
-      }
-    });
-    return select;
-  }
-  function shotCard(item) {
-    const card = el('div', 'card shot-card');
-    const text = el('span', 'card-text');
-    text.append(el('strong', '', item.code), el('small', '', `${item.project} / ${item.sequence} \u00b7 ${item.assignee || 'unassigned'}`));
-    if (item.assets?.length) text.append(el('small', 'placed-assets', item.assets.map(a => `\u25c6 ${a.name} v${a.version}`).join('  ')));
-    if (item.frames > 1) text.append(el('small', 'frames-note', `\ud83c\udf9e ${item.frames} frames \u00b7 ${item.fps} fps`));
-    const actions = el('div', 'card-actions');
-    const breakdown = el('button', 'mini', '\ud83d\udd0d Breakdown');
-    breakdown.type = 'button';
-    breakdown.dataset.tip = 'Breakdown|Frame by frame, layer by layer, asset by asset, and the history of how it got here.';
-    breakdown.addEventListener('click', () => breakdownOfShot(item.id));
-    actions.append(statusSelect(item, updated => {
-      // Keep an open editor in sync, or its next Update would put the old status back.
-      if (editing?.kind === 'shot' && editing.id === updated.id) {
-        $('shot-status').value = updated.status;
-        $('shot-assignee').value = updated.assignee || '';
-      }
-    }), breakdown);
-    card.append(thumbButton(item, `Open scene ${item.code}`, () => openShot(item.id)), text, actions);
-    return card;
-  }
-
-  // Frame hits come grouped by scene: neighbouring frames of one flipbook look alike, so the best frame
-  // leads and the other matching frames are one tap away.
-  function groupFrames(items) {
-    const groups = new Map();
-    for (const item of items) {
-      if (!groups.has(item.shot_id)) groups.set(item.shot_id, []);
-      groups.get(item.shot_id).push(item);
-    }
-    return [...groups.values()];
-  }
-  function frameGroupCard(group) {
-    const best = group[0];
-    const card = el('div', 'card frame-card');
-    const thumb = thumbButton(best, `Open ${best.code} at frame ${best.frame}`, () => openShotAt(best.shot_id, best.frame));
-    thumb.append(el('span', 'frame-badge', best.frames > 1 ? `\ud83c\udf9e ${best.frame} / ${best.frames}` : 'still'));
-    const text = el('span', 'card-text');
-    text.append(el('strong', '', best.code), el('small', '', `${best.project} / ${best.sequence} \u00b7 ${STATUS_LABELS[best.status] || best.status}`));
-    if (best.assets?.length) text.append(el('small', 'placed-assets', best.assets.map(a => `\u25c6 ${a.name}`).join('  ')));
-    if (group.length > 1) {
-      const chips = el('span', 'frame-chips');
-      chips.append(el('small', '', 'Frames'));
-      for (const item of [...group].sort((a, b) => a.frame - b.frame)) {
-        const chip = actionButton(String(item.frame), item === best ? 'frame-chip best' : 'frame-chip',
-          `Frame ${item.frame}${item.score != null ? `|Similarity ${item.score.toFixed(3)}` : ''}`, () => openShotAt(item.shot_id, item.frame));
-        chip.setAttribute('aria-label', `Open frame ${item.frame}`);
-        chips.append(chip);
-      }
-      text.append(chips);
-    }
-    const actions = el('div', 'card-actions');
-    actions.append(actionButton(`Open frame ${best.frame}`, 'primary-mini', 'Open it|Opens the scene on the canvas at this frame, ready to tweak.', () => openShotAt(best.shot_id, best.frame)),
-      actionButton('\ud83d\udd0d Breakdown', '', null, () => breakdownOfShot(best.shot_id)));
     card.append(thumb, text, actions);
     return card;
   }
-  function renderResults(tab, items, { query = '', filterText = '', sketch = false } = {}) {
-    // Browsing (no query): each scene leads with frame 1; searching: with its best match.
-    const ranked = query || sketch;
-    const cards = tab === 'frame' ? [...groupFrames(items).map(group => frameGroupCard(ranked ? group : group.sort((x, y) => x.frame - y.frame)))]
-      : items.map(item => tab === 'idea' ? ideaCard(item, query) : tab === 'asset' || tab === 'backdrop' ? assetCard(item) : shotCard(item));
+  function renderResults(items, { query = '', filterText = '', sketch = false } = {}) {
+    const cards = items.map(assetCard);
     cards.forEach((card, i) => card.style.setProperty('--i', Math.min(i, 12)));
     if (!cards.length) {
       cards.push(el('div', 'empty', query || sketch || filterText ? 'No matches. Try other words or another sketch, or give new saves a moment.'
-        : tab === 'asset' || tab === 'backdrop' ? 'Nothing here yet. Draw something and save it to your library.'
-        : tab === 'shot' ? 'No scenes yet. \u25c6 Place an asset, draw the rest, save as Scene.'
-        : tab === 'frame' ? 'No animated scenes yet. Draw something and press \ud83c\udf9e Animate.'
-        : 'No ideas yet. Save loose sketches here and find them by describing them.'));
+        : 'Nothing here yet. Draw something and save it: AI describes and tags it, so you can find it by words.'));
     }
-    $('results').classList.remove('sectioned');
     $('results').replaceChildren(...cards);
-    const sceneCount = tab === 'frame' ? groupFrames(items).length : 0;
-    const what = tab === 'frame' ? `${sceneCount} animated scene${sceneCount === 1 ? '' : 's'}` : null;
-    const matches = what || `${items.length} match${items.length === 1 ? '' : 'es'}`;
+    const matches = `${items.length} match${items.length === 1 ? '' : 'es'}`;
     message('library-status', sketch ? `${matches} for your drawing, most similar first.`
       : query ? `${matches}${filterText}, most similar first (Voyage AI).`
-      : `${what || `${items.length} ${TAB_TEXT[tab].noun}`}${filterText}.`);
-  }
-  // Everything at once: assets, scenes, and frames, each in its own row, with what it took to find them.
-  // ---------------------------------------------------------------- search by meaning: words, or pasted code
-  const looksLikeCode = text => text.length >= 20 && (/=>|\bfunction\b|\b(?:const|let|var)\s+\w+\s*=|\bfor\s*\(/.test(text)
-    || (/[{};]/.test(text) && /[=(]/.test(text)));
-  async function searchMeaning(query, signal) {
-    if (looksLikeCode(query)) {
-      const data = await api('/api/search/code', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code: query.slice(0, MAX_SKETCH_CODE) }), signal });
-      return { scenes: data.items, code: data.engine || {} };
-    }
-    return api(`/api/find?q=${encodeURIComponent(query.slice(0, 500))}`, { signal });
+      : `${items.length} asset${items.length === 1 ? '' : 's'}${filterText}. Open one to see and search its shots.`);
   }
   // The receipt under results: which engine answered, and how long it took. Search, demystified.
   function timingNote(timing) {
@@ -4825,38 +4739,6 @@
       : ` No new embeddings: Atlas ${timing.search_ms} ms.`;
     return ` ${timing.embeddings} Voyage embedding${timing.embeddings === 1 ? '' : 's'} + Atlas, ${timing.ms} ms.`;
   }
-  function searchNote(data, query) {
-    if (data.code) {
-      const how = data.code.by === 'atlas-autoembed' ? `Atlas Automated Embedding (${data.code.model})` : 'Voyage AI + Atlas Vector Search';
-      return `\u27e8/\u27e9 You pasted code, so scenes are ranked by their code: ${how}${data.code.ms ? `, ${data.code.ms} ms` : ''}.`;
-    }
-    return `Results for \u201c${query}\u201d, most similar first.${timingNote(data.timing)}`;
-  }
-  function renderEverything({ assets = [], scenes = [], frames: hits = [] }, { receipt = '', empty = '' } = {}) {
-    const section = (title, count, cards, kind) => {
-      const wrap = el('section', `results-section ${kind}`);
-      const head = el('h3', 'results-head', title);
-      head.append(el('span', 'results-count', String(count)));
-      const grid = el('div', `results-grid ${kind}`);
-      cards.forEach((card, i) => card.style.setProperty('--i', Math.min(i, 12)));
-      grid.append(...cards);
-      wrap.append(head, grid);
-      return wrap;
-    };
-    const parts = [];
-    const drawings = assets.filter(item => item.type !== 'environment');
-    const backdrops = assets.filter(item => item.type === 'environment');
-    if (drawings.length) parts.push(section('\u25c6 Assets', drawings.length, drawings.map(assetCard), 'found-assets'));
-    if (backdrops.length) parts.push(section('\u25a3 Backdrops', backdrops.length, backdrops.map(assetCard), 'found-assets'));
-    if (scenes.length) parts.push(section('\u25a3 Scenes', scenes.length, scenes.map(shotCard), 'found-scenes'));
-    const groups = groupFrames(hits);
-    if (groups.length) parts.push(section('\ud83c\udf9e Moments in your animations', hits.length, groups.map(frameGroupCard), 'found-frames'));
-    if (!parts.length) parts.push(el('div', 'empty', empty || 'No matches. Try other words or another sketch, or give new saves a moment.'));
-    $('results').classList.add('sectioned');
-    $('results').replaceChildren(...parts);
-    message('library-status', receipt);
-  }
-  let frameAsset = '';
   // Search by how things were made: art math is stored on every asset in Atlas and used as vector filters.
   let handOnly = false;
   let assetColor = '';
@@ -4879,59 +4761,23 @@
     });
     $('asset-filters').replaceChildren(hand, ...dots);
   }
+  // Search is for assets: by words (Voyage AI + Atlas Vector Search over picture, name, description, and tags) or
+  // the latest first. Scenes are found from the asset that stars in them.
   async function loadGallery(query = '') {
     currentQuery = query;
     galleryRequest?.abort();
     const controller = new AbortController();
     galleryRequest = controller;
-    const tab = libraryTab;
-    if (tab === 'all') {
-      message('library-status', query ? `Searching for \u201c${query}\u201d\u2026` : 'Opening your library\u2026');
-      try {
-        if (query) {
-          const data = await searchMeaning(query, controller.signal);
-          if (controller.signal.aborted) return;
-          renderEverything(data, { receipt: searchNote(data, query) });
-        } else {
-          const [assets, scenes] = await Promise.all([api('/api/assets', { signal: controller.signal }), api('/api/shots', { signal: controller.signal })]);
-          if (controller.signal.aborted) return;
-          renderEverything({ assets: assets.items.slice(0, 10), scenes: scenes.items.slice(0, 6) }, {
-            receipt: 'Your latest work. Search above by meaning, or tap \u25ce Find similar under the canvas.',
-            empty: 'Nothing here yet. Draw something above, press \ud83c\udf9e Animate, and save it: it\u2019s embedded the moment it lands.' });
-        }
-      } catch (error) {
-        if (error.name !== 'AbortError') {
-          $('results').replaceChildren();
-          message('library-status', error.message, true);
-        }
-      }
-      return;
-    }
     const params = new URLSearchParams();
-    let url;
-    if (tab === 'idea') {
-      if (activeTag) params.set('tag', activeTag);
-      if (query) params.set('q', query);
-      url = query ? `/api/search?${params}` : `/api/drawings?${params}`;
-    } else {
-      if (query) params.set('q', query);
-      if ((tab === 'shot' || tab === 'frame') && shotStatus) params.set('status', shotStatus);
-      if (tab === 'frame') params.set('animated', 'true');
-      if (tab === 'backdrop') params.set('type', 'environment');
-      if (tab === 'asset' && handOnly) params.set('hand_min', '0.8');
-      if (tab === 'asset' && assetColor) params.set('color', assetColor);
-      url = `/api/${tab === 'backdrop' ? 'asset' : tab}s?${params}`;
-    }
-    const assetName = tab === 'frame' && frameAsset ? $('frame-asset').selectedOptions[0]?.textContent : '';
-    const filterText = (tab === 'idea' && activeTag ? ` tagged #${activeTag}` : '')
-      + ((tab === 'shot' || tab === 'frame') && shotStatus ? ` (${shotStatus === 'open' ? 'not approved' : STATUS_LABELS[shotStatus]})` : '')
-      + (assetName ? ` with ${assetName}` : '')
-      + (tab === 'asset' && handOnly ? ', mostly by hand' : '') + (tab === 'asset' && assetColor ? `, with ${assetColor}` : '');
-    message('library-status', query ? `Looking for ${TAB_TEXT[tab].noun}${filterText} with Voyage AI...` : `Opening your ${TAB_TEXT[tab].noun}...`);
+    if (query) params.set('q', query);
+    if (handOnly) params.set('hand_min', '0.8');
+    if (assetColor) params.set('color', assetColor);
+    const filterText = (handOnly ? ', mostly by hand' : '') + (assetColor ? `, with ${assetColor}` : '');
+    message('library-status', query ? `Looking for assets${filterText} with Voyage AI...` : 'Opening your assets...');
     try {
-      const data = await api(url, { signal: controller.signal });
+      const data = await api(`/api/assets?${params}`, { signal: controller.signal });
       if (controller.signal.aborted) return;
-      renderResults(tab, data.items, { query, filterText });
+      renderResults(data.items, { query, filterText });
     } catch (error) {
       if (error.name !== 'AbortError') {
         $('results').replaceChildren();
@@ -4940,55 +4786,11 @@
     }
   }
   async function searchBySketch() {
-    if (!hasInk()) {
-      message('library-status', 'Draw something on the canvas first: a quick doodle is enough. It becomes the search.', true);
-      canvas.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      return;
-    }
-    galleryRequest?.abort();
-    const controller = new AbortController();
-    galleryRequest = controller;
-    const tab = libraryTab;
     $('query').value = '';
     currentQuery = '';
-    if (tab === 'all') {
-      galleryRequest = null;
-      findSimilar();
-      return;
-    }
-    message('library-status', `Looking for ${TAB_TEXT[tab].noun} that look like your drawing...`);
-    try {
-      const data = await api('/api/search/sketch', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ scope: tab === 'backdrop' ? 'asset' : tab, layers: docLayers(),
-          ...(tab === 'backdrop' ? { asset_type: 'environment' } : {}), ...(tab === 'frame' ? { animated: true } : {}) }), signal: controller.signal });
-      if (controller.signal.aborted) return;
-      renderResults(tab, data.items, { sketch: true });
-    } catch (error) {
-      if (error.name !== 'AbortError') message('library-status', error.message, true);
-    }
+    findSimilar();
   }
   $('search-sketch').addEventListener('click', searchBySketch);
-  async function loadFrameAssets() {
-    try {
-      const data = await api('/api/assets');
-      const keep = frameAsset;
-      $('frame-asset').replaceChildren(el('option', '', 'any asset'), ...data.items.map(item => {
-        const option = el('option', '', `\u25c6 ${item.name}`);
-        option.value = item.id;
-        return option;
-      }));
-      $('frame-asset').firstElementChild.value = '';
-      $('frame-asset').value = keep;
-    } catch { /* the filter is optional */ }
-  }
-  $('frame-asset').addEventListener('change', () => { frameAsset = $('frame-asset').value; loadGallery(currentQuery); });
-  async function openShotAt(id, frame) {
-    await openShot(id);
-    if (editing?.kind === 'shot' && editing.id === id && frame > 1) {
-      goFrame(frame - 1);
-      message('drawing-status', `Frame ${frame} of ${frames.length} in ${editing.code}. Tweak it, then Update. Space plays it.`);
-    }
-  }
   $('search-form').addEventListener('submit', event => {
     event.preventDefault();
     const query = $('query').value.trim();
@@ -4996,10 +4798,6 @@
   });
   $('browse').addEventListener('click', () => {
     $('query').value = '';
-    activeTag = null;
-    shotStatus = '';
-    renderStatusFilters();
-    loadTags();
     loadGallery();
   });
 
@@ -5007,17 +4805,33 @@
   let whereAsset = null;
   let whereRequest = null;
   let whereOutdated = [];
+  // The asset page: what it is (described and tagged by AI on save), what you can do with it, and every shot
+  // it stars in, searchable by meaning within this asset alone.
+  const closeAssetPage = run => () => { $('where-used').close(); run(whereAsset); };
+  function renderAssetHead(item) {
+    $('wu-title').textContent = item.name;
+    $('wu-sub').textContent = item.type ? `${typeLabel(item.type)} \u00b7 v${item.version}` : '';
+    $('wu-about').textContent = item.description || '';
+    $('wu-about').hidden = !item.description;
+    $('wu-tags').replaceChildren(...(item.tags || []).map(tag => el('span', 'asset-page-tag', `#${tag}`)));
+    $('wu-tags').hidden = !item.tags?.length;
+    $('wu-animate').textContent = item.type === 'environment' ? '\u25a3 Use as backdrop' : '\u3030 New shot';
+    document.querySelectorAll('.wu-name').forEach(node => { node.textContent = item.name; });
+  }
   function openWhereUsed(item) {
     whereAsset = item;
-    $('wu-title').textContent = item.name;
-    $('wu-sub').textContent = item.type ? `${typeLabel(item.type)} \u00b7 latest v${item.version}` : '';
+    renderAssetHead(item);
     $('wu-thumb').src = item.image_url || `/api/assets/${encodeURIComponent(item.id)}/image`;
-    document.querySelectorAll('.wu-name').forEach(node => { node.textContent = item.name; });
-    $('wu-vary').onclick = () => { $('where-used').close(); openVariations(whereAsset); };
-    $('wu-breakdown').onclick = () => { $('where-used').close(); breakdownOfAsset(whereAsset.id); };
+    $('wu-q').value = '';
     if (!$('where-used').open) $('where-used').showModal();
     runWhereUsed();
   }
+  $('wu-animate').addEventListener('click', closeAssetPage(item => castInScene(item)));
+  $('wu-edit').addEventListener('click', closeAssetPage(item => openAsset(item.id)));
+  $('wu-refine').addEventListener('click', closeAssetPage(item => refineAsset(item)));
+  $('wu-place').addEventListener('click', closeAssetPage(item => { showTop(); startPlacing(item); }));
+  $('wu-vary').addEventListener('click', closeAssetPage(item => openVariations(item)));
+  $('wu-breakdown').addEventListener('click', closeAssetPage(item => breakdownOfAsset(item.id)));
   function meter(score) {
     // Scores are similarity, not probability: show a meter and a plain label, the number on hover.
     const strong = score >= 0.82;
@@ -5056,9 +4870,7 @@
     }
     figure.addEventListener('click', open);
     const text = el('div', 'card-text');
-    const title = el('strong', '', `${entry.code} `);
-    title.append(el('span', `status-pill status-${entry.status}`, STATUS_LABELS[entry.status] || entry.status));
-    text.append(title, el('small', '', `${entry.project} / ${entry.sequence} \u00b7 ${entry.assignee || 'unassigned'}`));
+    text.append(el('strong', '', entry.code));
     const actions = el('div', 'wu-actions');
     if (entry.match === 'linked') {
       const why = entry.outdated
@@ -5086,7 +4898,7 @@
     const go = () => openWhereUsed(item);
     const figure = el('button', 'wu-figure');
     figure.type = 'button';
-    figure.setAttribute('aria-label', `Where is ${item.name} used?`);
+    figure.setAttribute('aria-label', `Open ${item.name}`);
     const image = el('img');
     image.src = item.image_url;
     image.alt = '';
@@ -5097,7 +4909,7 @@
     if (item.score != null) text.append(meter(item.score));
     const actions = el('div', 'wu-actions');
     actions.append(
-      actionButton('Where used?', 'where-mini', `Switch to ${item.name}|Shows where this one is used instead.`, go),
+      actionButton('Open', 'where-mini', `Open ${item.name}|Its page: description, tags, and its shots.`, go),
       actionButton('Edit', '', null, () => { $('where-used').close(); openAsset(item.id); }));
     card.append(figure, text, actions);
     return card;
@@ -5109,78 +4921,129 @@
     card.querySelector('.card-text').append(el('p', 'why', item.relation));
     return card;
   }
-  function summaryChip(icon, count, label, tone, tip) {
-    const chip = el('span', `summary-chip ${tone}`);
-    chip.dataset.tip = tip;
-    chip.append(el('b', '', `${icon} ${count}`), el('span', '', label));
-    return chip;
-  }
-  async function runWhereUsed() {
-    if (!whereAsset) return;
-    for (const id of ['wu-project', 'wu-sequence']) {
-      if (!$(id).checkValidity()) {
-        message('wu-status-line', 'Project and sequence use letters, numbers, _ . or - only.', true);
-        return;
-      }
+  // A found shot (search within this asset): its picture, what it's about, and how long it runs.
+  function assetShotCard(item) {
+    const placed = (item.assets || []).find(a => a.id === whereAsset?.id);
+    const outdated = !!placed && !!whereAsset?.version && placed.version < whereAsset.version;
+    const card = el('article', `wu-card linked${outdated ? ' outdated' : ''}`);
+    const open = () => { $('where-used').close(); openShot(item.id); };
+    const figure = el('button', 'wu-figure');
+    figure.type = 'button';
+    figure.setAttribute('aria-label', `Open shot ${item.code}`);
+    const image = el('img');
+    image.src = item.image_url;
+    image.alt = '';
+    figure.append(image);
+    if (item.frames > 1) figure.append(el('span', 'frame-badge', `\ud83c\udf9e ${(item.frames / (item.fps || MOTION_FPS)).toFixed(0)} s`));
+    figure.addEventListener('click', open);
+    const text = el('div', 'card-text');
+    text.append(el('strong', '', item.code));
+    if (item.description) text.append(el('p', 'why', item.description));
+    if (item.tags?.length) text.append(el('small', 'asset-card-tags', item.tags.slice(0, 5).map(tag => `#${tag}`).join(' ')));
+    const actions = el('div', 'wu-actions');
+    if (outdated) {
+      text.append(el('p', 'why outdated', `\u26a0 Shows v${placed.version}. ${whereAsset.name} is now v${whereAsset.version}.`));
+      actions.append(actionButton(`Update to v${whereAsset.version}`, 'primary-mini',
+        `Update to v${whereAsset.version}|Swaps the new drawing into the same spot. The old one is kept as a hidden backup layer.`,
+        () => syncShots([{ shot_id: item.id }])));
     }
-    const params = new URLSearchParams();
-    if ($('wu-status').value) params.set('status', $('wu-status').value);
-    if ($('wu-project').value.trim()) params.set('project', $('wu-project').value.trim());
-    if ($('wu-sequence').value.trim()) params.set('sequence', $('wu-sequence').value.trim());
+    actions.append(actionButton('Open', outdated ? '' : 'primary-mini', null, open));
+    if (item.frames > 1) actions.append(actionButton('\ud83c\udf9e Flipbook', '', FLIPBOOK_TIP, () => openFlipbook(item.id)));
+    card.append(figure, text, actions);
+    return card;
+  }
+  const wuEmpty = (text, hint) => { const box = el('div', 'wu-empty'); box.append(el('b', '', text), el('span', '', hint)); return box; };
+  async function searchAssetShots(query) {
+    if (!whereAsset) return;
+    if (!query) { runWhereUsed(); return; }
     whereRequest?.abort();
     const controller = new AbortController();
     whereRequest = controller;
-    message('wu-status-line', 'Checking links. Voyage compares pictures across your scenes...');
-    $('wu-summary').replaceChildren();
-    $('wu-linked').replaceChildren();
-    $('wu-similar').replaceChildren();
-    $('wu-assets').replaceChildren();
-    $('wu-family').replaceChildren();
+    message('wu-status-line', `Searching ${whereAsset.name}\u2019s shots for \u201c${query}\u201d\u2026`);
     try {
-      const data = await api(`/api/assets/${encodeURIComponent(whereAsset.id)}/where-used?${params}`, { signal: controller.signal });
+      const params = new URLSearchParams({ asset_id: whereAsset.id, q: query.slice(0, 500) });
+      const data = await api(`/api/shots?${params}`, { signal: controller.signal });
       if (controller.signal.aborted) return;
-      whereAsset = { ...whereAsset, ...data.asset };
-      $('wu-thumb').src = data.asset.image_url;
-      $('wu-sub').textContent = `${typeLabel(data.asset.type)} \u00b7 latest v${data.asset.version}`;
-      whereOutdated = data.linked.filter(entry => entry.outdated);
-      const scope = $('wu-status').value === 'open' ? 'Scenes not approved yet.' : $('wu-status').value ? `Scenes marked ${STATUS_LABELS[$('wu-status').value]}.` : 'All scenes.';
-      const empty = (text, hint) => { const box = el('div', 'wu-empty'); box.append(el('b', '', text), el('span', '', hint)); return box; };
+      $('wu-linked').replaceChildren(...(data.items.length ? data.items.map(assetShotCard)
+        : [wuEmpty('No shots match.', 'Try other words. Every shot is described and tagged on save.')]));
+      [...$('wu-linked').children].forEach((card, i) => card.style.setProperty('--i', i));
+      $('wu-linked-count').textContent = `(${data.items.length})`;
+      message('wu-status-line', `${plural(data.items.length, 'shot')} with ${whereAsset.name}, most similar to \u201c${query}\u201d first (Voyage AI + Atlas, filtered to this asset).`);
+    } catch (error) {
+      if (error.name !== 'AbortError') message('wu-status-line', error.message, true);
+    }
+  }
+  $('wu-search').addEventListener('submit', event => { event.preventDefault(); searchAssetShots($('wu-q').value.trim()); });
+  $('wu-q').addEventListener('search', () => { if (!$('wu-q').value.trim()) runWhereUsed(); });
+  // Opening an asset costs no embedding: its shots are a plain query on their links. Look-alikes, family, and
+  // similar assets (vector searches) load only when "More like it" is opened.
+  async function runWhereUsed() {
+    if (!whereAsset) return;
+    whereRequest?.abort();
+    const controller = new AbortController();
+    whereRequest = controller;
+    $('wu-more').open = false;
+    whereMoreFor = null;
+    message('wu-status-line', 'Opening its shots\u2026');
+    $('wu-linked').replaceChildren();
+    try {
+      const [asset, shots] = await Promise.all([
+        whereAsset.version ? null : api(`/api/assets/${encodeURIComponent(whereAsset.id)}`, { signal: controller.signal }),
+        api(`/api/shots?asset_id=${encodeURIComponent(whereAsset.id)}`, { signal: controller.signal })]);
+      if (controller.signal.aborted) return;
+      if (asset) {
+        whereAsset = { ...whereAsset, ...asset, image_url: `/api/assets/${encodeURIComponent(asset.id)}/image?v=${asset.version}` };
+        $('wu-thumb').src = whereAsset.image_url;
+        renderAssetHead(whereAsset);
+      }
+      const items = shots.items;
+      whereOutdated = items.filter(item => (item.assets || []).some(a => a.id === whereAsset.id && a.version < whereAsset.version))
+        .map(item => ({ shot_id: item.id }));
+      $('wu-linked').replaceChildren(...(items.length ? items.map(assetShotCard)
+        : [wuEmpty('No shots yet.', `Tap \u3030 New shot: ${whereAsset.name} lands on a fresh canvas, ready to drag along a path.`)]));
+      [...$('wu-linked').children].forEach((card, i) => card.style.setProperty('--i', i));
+      $('wu-linked-count').textContent = `(${items.length})`;
+      $('wu-search').hidden = items.length < 2;
+      $('wu-update-all').hidden = whereOutdated.length < 2;
+      $('wu-update-all').textContent = `Update all ${whereOutdated.length} to v${whereAsset.version}`;
+      $('wu-update-all').dataset.tip = `Update all|Swaps v${whereAsset.version} into every outdated shot. Old drawings stay as hidden backup layers.`;
+      message('wu-status-line', items.length > 1 ? 'Latest first. Search them by what happens in them.' : '');
+    } catch (error) {
+      if (error.name !== 'AbortError') message('wu-status-line', error.message, true);
+    }
+  }
+  let whereMoreFor = null;
+  async function loadWhereMore() {
+    if (!whereAsset || whereMoreFor === whereAsset.id) return;
+    whereMoreFor = whereAsset.id;
+    for (const id of ['wu-similar', 'wu-family', 'wu-assets']) $(id).replaceChildren(wuEmpty('Looking\u2026', 'Voyage compares pictures across your library.'));
+    try {
+      const data = await api(`/api/assets/${encodeURIComponent(whereAsset.id)}/where-used`);
+      if (whereMoreFor !== data.asset.id) return;
       const twins = data.similar_assets || [];
       const family = data.family || { parent: null, variants: [] };
       const kin = [...(family.parent ? [{ ...family.parent, relation: `Original \u00b7 varied from v${family.parent.from_version}` }] : []),
         ...family.variants.map(v => ({ ...v, relation: `Variant: ${v.origin?.brief || ''}` })),
         ...(family.siblings || []).map(v => ({ ...v, relation: `Sibling: ${v.origin?.brief || ''}` }))];
-      $('wu-family').replaceChildren(...(kin.length ? kin.map((item, i) => familyCard(item, i))
-        : [empty('No variations yet.', 'Tap \u2726 Make variations to plan lookalikes from it.')]));
-      $('wu-family-count').textContent = `(${kin.length})`;
-      $('wu-linked').replaceChildren(...(data.linked.length ? data.linked.map(whereCard)
-        : [empty('Not placed in a scene yet.', `Tap \u25c6 Place on ${data.asset.name} in Assets.`)]));
       $('wu-similar').replaceChildren(...(data.similar.length ? data.similar.map(whereCard)
-        : [empty('No look-alikes.', 'Nothing unlinked looks like it. Nice and tidy.')]));
+        : [wuEmpty('No look-alikes.', 'Nothing unlinked looks like it. Nice and tidy.')]));
+      $('wu-family').replaceChildren(...(kin.length ? kin.map((item, i) => familyCard(item, i))
+        : [wuEmpty('No variations yet.', 'Tap \u2726 Variations to plan lookalikes from it.')]));
       $('wu-assets').replaceChildren(...(twins.length ? twins.map(similarAssetCard)
-        : [empty('No similar assets.', 'It\'s one of a kind in your library.')]));
-      [...$('wu-linked').children, ...$('wu-similar').children].forEach((card, i) => card.style.setProperty('--i', i));
-      $('wu-linked-count').textContent = `(${data.linked.length})`;
+        : [wuEmpty('No similar assets.', 'It\'s one of a kind in your library.')]));
+      [...$('wu-similar').children].forEach((card, i) => card.style.setProperty('--i', i));
       $('wu-similar-count').textContent = `(${data.similar.length})`;
+      $('wu-family-count').textContent = `(${kin.length})`;
       $('wu-assets-count').textContent = `(${twins.length})`;
-      $('wu-summary').replaceChildren(
-        summaryChip('\ud83d\udd17', data.linked.length, data.linked.length === 1 ? 'scene' : 'scenes', 'linked', 'Used in|Scenes where you placed this asset.'),
-        summaryChip('\u26a0', whereOutdated.length, 'outdated', whereOutdated.length ? 'warn' : 'ok', 'Outdated|Scenes still showing an older version.'),
-        summaryChip('\ud83d\udc40', data.similar.length, data.similar.length === 1 ? 'look-alike' : 'look-alikes', 'similar', 'Look-alikes|Scenes with something that looks like it, but not linked.'),
-        summaryChip('\ud83e\uddec', twins.length, twins.length === 1 ? 'similar asset' : 'similar assets', 'assets', 'Similar assets|Other assets in your library that look like it.'),
-        summaryChip('\ud83c\udf31', kin.length, kin.length === 1 ? 'relative' : 'relatives', 'family', 'Family|Its original and its variations: exact lineage, not a guess.'));
-      [...$('wu-summary').children].forEach((chip, i) => chip.style.setProperty('--i', i));
-      $('wu-update-all').hidden = whereOutdated.length < 2;
-      $('wu-update-all').textContent = `Update all ${whereOutdated.length} to v${data.asset.version}`;
-      $('wu-update-all').dataset.tip = `Update all|Swaps v${data.asset.version} into every outdated scene. Old drawings stay as hidden backup layers.`;
-      message('wu-status-line', `${scope} Brand-new saves take a moment to show up.`);
     } catch (error) {
-      if (error.name !== 'AbortError') message('wu-status-line', error.message, true);
+      whereMoreFor = null;
+      $('wu-similar').replaceChildren(wuEmpty('Couldn\u2019t look just now.', error.message));
     }
   }
+  $('wu-more').addEventListener('toggle', () => { if ($('wu-more').open) loadWhereMore(); });
   async function syncShots(entries) {
     const asset = whereAsset;
-    message('wu-status-line', `Updating ${entries.length} scene${entries.length === 1 ? '' : 's'} to v${asset.version}...`);
+    message('wu-status-line', `Updating ${plural(entries.length, 'shot')} to v${asset.version}...`);
     let done = 0;
     try {
       for (const entry of entries) {
@@ -5188,7 +5051,7 @@
         done++;
       }
       await runWhereUsed();
-      message('wu-status-line', `Updated ${done} scene${done === 1 ? '' : 's'} to v${asset.version}. Old drawings stay as hidden backup layers.`);
+      message('wu-status-line', `Updated ${plural(done, 'shot')} to v${asset.version}. Old drawings stay as hidden backup layers.`);
       if (editing?.kind === 'shot' && entries.some(entry => entry.shot_id === editing.id)) {
         message('drawing-status', `${editing.code} was updated from the library. Reopen it to see the new version.`, false,
           [{ label: 'Reopen it', run: () => { savedRevision = revision; openShot(editing.id); } }]);
@@ -5206,13 +5069,12 @@
         body: JSON.stringify({ asset_id: whereAsset.id, layer_index: entry.layer_index })
       });
       await runWhereUsed();
+      $('wu-more').open = true;
       message('wu-status-line', `${entry.code} now links to ${whereAsset.name}. The drawing didn't change.`);
     } catch (error) {
       message('wu-status-line', error.message, true);
     }
   }
-  $('wu-filters').addEventListener('submit', event => { event.preventDefault(); runWhereUsed(); });
-  $('wu-status').addEventListener('change', runWhereUsed);
   $('wu-close').addEventListener('click', () => $('where-used').close());
   for (const id of ['where-used', 'help']) {
     $(id).addEventListener('click', event => { if (event.target === $(id)) $(id).close(); });
@@ -5257,10 +5119,11 @@
   }
   function assetResult(item) {
     const backdrop = item.type === 'environment';
-    return finderCard({ image: item.image_url, title: item.name, meta: `${typeLabel(item.type)} \u00b7 v${item.version}${item.score != null ? ` \u00b7 ${Math.round(item.score * 100)}% match` : ''}`,
-      actions: backdrop
-        ? [['Use as backdrop', finderAct(() => castInScene(item))], ['Open', finderAct(() => openAsset(item.id))], ['\u25ce Similar', () => finderSimilar(item)]]
-        : [['Place', finderAct(() => { showTop(); startPlacing(item); })], ['\ud83c\udf9e Animate it', finderAct(() => castInScene(item))], ['\u25ce Similar', () => finderSimilar(item)]] });
+    return finderCard({ image: item.image_url, title: item.name,
+      meta: item.description || `${typeLabel(item.type)}${item.uses ? ` \u00b7 in ${plural(item.uses, 'shot')}` : ''}`,
+      actions: [['Open', finderAct(() => openWhereUsed(item))],
+        backdrop ? ['Use as backdrop', finderAct(() => castInScene(item))] : ['\u3030 New shot', finderAct(() => castInScene(item))],
+        ['\u25ce Similar', () => finderSimilar(item)]] });
   }
   function finderSection(title, cards) {
     if (!cards.length) return [];
@@ -5270,18 +5133,9 @@
     grid.append(...cards);
     return [head, grid];
   }
-  function renderFinderResults(data, note) {
-    const frames = groupFrames(data.frames || []).map(group => group[0]);
-    const parts = [
-      ...finderSection('Assets & backdrops', (data.assets || []).map(assetResult)),
-      ...finderSection('Scenes', (data.scenes || []).map(item => finderCard({ image: item.image_url, title: item.code,
-        meta: `${item.frames > 1 ? `\ud83c\udf9e ${item.frames} frames` : 'Scene'}${item.assets?.length ? ` \u00b7 ${item.assets.map(a => a.name).join(', ')}` : ''}`,
-        actions: [['Open', finderAct(() => openShot(item.id))]] }))),
-      ...finderSection('Moments', frames.map(item => finderCard({ image: item.image_url, title: item.code, badge: `${item.frame}/${item.frames}`,
-        meta: `Frame ${item.frame}${item.assets?.length ? ` \u00b7 ${item.assets.map(a => a.name).join(', ')}` : ''}`,
-        actions: [[`Open frame ${item.frame}`, finderAct(() => openShotAt(item.shot_id, item.frame))]] })))
-    ];
-    $('finder-body').replaceChildren(...(parts.length ? parts : [el('p', 'finder-empty', 'Nothing yet. Try other words, or search with your drawing.')]));
+  function renderFinderResults(items, note) {
+    const parts = finderSection('Assets', items.map(assetResult));
+    $('finder-body').replaceChildren(...(parts.length ? parts : [el('p', 'finder-empty', 'No assets match yet. Try other words, or search with your drawing.')]));
     $('finder-status').textContent = note;
     finderAt = -1;
   }
@@ -5319,16 +5173,17 @@
     clearTimeout(finderTimer);
     finderRequest?.abort();
     if (!query) { renderFinderHome(); return; }
-    if (finderCache.has(query)) { renderFinderResults(finderCache.get(query), searchNote(finderCache.get(query), query)); return; }
+    const note = `Assets for \u201c${query}\u201d, by meaning: picture, name, description, and tags.`;
+    if (finderCache.has(query)) { renderFinderResults(finderCache.get(query), note); return; }
     const controller = new AbortController();
     finderRequest = controller;
     $('finder-status').textContent = 'Searching by meaning\u2026';
     $('finder').classList.add('searching');
     try {
-      const data = await searchMeaning(query, controller.signal);
+      const data = await api(`/api/assets?q=${encodeURIComponent(query.slice(0, 500))}`, { signal: controller.signal });
       if (controller.signal.aborted) return;
-      finderCache.set(query, data);
-      renderFinderResults(data, searchNote(data, query));
+      finderCache.set(query, data.items);
+      renderFinderResults(data.items, note);
     } catch (error) {
       if (error.name !== 'AbortError') $('finder-status').textContent = error.message;
     } finally {
@@ -5343,7 +5198,7 @@
     $('finder-status').textContent = `Finding things like ${item.name}\u2026`;
     try {
       const data = await api(`/api/assets/${encodeURIComponent(item.id)}/similar`, { signal: controller.signal });
-      if (!controller.signal.aborted) renderFinderResults(data, `Like ${item.name}, by its stored vector (no new embedding).`);
+      if (!controller.signal.aborted) renderFinderResults(data.assets, `Like ${item.name}, by its stored vector (no new embedding).`);
     } catch (error) {
       if (error.name !== 'AbortError') $('finder-status').textContent = error.message;
     }
@@ -5356,10 +5211,9 @@
     $('finder-q').value = '';
     $('finder-status').textContent = 'Voyage AI is embedding your drawing\u2026';
     try {
-      const ask = scope => api('/api/search/sketch', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ scope, layers: docLayers(), ...(scope === 'frame' ? { animated: true } : {}) }), signal: controller.signal });
-      const [assets, moments] = await Promise.all([ask('asset'), ask('frame')]);
-      if (!controller.signal.aborted) renderFinderResults({ assets: assets.items, frames: moments.items }, 'Things that look like your drawing.');
+      const data = await api('/api/search/sketch', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scope: 'asset', layers: docLayers() }), signal: controller.signal });
+      if (!controller.signal.aborted) renderFinderResults(data.items, 'Assets that look like your drawing.');
     } catch (error) {
       if (error.name !== 'AbortError') $('finder-status').textContent = error.message;
     }
@@ -5620,7 +5474,7 @@
       item.status = 'kept';
       loadSceneBackdrops();
       message('var-status', `Kept "${item.saved.name}". It's in your library, linked to ${varAsset.name}.`);
-      if (libraryTab === 'asset' || libraryTab === 'all') loadGallery(currentQuery);
+      loadGallery(currentQuery);
     } catch (error) {
       item.status = 'ready';
       message('var-status', error.message, true);
@@ -5631,7 +5485,7 @@
     for (const item of varResults.filter(entry => entry.status === 'ready')) await keepVariation(item);
   }
   // Swap the whole canvas for a new single-frame drawing (used by variations; openRecord handles saved work).
-  function loadCanvas(stack, { kind, title = '', note, more = [], fps: speed = null, scroll = true }) {
+  function loadCanvas(stack, { kind, title = '', note, more = [], fps: speed = null }) {
     stopPlay();
     frames = [stack, ...more];
     sceneMotion = null;
@@ -5662,8 +5516,9 @@
     renderTray();
     renderSaveKind();
     revision++; // unsaved until the artist saves it
+    autoMeta = null;
+    setView('studio');
     message('drawing-status', note);
-    if (scroll) canvas.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
   function editVariation(item) {
     if (revision !== savedRevision && !confirm('Replace your current canvas? Unsaved changes will be lost.')) return;
@@ -6230,18 +6085,6 @@
       assetNames: placedNames
     });
   }
-  async function breakdownOfShot(id) {
-    try {
-      const record = await api(`/api/shots/${encodeURIComponent(id)}`);
-      openBreakdown({
-        title: record.code, sub: `${record.project} / ${record.sequence} \u00b7 ${STATUS_LABELS[record.status]}`,
-        stacks: expandRecord(record), fps: record.fps, history: record.history, motion: record.motion,
-        assetNames: Object.fromEntries((record.assets || []).map(a => [a.id, a.name]))
-      });
-    } catch (error) {
-      message('library-status', error.message, true);
-    }
-  }
   async function breakdownOfAsset(id) {
     try {
       const [record, versions] = await Promise.all([api(`/api/assets/${encodeURIComponent(id)}`),
@@ -6393,9 +6236,11 @@
     const stacks = starter.build().map(stack => stack.map(layer => newLayer(layer.name, {
       strokes: layer.strokes.map(stroke => ({ ...stroke, points: stroke.points.slice(), kit: true, seq: 0 })), opacity: layer.opacity ?? 1, visible: layer.visible ?? true })));
     const [first, ...more] = stacks;
-    const kind = starter.kind || (saveKind === 'idea' ? 'idea' : 'asset');
+    const scenery = starter.kind === 'shot' && starter.id !== 'bounce';
+    if (scenery) $('asset-type').value = 'environment'; // a scene from the starters is a backdrop to make shots in
+    const kind = scenery ? 'asset' : starter.kind || 'asset';
     loadCanvas(first, {
-      kind, more, fps: starter.fps, scroll: false,
+      kind, more, fps: starter.fps,
       note: starter.id === 'blank' ? 'A clean sheet. Draw anything, or ask AI to sketch a start.'
         : `${starter.icon} ${starter.name}: ${plural(first.length, 'layer')} you can edit${more.length ? `, ${more.length + 1} frames (Space plays)` : ''}. Draw on "Draw here", or \u25c6 Place an asset.`
     });
@@ -6415,7 +6260,7 @@
     $('starter-strip').inert = !show;
   }
   function buildStarters() {
-    $('starter-list').replaceChildren(...STARTERS.filter(s => s.id !== 'blank').map(s => starterButton(s)));
+    $('starter-list').replaceChildren(...STARTERS.filter(s => s.kind === 'shot' && s.id !== 'bounce').map(s => starterButton(s)));
     $('starters-grid').replaceChildren(...STARTERS.map(s => starterButton(s, true)));
   }
   $('starters-open').addEventListener('click', () => { $('starters-sheet').showModal(); });
@@ -6423,12 +6268,6 @@
   $('starters-sheet').addEventListener('click', event => { if (event.target === $('starters-sheet')) $('starters-sheet').close(); });
   $('starter-skip').addEventListener('click', () => { startersDismissed = true; renderStarters(); });
 
-  // ---------------------------------------------------------------- the natural flow: next steps and help
-  function goPlace() {
-    setLibraryTab('asset');
-    $('results').scrollIntoView({ behavior: 'smooth', block: 'start' });
-    pulse('.asset-card .primary-mini');
-  }
   function pulse(selector) {
     // A gentle "look here" on the control a message is talking about.
     setTimeout(() => document.querySelectorAll(selector).forEach(node => {
@@ -6483,11 +6322,10 @@
   }
   const reveal = (node, block = 'start') => node.scrollIntoView({ behavior: reduceMotion() ? 'auto' : 'smooth', block });
   const MENU_ACTIONS = {
-    draw: () => { setFocus(false); reveal($('canvas-frame'), 'center'); },
+    home: () => setView('home'),
+    draw: () => { if (canvasIsBlank() && !editing) newCanvas('asset'); else setView('studio'); },
     starters: () => $('starters-sheet').showModal(),
-    ai: () => { $('ai-tools').open = true; reveal($('ai-tools'), 'center'); },
-    tools: () => { $('advanced-tools').open = true; reveal($('advanced-tools'), 'center'); },
-    save: () => { $('save-card').open = true; reveal($('save-card'), 'center'); },
+    save: () => { setView('studio'); $('save-card').open = true; reveal($('save-card'), 'center'); },
     find: () => openFinder(),
     help: () => $('help').showModal(),
     hood: () => openHood()
@@ -6713,7 +6551,6 @@
     if ($('gate').open) $('gate').close();
     renderAccount();
     loadGallery();
-    loadTags();
     loadSceneBackdrops();
     let remix = null;
     try { remix = sessionStorage.getItem('inkling.remix'); sessionStorage.removeItem('inkling.remix'); } catch { /* fine */ }
@@ -6734,7 +6571,7 @@
     $('welcome').close();
   }
   $('welcome-close').addEventListener('click', welcomed);
-  $('welcome-fresh').addEventListener('click', () => { welcomed(); starterPackOnce(); canvas.scrollIntoView({ behavior: 'smooth', block: 'center' }); });
+  $('welcome-fresh').addEventListener('click', () => { welcomed(); starterPackOnce(); setView('home'); });
   $('welcome-demo').addEventListener('click', async () => {
     const button = $('welcome-demo');
     button.disabled = true;
@@ -6745,10 +6582,9 @@
       account.library = result.library;
       renderAccount();
       welcomed();
-      loadTags();
       await loadGallery();
-      message('library-status', `Added ${plural(result.copied.assets || 0, 'asset')} and ${plural(result.copied.shots || 0, 'scene')} to your library. Try Little Fox > Where used? > Breakdown.`);
-      $('results').scrollIntoView({ behavior: 'smooth', block: 'start' });
+      message('library-status', `Added ${plural(result.copied.assets || 0, 'asset')} and ${plural(result.copied.shots || 0, 'shot')} to your library. Open Red Rocket to see its shots.`);
+      setView('home');
     } catch (error) {
       $('welcome-status').textContent = error.message;
     } finally {
@@ -6789,8 +6625,43 @@
       const b = layer && inkBounds(layer.strokes);
       const pivot = b ? [(b.x + b.w / 2) / W, (b.y + b.h / 2) / H] : [0.5, 0.5];
       const keys = track.keys.map(k => `      { t: ${num(k.t)}, x: ${num(k.x)}, y: ${num(k.y)}, sx: ${num(k.sx)}, sy: ${num(k.sy)}, r: ${num(k.r)}${k.label ? `, label: ${JSON.stringify(k.label)}` : ''} }`);
-      return `  ${JSON.stringify(track.name)}: {\n    pivot: [${num(pivot[0])}, ${num(pivot[1])}],  // its center: it turns and squashes around here\n    keys: [\n${keys.join(',\n')}\n    ]\n  }`;
+      const gait = GAITS[track.gait] ? `\n    gait: ${JSON.stringify(track.gait)}, size: [${num(b ? b.w : 100)}, ${num(b ? b.h : 100)}],  // how it moves along the path, and how big it is` : '';
+      // The Lab's layers carry no eraser strokes, so the rig's stroke numbers are renumbered to match.
+      const labIndex = [];
+      if (layer) { let n = 0; for (const stroke of layer.strokes) labIndex.push(stroke.erase ? -1 : n++); }
+      const bones = (GAITS[track.gait] && b && layer ? (rigFor(layer)?.bones || []) : [])
+        .map(bone => ({ ...bone, strokes: bone.strokes.map(i => labIndex[i] ?? -1).filter(i => i >= 0) })).filter(bone => bone.strokes.length);
+      const rig = bones.length ? `\n    rig: [  // its parts (strokes by number) and the joint each turns on\n${bones.map(bone => `      { part: ${JSON.stringify(bone.part)}, s: [${bone.strokes.join(', ')}], p: [${num((b.x + bone.px * b.w) / W)}, ${num((b.y + bone.py * b.h) / H)}] }`).join(',\n')}\n    ],` : '';
+      return `  ${JSON.stringify(track.name)}: {\n    pivot: [${num(pivot[0])}, ${num(pivot[1])}],  // its center: it turns and squashes around here${gait}${rig}\n    keys: [\n${keys.join(',\n')}\n    ]\n  }`;
     });
+    const rigged = spec.tracks.some(track => { const layer = spec.base.find(item => item.id === track.layerId); return GAITS[track.gait] && layer && rigFor(layer); });
+    const gaits = [...new Set(spec.tracks.map(track => track.gait).filter(id => GAITS[id]))];
+    const gaitCode = gaits.length ? `
+// ---- Gaits: steps or hops from how far it has gone, squash where it lands, a breath while it stands. No AI.
+const GAITS = {
+${gaits.map(id => `  ${id}: ${JSON.stringify(Object.fromEntries(Object.entries(GAITS[id]).filter(([key]) => !['icon', 'name', 'verb'].includes(key))))}`).join(',\n')}
+};
+${gaitStep.toString()}
+${rigged ? `${rigTurns.toString()}
+` : ''}// A gait depends on the whole trip so far, so it is replayed from frame 0 to this frame.
+function gait(move, f) {
+  const s = { x: 0, y: 0, f: -1, dist: 0, m: 0 };
+  let out = { dy: 0, sx: 1, sy: 1 };
+  for (let i = 0; i <= f; i++) {
+    const k = pose(move.keys, i / max(1, LOOP - 1));
+    out = gaitStep(s, GAITS[move.gait], move.size[0], move.size[1], (move.pivot[0] + k.x) * W, (move.pivot[1] + k.y) * H, i, FPS);
+  }${rigged ? `
+  // Each part's turn, stroke by stroke: legs in step, arms against them, a wagging tail, flapping wings.
+  out.bend = {};
+  for (const bone of move.rig || []) {
+    const r = rigTurns(bone.part, GAITS[move.gait], s, f, FPS);
+    for (const i of bone.s) {
+      out.bend[i] = { r, p: bone.p };
+    }
+  }` : ''}
+  return out;
+}
+` : '';
     const effects = fxList(spec.effects);
     const fxCode = effects.length ? `
 // ---- Effects: tiny strokes computed by code from a fixed seed (the same every time). No AI.
@@ -6818,7 +6689,7 @@ function drawEffects(f) {
 }
 ` : '';
     const title = (spec.title || spec.label || 'Flipbook').replace(/^\W+\s*/, '');
-    return `// ${title}: ${spec.by === 'ai' ? 'Gemini chose these keyframes' : 'a quick move (plain math)'}. This code draws every frame.
+    return `// ${title}: ${spec.by === 'ai' ? 'Gemini chose these keyframes' : spec.by === 'path' ? 'your finger drew this path; it became these keyframes (and a gait)' : 'a quick move (plain math)'}. This code draws every frame.
 // Your strokes are never redrawn: each moving layer is posed (moved, squashed, turned) by the numbers below,
 // and in-betweens come from a smooth curve through them. Change a number, Run, then Bake.
 
@@ -6827,7 +6698,8 @@ const STRENGTH = ${num(spec.strength)};   // 1 = as choreographed. Try 1.4 for b
 const EFFECTS = ${JSON.stringify(effects.map(fx => fx.id))};${effects.length ? `
 const EFFECT_LAYERS = ${JSON.stringify(effects.map(fx => fx.name))};` : ''}
 
-// t: 0..1 through the clip. x, y: offset in paper fractions (y up is negative). sx, sy: squash and stretch. r: degrees.
+// t: 0..1 through the clip. x, y: offset in paper fractions (y up is negative). sx, sy: squash and stretch (negative
+// mirrors: it turns around). r: degrees.
 const MOTION = {
 ${moving.join(',\n')}
 };
@@ -6848,17 +6720,30 @@ function draw() {
     }
     const move = MOTION[layer.name] || remix;
     push();
+    const step = ${gaits.length ? 'move && move.gait ? gait(move, f) : ' : ''}{ dy: 0, sx: 1, sy: 1 };
     if (move) {
       const k = pose(move.keys, t);
       const [cx, cy] = [move.pivot[0] * W, move.pivot[1] * H];
-      translate(cx + k.x * W, cy + k.y * H);
+      translate(cx + k.x * W, cy + k.y * H + step.dy);
       rotate(radians(k.r));
-      scale(k.sx, k.sy);
+      scale(k.sx * step.sx, k.sy * step.sy);
       translate(-cx, -cy);
     }
-    for (const s of layer.strokes) {
+    ${rigged ? `layer.strokes.forEach((s, i) => {
+      const part = MOTION[layer.name] && step.bend && step.bend[i];   // a remix onto another drawing moves it whole
+      if (!part) {
+        inkStroke(s);
+        return;
+      }
+      push();   // a rigged part: turned about its joint, inside the pose above
+      translate(part.p[0] * W, part.p[1] * H);
+      rotate(radians(part.r));
+      translate(-part.p[0] * W, -part.p[1] * H);
       inkStroke(s);
-    }
+      pop();
+    });` : `for (const s of layer.strokes) {
+      inkStroke(s);
+    }`}
     pop();
   }${effects.length ? '\n  drawEffects(f);' : ''}
 }
@@ -6880,19 +6765,24 @@ function pose(keys, t) {
   const u = (t - p1.t) / ((p2.t - p1.t) || 1), u2 = u * u, u3 = u2 * u;
   const cr = c => 0.5 * ((2 * p1[c]) + (-p0[c] + p2[c]) * u + (2 * p0[c] - 5 * p1[c] + 4 * p2[c] - p3[c]) * u2
     + (-p0[c] + 3 * p1[c] - 3 * p2[c] + p3[c]) * u3);
-  return strength({ x: cr('x'), y: cr('y'), sx: max(0.03, cr('sx')), sy: max(0.03, cr('sy')), r: cr('r') });
+  return strength({ x: cr('x'), y: cr('y'), sx: signed(cr('sx')), sy: signed(cr('sy')), r: cr('r') });
 }
+// A scale keeps its sign (negative = mirrored) and never gets thinner than 0.03.
+function signed(v) {
+  return (v < 0 ? -1 : 1) * constrain(abs(v), 0.03, 4);
+}
+// STRENGTH grows the moves and the squash and stretch, never the mirror.
 function strength(k) {
   const s = STRENGTH;
-  return { x: constrain(k.x * s, -2, 2), y: constrain(k.y * s, -2, 2), sx: constrain(1 + (k.sx - 1) * s, 0.03, 4),
-    sy: constrain(1 + (k.sy - 1) * s, 0.03, 4), r: constrain(k.r * s, -1080, 1080) };
+  const grow = v => (v < 0 ? -1 : 1) * constrain(1 + (abs(v) - 1) * s, 0.03, 4);
+  return { x: constrain(k.x * s, -2, 2), y: constrain(k.y * s, -2, 2), sx: grow(k.sx), sy: grow(k.sy), r: constrain(k.r * s, -1080, 1080) };
 }
-${fxCode}`;
+${gaitCode}${fxCode}`;
   }
   // The sketch saved with a kept flipbook: the scene's own source, small enough to read (and to save).
   function sketchRecord(spec, code = motionToSketch(spec)) {
     if (code.length > MAX_SKETCH_CODE) return null;
-    return { by: spec.by === 'ai' ? 'ai' : 'preset', title: (spec.title || spec.label || 'Flipbook').replace(/^\W+\s*/, '').slice(0, 80) || 'Flipbook',
+    return { by: spec.by === 'ai' ? 'ai' : spec.by === 'path' ? 'artist' : 'preset', title: (spec.title || spec.label || 'Flipbook').replace(/^\W+\s*/, '').slice(0, 80) || 'Flipbook',
       prompt: (spec.prompt || '').slice(0, 400), code, frames: frameCount(spec.seconds) };
   }
 
@@ -6972,56 +6862,6 @@ function draw() {
   // no network); presets and edits are yours, AI can write a take, and Bake turns the loop into editable frames.
   const LAB_SEED = 7;
   const LAB_PRESETS = [
-    { id: 'sculpture', icon: '\ud83e\uddca', name: 'Time sculpture', hint: 'Your strokes, pulled apart by when you drew them. 3D.', code: `// Time sculpture: your drawing, pulled apart by time.
-// Every stroke floats at a depth set by when you drew it:
-// your first line in front, your last line at the back.
-// Drag to orbit, scroll to zoom. Bake captures the turn.
-
-function setup() {
-  createCanvas(W, H, WEBGL);
-}
-
-function draw() {
-  background('#f6f7f1');
-  orbitControl();                          // your mouse is the camera
-  const t = loopT();                       // 0..1 around the loop
-  const lift = min(1, frameCount / 36);    // the drawing peels off the page
-  const depth = 640 * (1 - pow(1 - lift, 3));
-  rotateY(-0.6 * lift + sin(t * TWO_PI) * 0.3);  // turn to the side, then sway (it loops)
-  rotateX(-0.32 * lift);
-  translate(-W / 2, -H / 2, 0);
-  const last = max(1, strokes.length - 1);
-  for (const s of strokes) {
-    const z = map(s.order, 0, last, depth / 2, -depth / 2);
-    inkStroke(s, p => ({ x: p.x, y: p.y, z: z }));
-  }
-}
-` },
-    { id: 'tunnel', icon: '\ud83c\udf9e', name: 'Flipbook tunnel', hint: 'Every frame, stacked in space and gliding toward you. 3D.', code: `// Flipbook tunnel: every frame of your flipbook, stacked in space,
-// gliding toward you. One frame? It echoes into the distance.
-
-function setup() {
-  createCanvas(W, H, WEBGL);
-}
-
-function draw() {
-  background('#f6f7f1');
-  orbitControl();
-  const t = loopT();
-  const pick = max(1, ceil(frames.length / 10));   // at most ~10 slices
-  const stack = frames.length > 1 ? frames.filter((f, i) => i % pick === 0) : Array(8).fill(strokes);
-  const gap = 140;
-  rotateY(-0.45);
-  rotateX(-0.15);
-  translate(-W / 2, -H / 2, 0);
-  stack.forEach((frame, i) => {
-    const z = -(i - t) * gap;                       // one slice forward per loop
-    for (const s of frame) {
-      inkStroke(s, p => ({ x: p.x, y: p.y, z: z }));
-    }
-  });
-}
-` },
     { id: 'flow', icon: '\ud83c\udf2c\ufe0f', name: 'Flow field', hint: 'An invisible wind of Perlin noise bends every line.', code: `// Flow field: an invisible wind, made of Perlin noise, bends every line you drew.
 // The wind travels in a circle through the noise, so the loop is seamless.
 
@@ -7613,25 +7453,9 @@ function draw() {
     const hit = MOVE_WORDS.find(([words]) => words.test(text));
     return PRESETS.find(preset => preset.id === (hit ? hit[1] : 'float'));
   }
-  function offlineFlipbook(prompt) {
-    stopPlay();
-    const read = readPrompt(prompt);
-    const move = offlineMove(prompt);
-    const cast = (targetLayers() || castLayers()).filter(layer => inkBounds(layer.strokes)).slice(0, 4);
-    if (!cast.length) { flashTray('Draw something first, then animate it.', true); canvas.scrollIntoView({ behavior: 'smooth', block: 'center' }); return; }
-    const effects = withFx([], read.on, []);
-    const tooMuch = fxFits({ base: layers }, effects);
-    if (tooMuch) { flashTray(tooMuch, true); return; }
-    const spec = { by: 'preset', label: `${move.icon} ${move.name}`, take: `${move.name}${fxList(effects).map(fx => ` ${fx.icon}`).join('')}`,
-      note: `${move.icon} ${move.name}`, seconds: move.seconds, strength: 1, base: layers, effects,
-      tracks: chosenTracks(box => move.keys(box), new Set(cast.map(layer => layer.id))) };
-    spec.change = `\u26a1 Take ${takes.length + 1}: ${move.icon} ${move.name}, offline. Plain math on your strokes, no AI: ${move.hint}${effects.length ? ` ${fxWords(fxList(effects), []).join(' ')}: drawn by code.` : ''}`;
-    $('scene-prompt').value = '';
-    previewMotion(spec);
-  }
   function offlineRevise(prompt, read) {
     if (!motionDraft) return;
-    const from = motionDraft.spec;
+    const from = directedTake();
     const move = offlineMove(prompt);
     const aimed = targetLayers();
     const ids = new Set(aimed ? aimed.map(layer => layer.id) : from.tracks.map(track => track.layerId));
@@ -7644,7 +7468,6 @@ function draw() {
     if (tooMuch) { flashTray(tooMuch, true); return; }
     const spec = { ...from, tracks, effects, seconds: Math.max(from.seconds, move.seconds), take: `+ ${move.icon} ${move.name}` };
     spec.change = `\u26a1 Take ${takes.length + 1}, offline: ${move.icon} ${move.name} for ${fresh.map(track => track.name).join(', ')}. Plain math, no AI. ${diffMotion(from, spec)}.`;
-    $('scene-prompt').value = '';
     previewMotion(spec);
   }
   function setOffline(on, { quiet = false } = {}) {
@@ -7657,7 +7480,6 @@ function draw() {
       ? 'Offline|Your pencil works anywhere. AI, search, and your library come back with the connection. Your drawing is kept on this device.'
       : 'Your library|Saved in MongoDB Atlas. Searched by meaning with Voyage AI. AI drafts by Gemini.';
     for (const id of ['finder', 'welcome']) if ($(id)?.open) $(id).close();
-    setDockBusy(false);
     renderFxChips();
     if (quiet) return;
     if (on) {
@@ -7666,7 +7488,7 @@ function draw() {
       const unsaved = revision !== savedRevision && hasInk();
       message('drawing-status', `Back online. \u2726 AI, search, and your library are back.${unsaved ? ' Your drawing is still here.' : ''}`, false,
         unsaved ? [{ label: '\u2193 Save to your library', run: () => MENU_ACTIONS.save() }] : []);
-      if (account) { loadGallery(); loadTags(); loadSceneBackdrops(); } else boot();
+      if (account) { loadGallery(); loadSceneBackdrops(); } else boot();
     }
   }
   window.addEventListener('offline', () => setOffline(true));
@@ -7715,7 +7537,7 @@ function draw() {
     if (!draft?.layers?.length || (draft.owner && me && draft.owner !== me) || hasInk() || frames.length > 1) return;
     frames = expandRecord(draft).map(stack => stack.map(layer => newLayer(layer.name, {
       visible: layer.visible, opacity: layer.opacity, strokes: layer.strokes, asset: layer.asset || null, backdrop: layer.backdrop || null,
-      ...(layer.xf ? { xf: layer.xf, xfBase: layer.xfBase, xfStrokes: layer.xfStrokes } : {})
+      ...(layer.xf ? { xf: layer.xf, bend: layer.bend, xfBase: layer.xfBase, xfStrokes: layer.xfStrokes } : {})
     })));
     frameIndex = 0;
     layers = frames[0];
@@ -7735,9 +7557,10 @@ function draw() {
     renderFrames();
     renderLayersPanel();
     renderSaveKind();
+    setView('studio');
     const minutes = Math.round((Date.now() - draft.at) / 60000);
     message('drawing-status', `\u21ba Picked up where you left off (${minutes < 1 ? 'moments' : minutes < 60 ? `${minutes} min` : `${Math.round(minutes / 60)} h`} ago), kept on this device.`, false,
-      [{ label: 'Start fresh', tip: 'Start fresh|A blank canvas. Undo brings this drawing back.', run: () => clearCanvas() }]);
+      [{ label: '\u2190 Your assets', tip: 'Your assets|Start something new. This drawing stays on this device until you replace it.', run: () => setView('home') }]);
   }
 
   // ---------------------------------------------------------------- install: Inkling on the home screen, like any app
@@ -7809,7 +7632,6 @@ function draw() {
     }
   }
   buildStarters();
-  buildAnimate();
   renderSceneBackdrops();
   renderAssetFilters();
   renderSearchHints();
@@ -7817,7 +7639,6 @@ function draw() {
   renderFrames();
   setAiMode('sketch');
   renderSaveKind();
-  renderStatusFilters();
   checkConnection();
   boot();
 })();

@@ -12,7 +12,7 @@
 Prompting isn't drawing. Directing is. Most AI art tools swap your hand for a prompt box; Inkling works the other way: your strokes are saved as
 live data (path, pressure, order, timing), so AI can act like a studio assistant (roughing blue-pencil poses,
 choosing keyframes, organizing your library) while every final line stays yours. Studio scaffolding, not a
-slot machine. Three rules you can check in the app (tap them under the headline):
+slot machine. Three rules you can check in the app:
 
 1. **Choreography, not replacement.** Gemini picks the poses; plain math moves your actual strokes. Your line
    never goes through a filter, so it never flickers or drifts off-model.
@@ -21,19 +21,26 @@ slot machine. Three rules you can check in the app (tap them under the headline)
 3. **Your sketchbook, remembered.** Draw a rough shape to find matching work. Voyage AI maps meaning; MongoDB
    Atlas searches only your library.
 
-**Draw → Animate → Find.** Three steps, shown above the box, and the one you're on glows. Draw a character, prop,
-or backdrop, then:
+**Draw → Move → Find.** Three steps, shown above the box, and the one you're on glows.
 
-Under the canvas sits one box, like a search page: type or speak what happens (or leave it blank for a
-surprise), pick who's **Starring** (this drawing, or any saved asset) and where (a starter or a backdrop you
-drew), then press a button. The button you press is the choice:
-
-- **🎞 Animate** (or Enter) makes a flipbook: Gemini picks the poses; math draws the frames. Every frame is **your own
-  strokes**, never redrawn. **Keep** turns it into editable frames, and **⟨/⟩ Code** shows the take as the p5.js
-  sketch that draws it.
-- **◎ Find similar**: your drawing is the search (or the words in the box). **Voyage AI** multimodal
-  embeddings in **MongoDB Atlas** Vector Search find look-alike assets, backdrops, and scenes. Gemini
-  auto-tags what you save, so you're never filing, just cooking.
+- **✏️ Draw an asset.** A character, prop, or backdrop, 2D, rough is fine. **✦ Refine** in the toolbar is one tap
+  and no prompt: Gemini cleans up the rough lines and keeps your pose, proportions, style, and colors. It works in
+  the background while you keep drawing, then lands as a preview you keep or skip (and **👁 Hold to compare**).
+  On save, AI **describes and tags** it from the picture, so it's findable by plain words; anything you wrote
+  yourself is kept.
+- **〰 Move it.** Pick **〰 Path** (toolbar, dock, or **T**) and drag from anything you drew: it travels your trail.
+  One path per layer (up to four), all in one take. The trail becomes ordinary keyframes, so a path take previews,
+  keeps, saves, and exports as p5.js code like any other. **→ Steady** spaces it evenly; **✋ Your pace** keeps your
+  finger's timing (slow where you slowed). **⟲ Turns** tilts it to face where it's heading. Drag another layer after
+  keeping and it joins the same animation. Or type what happens and press **🎞 Animate**: Gemini picks the poses,
+  math draws the frames. Either way every frame is **your own strokes**, never redrawn, and **every shot is at least
+  10 seconds** (a shorter move plays out, then holds).
+- **◎ Find it.** Search is for **assets**: words, voice, or a sketch (Voyage AI multimodal embeddings in MongoDB
+  Atlas Vector Search, over each asset's picture, name, description, and tags). Open an asset to see its page: the
+  AI description and tags, **〰 Animate it** (a new shot starring it, Path tool ready), Edit, Refine, Place,
+  Variations, and **every shot it stars in**, with a search box that searches *only that asset's shots* by meaning
+  (an Atlas vector search filtered on `asset_ids`). Shots describe and tag themselves on save too, from frame 1 plus
+  what happens (your path in words, *"travels right, zig-zagging up and down"*, or your direction).
 
 **Every animation is code.** A kept flipbook is saved with its source: a short, readable
 [p5.js](https://p5js.org) sketch (keyframes as numbers, the same in-between curve and pose math, effects as the same
@@ -54,8 +61,7 @@ Atlas Local container: its search process isn't given a Voyage key, so to try Au
 `MONGODB_URI` at a hosted Atlas cluster. The story of finding that out: [blog-autoembed.md](blog-autoembed.md).)
 **↻ Remix** loads
 any of them as a new take, running over your drawing: your library of motions becomes code you can reuse.
-Paste code into the library's search box and it searches the same way. Shared scenes show their code, with a
-**Remix in Inkling** button.
+Shared scenes show their code, with a **Remix in Inkling** button.
 
 **Take any scene apart.** In an animation, layer edits reach **all frames** by default: show or hide a layer, move or
 resize an asset, rename, add, delete, or reorder, once, and the whole animation follows (one Undo). Tap **All frames**
@@ -79,29 +85,27 @@ back, and a change builds on the take you're looking at, so you can branch. **�
 untouched drawing, **✓ Keep** turns a take into frames, and the **↶ Undo** that follows brings the takes back.
 AI drafts (refine, sketch, fix) work the same way: a preview first, hold to compare, and one Undo after you keep it.
 Everything else
-(sketch a start, fix a spot, refine, variations, layers, frames, saving by hand) waits behind quiet links:
+(sketch a start, fix a spot, variations, layers, frames, saving by hand) waits behind quiet links:
 **AI helpers**, **Layers, frames & more**, and **Save to your library**.
-The **☰** menu reaches every one of them in a tap (swipe it away on a phone).
+The **☰** menu reaches the rest (Starters, the Lab, Under the hood) in a tap (swipe it away on a phone).
 
-**Search is always one keystroke away.** The **Search your art** box in the header (or **⌘/Ctrl+K**, or **/**)
-opens a finder over whatever you're doing. Results arrive by meaning as you type (one Voyage embedding per
-pause, not per keystroke): assets, backdrops, scenes, and single frames, each usable right there
-(**Place**, **🎞 Animate it**, **Use as backdrop**, **Open**, **◎ Similar**). **✏️ My drawing** searches with
-the canvas. ↑↓ and Enter work too. Before you type, it offers starter backdrops and your latest work.
+**Search is always one keystroke away.** The **Search assets** box in the header (or **⌘/Ctrl+K**, or **/**)
+opens a finder over whatever you're doing. Assets arrive by meaning as you type (one Voyage embedding per
+pause, not per keystroke), each usable right there (**Open**, **〰 Animate it** or **Use as backdrop**,
+**◎ Similar**). **✏️ My drawing** searches with the canvas. ↑↓ and Enter work too. Before you type, it offers
+starter backdrops and your latest assets.
 
-**⟨/⟩ The Lab: your strokes, as numbers.** For the mathy and the curious: **Lab** (next to Focus, or **L**) tilts
+**⟨/⟩ The Lab: your strokes, as numbers.** For the mathy and the curious: **☰ › Lab** tilts
 the paper back, dims the lights, and hands your drawing to [p5.js](https://p5js.org), Processing for the web. Your strokes
 arrive as data (`strokes`, `frames`, `layers`: points, pressure, drawing order), and a sketch moves them.
 
-- **Start from a preset**, all plain readable code, no AI: 🧊 **Time sculpture** (each stroke floats at the depth of
-  when you drew it; orbit it in 3D), 🎞 **Flipbook tunnel**, 🌬️ **Flow field** (Perlin noise bends your lines),
-  ❄️ **Kaleidoscope**, ✨ **Ink to dust**, 🌊 **The wave**.
+- **Start from a preset**, all plain readable 2D code, no AI: 🌬️ **Flow field** (Perlin noise bends your lines),
+  ❄️ **Kaleidoscope**, ✨ **Ink to dust**, 🌊 **The wave**. (Assets are 2D for now, so the Lab is too.)
 - **Ask AI to write it**: *"make my lines spiral into a galaxy"*. Gemini writes (or revises) a p5.js sketch against
   the small Inkling API; every result is a **take** you can flip back to, with what changed in lines (*+11 −17*).
 - **Edit any line and run it** (⌘/Ctrl+Enter). Errors point at the line; an endless loop is stopped after 2.5 s.
 - **⤓ Bake to frames** runs the loop once per frame from a fixed seed and turns everything drawn with `ink()` into
-  editable strokes: a 24/48/80-frame flipbook you can save, share, and search. 3D bakes exactly what you see, through
-  p5's own camera matrices. Baked strokes are marked *code* on the authorship meter; the sketch's source is saved
+  editable strokes: a 24/48/80-frame flipbook you can save, share, and search. Baked strokes are marked *code* on the authorship meter; the sketch's source is saved
   with the scene (and Voyage can find it: *"the one with the spiral"*).
 - **Sandboxed by design**: sketches run in an `<iframe sandbox="allow-scripts">` (an opaque origin: no cookies, no
   storage, no `/api/`) whose Content-Security-Policy refuses every network connection. Strokes go in and baked
@@ -109,7 +113,7 @@ arrive as data (`strokes`, `frames`, `layers`: points, pressure, drawing order),
 
 **Install it. Draw in airplane mode.** Inkling is a progressive web app: **☰ → Install Inkling** (or Safari's
 Share → Add to Home Screen) puts it on your home screen, and it opens with no signal. Offline is a studio, not an
-error page: pen, layers, frames, the shapes kit, stamps, effects, and **quick moves** all work, and Flipbook picks a
+error page: pen, layers, frames, the shapes kit, stamps, effects, **〰 paths**, and **quick moves** all work, and Flipbook picks a
 quick move from your words (*"hop in the snow"* → 🐇 Hop + ❄️ Snow, plain math). Everything that needs the internet
 (Gemini, Voyage search, your library, sharing, voice) is hidden *and* refused before a request is even made.
 Your drawing is kept on this device as you go (IndexedDB), so a reload, a crash, or a dead battery mid-flight
@@ -137,12 +141,6 @@ lead-in and lift-off, and a pencil's pressure is smoothed. A ring under the mous
 size and color of the next line. On touch screens, **two-finger tap undoes** and **three-finger tap redoes**.
 What's saved is still plain points, so the server renders every stroke exactly as you saw it.
 
-**🪄 The magic wand** (on the paper, or **W**) is for blank pages and stuck moments. It deals a playful prompt
-(*"a whale in a teacup, in the middle of a storm"*) and a creative rule (*"twelve strokes or fewer"*), or a
-*"what if…"* for a drawing in progress. **Go** opens full screen with a gentle 1, 2, or 5-minute flow timer;
-when time's up it offers **Flipbook it** or another nudge. It's free and instant; **✦ Sketch a start** (a
-blue-pencil draft to trace) and **✦ Ask AI for ideas** are there when you want them.
-
 **Full screen** (**Focus**, or **F**) uses the device's real full screen where allowed, sizes the page as large
 as it fits, floats the toolbar, and fades every control while your pen is down. Phones held sideways get a
 one-row toolbar and the whole page; held upright, a hint suggests turning sideways.
@@ -154,9 +152,9 @@ MongoDB Atlas, and Gemini in plain words, using your own canvas as the example.
 
 | | You | Inkling |
 | --- | --- | --- |
-| **1. Doodle it** | Draw in layers (try **Focus** or a **starter**) | Pressure, palm rejection, auto-tags on save |
-| **2. Animate** | Say what happens, then **🎞 Animate**. Revise by talking, or by editing the code | Gemini keyframes your strokes; the scene is saved as p5.js |
-| **3. Find similar** | Your drawing, words, or voice | Voyage AI + Atlas Vector Search across assets, backdrops, and scenes |
+| **1. Draw an asset** | Draw in layers (try **Focus** or a **starter**); **✦ Refine** in one tap | Pressure, palm rejection; describes and tags it on save |
+| **2. Move it** | Drag it along a **〰 Path**, or say what happens and **🎞 Animate** | Your trail (or Gemini's poses) as keyframes; a shot of 10 s or more, saved as p5.js |
+| **3. Find it** | Words, voice, or your drawing; then an asset's own shots | Voyage AI + Atlas Vector Search over assets, and over one asset's shots |
 | **4. Share it** | **🔗 Save & share** a flipbook | A public link with a looping GIF. Your library stays private |
 
 Good to know:
@@ -285,16 +283,16 @@ embedding, sparks, and PNG export use what's visible, exactly as composed.
 
 ### ✦ AI helpers: sketch, fix, refine, or grow variations
 
-The canvas keeps **🎞 Animate** and **Find similar** up front. Open **AI helpers** for the drawing
-workflows; each has examples you can tap.
+The toolbar keeps one AI button up front: **✦ Refine**, one tap, no prompt (see *Draw → Move → Find*). Open
+**AI helpers** for the other drawing workflows; each has examples you can tap.
 
 - **Sketch a layer**: "a dragon curled up asleep". In 5-10 seconds a blue-pencil draft (up
   to 40 strokes) draws itself in. **Use sketch** (Enter) adds it as its own layer at 60%
   opacity *below* your ink. It's plain vector strokes: erase parts, redraw over it, hide it.
   **Skip** (Esc) discards it, **↻** asks again, and one Undo removes it.
 - **Fix a spot**: "make the eye look left", then drag a box around the spot (or tap it).
-  Gemini proposes 1-8 strokes in your colors and weights, previewed until you accept. The
-  ✦ tool (S) does the same and also offers a **trace guide** (a faint image to draw over,
+  Gemini proposes 1-8 strokes in your colors and weights, previewed until you accept. **S**
+  does the same with a box and also offers a **trace guide** (a faint image to draw over,
   never saved).
 - **Refine**: get suggestions for what the drawing could use next, or write your own prompt.
   Gemini changes only the target layer; you preview the result and keep or skip it.
@@ -327,7 +325,7 @@ its variants, and siblings), and family members are left out of "similar assets"
 
 ### 🔍 Breakdown and the audit trail
 
-**Breakdown** (under the canvas, on scene cards, and in Where used) takes any canvas, asset,
+**Breakdown** (on an asset's page, or the **✍ your hand** meter) takes any canvas, asset,
 or scene apart:
 
 - **Who made it**: the share of strokes from your hand, AI you accepted, and reused assets
@@ -347,7 +345,13 @@ or scene apart:
 imagines a scene and chooses key poses. The studio calculates the in-between frames from your own strokes.
 **Keep** makes the frames editable; **Try again** creates another preview. Save the scene to find it later.
 
-**🎬 Direct…** (in **Layers, frames & more**) is the hands-on version, in three steps:
+**〰 Path** is the free, hands-on version: drag a layer along a trail and the trail becomes its keyframes (up to
+24 per layer, evenly spaced by arc length, or by your finger's own timing; with **⟲ Turns**, rotation follows the
+trail's heading, unwrapped so it never spins the long way). Paths on up to four layers share one take, and the
+motion is saved as `by: "path"` with the trail in words as its note, so the shot is findable by what happens.
+Every shot is at least 10 seconds: a shorter move (a quick move, or **Faster**) plays out, then holds its last pose.
+
+The **🎬 Direct…** sheet (the director's pitches) is still in the code but no longer on the main surface. It works in three steps:
 
 1. **The cast.** What moves: placed assets by default, or any drawing on the canvas. **+ Add** drops in a
    backdrop (Beach, Mountains, Forest, City at night, Outer space) and your assets. With a backdrop set,
@@ -381,37 +385,32 @@ and the animation principles in plain words, with **Download GIF** and **Make on
 snapshot: share again after editing and the same link updates. **Stop sharing** turns the link off.
 The token (unguessable, 16 characters) is the only permission; nothing else in your library is public.
 
-### 🔍 Search by meaning: words, a sketch, or an asset
+### 🔍 Search by meaning: assets, then their shots
 
-The library opens on **✦ Everything**: one query, embedded **once** by Voyage AI, runs as three Atlas vector
-searches (assets, scenes, and frames share one multimodal space), with the embed and search times shown.
-Try *"a spaceship"* (nothing is named that), *"a cute animal"*, or *"the moment it leaves the ground"*.
-The tabs search one kind at a time: **◆ Assets**, **▣ Scenes**, and **🎞 Frames**.
+Search is for **assets**. The library and the finder (**⌘/Ctrl+K**) rank your assets by meaning with one Voyage
+embedding and one Atlas vector search over each asset's picture, name, description, and tags. Try *"a spaceship"*
+(nothing is named that) or *"a cute animal"*.
 
-- **Words**: "the rocket high above the pine tree". Voyage embeds pictures and words into one space.
-- **✏️ Your drawing**: the canvas becomes the query. Assets match the cropped ink. Scenes, frames, and
-  ideas match the whole canvas, so *where* things sit matters: a doodle with the rocket up high ranks
-  the liftoff's last frame first.
-- **With ◆ asset** (Frames tab): only frames that place that asset (exact links), optionally combined
-  with words. Status chips filter by scene status.
-- **By what happens**: scenes embed a *story* (their direction, beats, cast, and layer names) next to
-  their picture, so *"the fox hops across the beach"* finds the shot even if its first frame doesn't show it.
+- **Words**: "a red rocket with a round window". Voyage embeds pictures and words into one space.
+- **✏️ Your drawing**: the canvas becomes the query, matched against each asset's cropped ink.
+- **◎ Similar**: an asset's own stored vector is the query (no new embedding).
 
-Frame hits are grouped by scene (neighboring frames of a flipbook look alike): the best frame leads,
-and the other matches are one-tap chips. **Open frame N** loads the scene *at that frame*. Results stay
-close to the best match instead of padding to a fixed count. Every frame is its own Voyage vector
-(`shot_frames`); long shots embed a sample of 16 frames. Frames are hashed, so a save re-embeds only frames that changed. For scenes saved
-before frames were indexed, run `docker compose exec -T studio python -m backend.backfill`. It also adds art math and
-version snapshots to existing assets, and the demo seed runs it.
+**Shots are found from the asset that stars in them.** Open an asset and its page lists every shot that placed it;
+the search box there runs `GET /api/shots?asset_id=…&q=…`, an Atlas vector search over shots *filtered to that
+asset* (`asset_ids` is a filter field of the shots index). Shots embed a *story* (their direction or path, beats,
+cast, and layer names) plus an AI-written description next to their picture, so *"jumping over the trees"* finds
+the shot even if its first frame doesn't show it. Frames are still embedded per frame (`shot_frames`) for
+look-alike checks; for scenes saved before frames were indexed, run
+`docker compose exec -T studio python -m backend.backfill`. Scene **code** search lives in the Lab (**◎ Similar code**).
 
-### Tags: auto, editable, filterable
+### Descriptions and tags: auto, editable
 
-Saving without tags asks Gemini to tag what's drawn (face, eye, hand, smile...).
-Use **✦ Suggest** to preview tags first, remove any chip, or type your own
-(Enter or comma). Tags are embedded with the title, description, and picture,
-and are a filter field in the Atlas vector index: click a tag under the search
-bar to browse it or to scope semantic search to it. If Gemini is unavailable,
-the save still succeeds untagged and the app says so.
+Saving an asset or a shot with a blank description or no tags asks Gemini to write them from the picture (one
+call: a one- or two-sentence description and 3-8 tags). For shots it also hears what happens (its length, its
+direction or the path in words, and its cast), because frame 1 alone can't show motion. Anything you wrote is kept.
+**✦ Write them** (in *Description & tags*) previews them first (`POST /api/describe`). Both are embedded with the
+asset's name and picture, so they make it findable by plain words. If Gemini is unavailable, the save still
+succeeds and the app says so.
 
 ### Assets, scenes, and "where is this used?"
 
@@ -421,17 +420,15 @@ In the save panel, choose what you're saving (the API calls scenes *shots*):
   you opened makes a new **version**. Saving a *new* one first asks Voyage for look-alikes
   already in your library (`SIMILAR_ASSET_MIN_SCORE`, default 0.75), offering
   **Save as v3 of Red Rocket** or **No, it's new**.
-- **▣ Scene**: production metadata alongside the art: project, sequence, scene code, status, artist.
-- **✎ Sketch**: a loose idea you find later by describing it.
+- **🎞 Shot**: an animation (or any canvas with placed assets). The studio switches to Shot by itself when there
+  are frames or placed assets. Project, sequence, status, and artist still exist in the API, with plain defaults.
 
-In **Library > Assets**, **◆ Place** drops an asset into the canvas: drag a box (or tap)
+On an asset's page, **◆ Place** drops it into the canvas: drag a box (or tap)
 and it becomes a *linked* layer (`◆ v1` in the Layers panel). Draw the rest of the scene
 around it and save as a Shot. Saving a shot indexes every visible layer as its own
 element, cropped to its ink, with the shot's metadata alongside its vector.
 
-**Where used?** on any asset answers "which shots use this, and which aren't approved
-yet?" in one query. A summary at the top counts linked uses, shots that need an
-update, and look-alikes to check. Results come in two plain-language groups:
+**An asset's page** answers "which shots use this?" in one query, in plain-language groups:
 
 - **🔗 Linked uses**, *like a shortcut to an original file*: shots built by placing the
   asset. Inkling knows the exact spot and version. Shots on an older version say
@@ -441,21 +438,18 @@ update, and look-alikes to check. Results come in two plain-language groups:
   asset's picture with every shot layer, so it finds redrawn, copied, or never-linked uses.
   A meter shows how similar (hover for the score; it isn't a percentage chance).
   **Yes, it's this asset** links that layer without changing the drawing.
-- **🧬 Similar assets**, *like spotting two folders with the same file*: other assets
+- **🌱 Family** and **🧬 Similar assets** (under *More like it*): its original and variations, and other assets
   that look like this one (e.g. Sam's "Rocket Ship" next to "Red Rocket"), before your
   library splits in two.
 
-Status, project, and sequence filters are applied inside the Atlas vector search, before
-ranking. Look-alikes below `WHERE_USED_MIN_SCORE` (default 0.75) are hidden; 0.82 and up
+Look-alikes below `WHERE_USED_MIN_SCORE` (default 0.75) are hidden; 0.82 and up
 reads "Very similar".
 
 Built to be self-explanatory: one box with three buttons up front, **tooltips** on every control (hover or
 keyboard focus), a **? Help** page with an analogy for every concept, and *what's next?*
 buttons after each save (e.g. save an asset, then **Use it in a scene** or **✦ Make variations**).
 
-In **Library > Scenes**, change a scene's status inline. That's a metadata update only:
-nothing is re-embedded, and "where used" filters see it immediately for exact links (vector
-filters follow within moments). Seed the shared demo library that new members can
+Seed the shared demo library that new members can
 copy (billable Voyage calls; it's written as the `demo` owner; the production is skipped if project `demo` already has shots,
 a near-duplicate *Rocket Ship* asset is added once so **Similar assets** has something to show, and a
 6-frame liftoff flipbook, SQ040_0020, for **Breakdown**):

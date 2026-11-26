@@ -32,6 +32,7 @@ def client(monkeypatch, payload):
     library.save.side_effect = lambda drawing: {"id": DRAWING_ID, "tags": drawing.tags}
     ai = Mock()
     ai.suggest_tags.return_value = ["robot", "face"]
+    ai.describe.return_value = {"name": "Robot Face", "description": "A friendly robot face.", "tags": ["robot", "face"]}
 
     @asynccontextmanager
     async def offline_lifespan(application):

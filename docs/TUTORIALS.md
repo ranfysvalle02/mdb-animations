@@ -3,25 +3,27 @@
 Seven short tutorials, about two minutes each. Do them in order the first time; each builds on the last.
 Everything here works with a finger, a stylus, or a mouse. On touch screens, tap with two fingers to undo and three to redo.
 
-**Your strokes, as code.** Tap **⟨/⟩ Lab** (or press **L**). Pick 🧊 *Time sculpture* and drag to orbit your drawing
-in 3D, ordered by when you drew each line. Try 🌬️ *Flow field*, change `strength = 26` to `60`, and press ⌘/Ctrl+Enter.
+**The whole idea in three moves.** Draw an asset (rough is fine; **✦ Refine** cleans it up in one tap while you keep
+drawing). Pick **〰 Path** and drag it along a trail with your finger: that's a 10-second shot. Save, and AI describes and
+tags it so you can find it by words. Search finds **assets**; open one to browse and search every shot it stars in.
+
+**Your strokes, as code.** Open **☰ › Lab**. Try 🌬️ *Flow field*, change `strength = 26` to `60`, and press ⌘/Ctrl+Enter.
 Ask AI for something new (*"make my lines spiral into a galaxy"*), flip between takes, then **⤓ Bake to frames** to turn
 the loop into an editable flipbook. Undo brings your drawing back.
 
 **No signal? Keep drawing.** Install Inkling from the ☰ menu (or Share → Add to Home Screen on iPhone) and it opens in
-airplane mode. Drawing, layers, frames, stamps, effects, and quick moves all work offline; AI, search, and saving to
+airplane mode. Drawing, layers, frames, stamps, effects, paths, and quick moves all work offline; AI, search, and saving to
 your library wait for the connection. Your drawing is kept on the device, so nothing is lost on a reload.
 Curious how it works? **☰ › Under the hood** explains every moving part in plain words.
-Screenshots show an earlier layout; follow the current labels in the instructions.
 
 | # | Tutorial | You'll learn |
 | --- | --- | --- |
 | 1 | [Your studio in 30 seconds](#1-your-studio-in-30-seconds) | Sign up, pick the demo library |
 | 2 | [Never start from a blank page](#2-never-start-from-a-blank-page) | Starters, Ask AI |
 | 3 | [Draw it once, grow a cast](#3-draw-it-once-grow-a-cast) | Save an asset, variations, the duplicate check |
-| 4 | [Animate it, then share it](#4-animate-it-then-share-it) | A flipbook, revised by talking or by code, a share link |
-| 5 | [Search by meaning](#5-search-by-meaning) | Find assets and animation moments by words, sketch, or asset |
-| 6 | [Always know: where, and how it was made](#6-always-know-where-and-how-it-was-made) | Where used, Breakdown, replay, evolution |
+| 4 | [Animate it, then share it](#4-animate-it-then-share-it) | A path with your finger, a flipbook by words or code, a share link |
+| 5 | [Search by meaning](#5-search-by-meaning) | Find assets by words or a sketch, then search an asset's shots |
+| 6 | [Always know: where, and how it was made](#6-always-know-where-and-how-it-was-made) | An asset's page, Breakdown, replay, evolution |
 | 7 | [Your art, multiplied](#7-your-art-multiplied) | Copy, paste, the stamp brush, flow shortcuts |
 
 ---
@@ -44,10 +46,6 @@ Screenshots show an earlier layout; follow the current labels in the instruction
 > initial (top right) to see your counts or sign out.
 
 ## 2. Never start from a blank page
-
-**🪄 The magic wand.** Tap the wand on the paper (or press **W**) for a nudge: a playful prompt and a
-creative rule. Pick a timer and tap **Go**: the page goes full screen, the prompt and a countdown sit at the
-top, and the controls fade while you draw. When time's up, **Flipbook it** or take another nudge.
 
 **Starters.** On an empty canvas, starter scenes float along the bottom of the paper. Tap one and you
 get plain, editable layers (sky, sea, sand, palm) with an empty **Draw here** on top. The strip fades the
@@ -85,11 +83,18 @@ Asset cards show versions, usage, and lineage (*✦ variant of Red Rocket*).
 
 ## 4. Animate it, then share it
 
-Under the canvas there's one box. Type or speak what happens (or leave it blank for a surprise), check
-who's **Starring** (this drawing, or any saved asset) and where (**in** a starter or your own backdrop),
-then press **🎞 Animate** (or Enter). Asset cards in your library have a shortcut:
-**🎞 Animate it** (or **✦ Use as backdrop**) fills it in for you. A new or changed drawing is saved and
-tagged first.
+**With your finger.** Pick **〰 Path** (in the toolbar, under the canvas, or press **T**) and drag from anything
+you drew. It travels your trail for 10 seconds, starting exactly as drawn. Drag another layer and it moves too, in
+the same take (up to four). Under the preview, **→ Steady** switches to **✋ Your pace** (slow where your finger
+slowed), and **⟲ Turns** makes it face where it's heading. **✓ Keep** (Enter) turns it into frames, and the Path tool
+stays ready: drag another layer and it joins the same animation. No AI, works offline.
+
+![Little Fox, dragged along a path on the beach: a 10-second shot, no AI](screenshots/09c-motion-preview.png)
+
+**With words.** Under the canvas there's one box. Type or speak what happens (or leave it blank for a surprise),
+pick a **Backdrop** if you like, then press **🎞 Animate** (or Enter). An asset's **〰 Animate it** puts it in a new
+shot with the Path tool ready. A new or changed drawing is saved and described first. Every shot is at least 10
+seconds.
 
 **Flipbook** moves your original strokes; nothing is redrawn. Gemini picks the poses, math draws the frames,
 and **⟨/⟩ Code** on any take shows the p5.js sketch that draws it: keyframes as numbers you can change.
@@ -139,9 +144,6 @@ For original-stroke animations, open **Layers, frames & more** to scrub, drag, r
 
 ![Animation, demystified, on your own shot](screenshots/09d-how-it-moves.png)
 
-For hands-on direction, choose **🎬 Direct…** to pick the cast, add a backdrop, edit the prompt, or use a
-free **⚡ Quick move**.
-
 For original-stroke scenes, **🔗 Save & share** gives you a link: a looping GIF and a page that explains how it
 moves. Copy it, **Share…** from your phone, or download the GIF. Edit and share again: same link, new clip.
 **Stop sharing** turns it off.
@@ -156,41 +158,36 @@ linked to their asset and version in *every* frame, so a redraw of the asset upd
 
 ## 5. Search by meaning
 
-From anywhere, press **⌘/Ctrl+K** (or **/**, or tap **Search your art** in the header). Type, speak, or tap
-**✏️ My drawing**; results appear as you pause, and each one has its action right there: **Place** it,
-**🎞 Animate it**, **Use as backdrop**, or **◎ Similar**. The **Find your art** section below the canvas
-is the same library for browsing.
+From anywhere, press **⌘/Ctrl+K** (or **/**, or tap **Search assets** in the header). Type, speak, or tap
+**✏️ My drawing**; assets appear as you pause, each with its action right there: **Open**, **〰 Animate it**,
+**Use as backdrop**, or **◎ Similar**. **Your assets**, below the canvas, is the same library for browsing.
 
-Open **Find your art**. Search across **Everything**, or narrow results to **Assets**, **Backdrops**, or
-**Animated scenes**.
+**By words.** *"a spaceship"* finds Red Rocket though nothing is named that: every asset is described and tagged
+by AI on save, and Voyage embeds the picture and the words together.
 
-**By words.** Describe the moment: *"the rocket flying high in the sky above the hills"*. Hits are
-grouped by scene, with the best frame first and chips for every frame. **Open frame N** puts it on the
-canvas, ready to tweak.
+**By doodle.** Sketch roughly what you're after and tap **✏️**: your drawing becomes the query.
 
-![Search frames by describing them](screenshots/07-find-frames.png)
+![A rough rocket finds the rocket assets](screenshots/08-search-by-drawing.png)
 
-**By doodle.** Sketch roughly what you're after (a little tree down low, a rocket up high) and tap **✏️**.
-Your drawing becomes the query. Composition matters, so the liftoff's **frame 6** (rocket highest) comes
-first.
+**Then its shots.** Open an asset (tap its picture). Its page shows the AI description and tags, and every shot it
+stars in. The search box there looks *only* through that asset's shots, by what happens in them: *"flying past the
+trees"*. Shots describe and tag themselves on save too, from frame 1 plus the motion.
 
-![Doodle it, and Inkling finds the frame](screenshots/08-search-by-drawing.png)
-
-**By asset.** Use **Find similar** on a saved asset to find related art and scenes that use it.
+![Red Rocket's shots, searched by what happens in them](screenshots/07-asset-shot-search.png)
 
 ## 6. Always know: where, and how it was made
 
-**Where used?** On any asset:
+**An asset's page.** Open any asset:
 
-![Where is Red Rocket used? Two scenes still show v1](screenshots/06-where-used.png)
+![Red Rocket's page: two shots still show v1](screenshots/06-where-used.png)
 
-- **🔗 Used in**: every scene that placed it. **⚠ outdated** ones can **Update to v2** in one tap (the old
+- **🎞 Shots**: every shot that placed it, searchable. **⚠ outdated** ones can **Update to v2** in one tap (the old
   art is kept as a hidden backup layer).
 - **👀 Look-alikes**: scenes with something that *looks* like it but was never linked (someone redrew it).
   **Yes, it's this asset** turns one into a linked use.
-- **🧬 Similar assets** (near-duplicates) and **🌱 Family** (the original and its variations).
+- **More like it**: **🌱 Family** (the original and its variations) and **🧬 Similar assets** (near-duplicates).
 
-**🔍 Breakdown.** Who made it (your hand, AI you accepted, starter kit, reused assets), how a scene moves,
+**🔍 Breakdown** (on an asset's page, or tap the **✍ your hand** meter). Who made it (your hand, AI you accepted, starter kit, reused assets), how a scene moves,
 an exposure sheet layer by layer and frame by frame, and the full audit trail. Open **Behind the scenes**
 and press **✎ Watch it being made** to replay a drawing stroke by stroke, in the order it was drawn:
 

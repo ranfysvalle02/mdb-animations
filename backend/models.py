@@ -5,6 +5,16 @@ from typing import Annotated, Literal
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 Unit = Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)]
+
+
+def _scale(value: float) -> float:
+    if abs(value) < 0.03:
+        raise ValueError("A scale is at least 0.03 either way (a negative one mirrors).")
+    return value
+
+
+# Squash and stretch; a negative scale mirrors (a walker turning around to face the way it goes).
+Scale = Annotated[float, Field(ge=-4, le=4, allow_inf_nan=False), AfterValidator(_scale)]
 MAX_POINTS = 20000
 MAX_STROKES = 1000
 MAX_LAYERS = 12
@@ -98,11 +108,23 @@ class Transform(BaseModel):
     model_config = ConfigDict(extra="forbid")
     x: float = Field(default=0, ge=-2, le=2, allow_inf_nan=False)
     y: float = Field(default=0, ge=-2, le=2, allow_inf_nan=False)
-    sx: float = Field(default=1, ge=0.03, le=4, allow_inf_nan=False)
-    sy: float = Field(default=1, ge=0.03, le=4, allow_inf_nan=False)
+    sx: Scale = 1
+    sy: Scale = 1
     r: float = Field(default=0, ge=-1080, le=1080, allow_inf_nan=False)
     px: float = Field(default=0.5, ge=-1, le=2, allow_inf_nan=False)
     py: float = Field(default=0.5, ge=-1, le=2, allow_inf_nan=False)
+
+
+class Bend(BaseModel):
+    """A rigged part turned about its joint (a leg swinging, a tail wagging), before the layer's pose.
+
+    ``s`` are indexes into frame 1's strokes for that layer; the joint is in canvas fractions, ``r`` in degrees.
+    """
+    model_config = ConfigDict(extra="forbid")
+    s: list[Annotated[int, Field(ge=0, lt=MAX_STROKES)]] = Field(min_length=1, max_length=MAX_STROKES)
+    r: float = Field(ge=-180, le=180, allow_inf_nan=False)
+    px: float = Field(ge=-1, le=2, allow_inf_nan=False)
+    py: float = Field(ge=-1, le=2, allow_inf_nan=False)
 
 
 class Layer(BaseModel):
@@ -118,18 +140,42 @@ class Layer(BaseModel):
     # strokes. A 10-second shot stays small, and a new asset version flows into every frame.
     ref: int | None = Field(default=None, ge=0, lt=MAX_LAYERS, exclude_if=lambda value: value is None)
     xf: Transform | None = Field(default=None, exclude_if=lambda value: value is None)
+    bend: list[Bend] | None = Field(default=None, max_length=12, exclude_if=lambda value: value is None)  # a rig, posed
 
     @model_validator(mode="after")
     def reference_or_strokes(self) -> "Layer":
         if self.xf is not None and self.ref is None:
             raise ValueError("A pose (xf) needs the frame 1 layer it poses (ref).")
+        if self.bend is not None and self.xf is None:
+            raise ValueError("Bent parts (bend) need the layer's pose (xf).")
         if self.ref is not None and self.strokes:
             raise ValueError("A layer that references frame 1 carries no strokes of its own.")
         return self
 
 
-def pose_strokes(strokes: list[Stroke], xf: Transform) -> list[Stroke]:
+def bend_strokes(strokes: list[Stroke], bends: list[Bend] | None) -> list[Stroke]:
+    """Rigged parts turned about their joints, before the pose. Mirrors bendStrokes in studio.js."""
+    if not bends:
+        return strokes
+    out = list(strokes)
+    for bend in bends:
+        cos, sin = math.cos(math.radians(bend.r)), math.sin(math.radians(bend.r))
+        cx, cy = bend.px * POSE_W, bend.py * POSE_H
+        for i in bend.s:
+            if i >= len(out):
+                continue
+            points = []
+            for p in out[i].points:
+                dx, dy = p.x * POSE_W - cx, p.y * POSE_H - cy
+                points.append(Point.model_construct(x=(cx + dx * cos - dy * sin) / POSE_W, y=(cy + dx * sin + dy * cos) / POSE_H,
+                                                    pressure=p.pressure))
+            out[i] = out[i].model_copy(update={"points": points})
+    return out
+
+
+def pose_strokes(strokes: list[Stroke], xf: Transform, bends: list[Bend] | None = None) -> list[Stroke]:
     """Frame 1's strokes in a frame's pose. Mirrors poseXf in studio.js (cull off-canvas, pin the rest)."""
+    strokes = bend_strokes(strokes, bends)
     cos, sin = math.cos(math.radians(xf.r)), math.sin(math.radians(xf.r))
     cx, cy = xf.px * POSE_W, xf.py * POSE_H
     ox, oy = cx + xf.x * POSE_W, cy + xf.y * POSE_H
@@ -142,7 +188,7 @@ def pose_strokes(strokes: list[Stroke], xf: Transform) -> list[Stroke]:
         if all(x < -0.02 or x > 1.02 or y < -0.02 or y > 1.02 for x, y, _ in points):
             continue
         posed.append(stroke.model_copy(update={
-            "width": min(40.0, max(1.0, stroke.width * math.sqrt(xf.sx * xf.sy))),
+            "width": min(40.0, max(1.0, stroke.width * math.sqrt(abs(xf.sx * xf.sy)))),
             "points": [Point(x=min(1.0, max(0.0, x)), y=min(1.0, max(0.0, y)), pressure=pressure) for x, y, pressure in points],
         }))
     return posed
@@ -156,7 +202,8 @@ def expand_frame(first: list[Layer], layers: list[Layer]) -> list[Layer]:
             out.append(layer)
             continue
         base = first[layer.ref].strokes
-        out.append(layer.model_copy(update={"strokes": pose_strokes(base, layer.xf) if layer.xf else list(base), "ref": None, "xf": None}))
+        out.append(layer.model_copy(update={"strokes": pose_strokes(base, layer.xf, layer.bend) if layer.xf else list(base),
+                                            "ref": None, "xf": None, "bend": None}))
     return out
 
 
@@ -244,6 +291,32 @@ class Asset(BaseModel):
         return self
 
 
+RigPart = Literal["head", "body", "leg_front", "leg_back", "arm_front", "arm_back", "tail", "wing_front", "wing_back", "other"]
+
+
+class RigBone(BaseModel):
+    """A part of an asset (its strokes, by index in the flattened visible layers) and the joint it turns on."""
+    model_config = ConfigDict(extra="forbid")
+    part: RigPart
+    strokes: list[Annotated[int, Field(ge=0, lt=MAX_STROKES)]] = Field(min_length=1, max_length=MAX_STROKES)
+    px: Unit  # the joint, as fractions of the asset's ink box
+    py: Unit
+
+
+class Rig(BaseModel):
+    """How an asset moves: which strokes make which part, found once (by AI) and kept with the asset version."""
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["biped", "quadruped", "bird", "fish", "object"]
+    strokes: int = Field(ge=0, le=MAX_STROKES)  # how many strokes it was made for; a redraw needs a new rig
+    bones: list[RigBone] = Field(default_factory=list, max_length=12)
+
+
+class PictureRequest(BaseModel):
+    """Words for a new asset: AI draws a clean line-art picture, which the studio traces into strokes."""
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    prompt: str = Field(min_length=3, max_length=300)
+
+
 class Shot(BaseModel):
     """A shot: production metadata next to the layered artwork (placed assets are linked layers)."""
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
@@ -327,8 +400,8 @@ class MotionKey(BaseModel):
     t: Unit
     x: float = Field(ge=-1.5, le=1.5, allow_inf_nan=False)
     y: float = Field(ge=-1.5, le=1.5, allow_inf_nan=False)
-    sx: float = Field(ge=0.03, le=4, allow_inf_nan=False)
-    sy: float = Field(ge=0.03, le=4, allow_inf_nan=False)
+    sx: Scale
+    sy: Scale
     r: float = Field(ge=-1080, le=1080, allow_inf_nan=False)
     label: str = Field(default="", max_length=24)
 
@@ -337,12 +410,14 @@ class MotionTrack(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     name: str = Field(min_length=1, max_length=40)
     keys: list[MotionKey] = Field(min_length=1, max_length=MAX_MOTION_KEYS)
+    # A path's gait (studio.js GAITS): steps, hops, a glide, or flight, layered on the keys frame by frame.
+    gait: Literal["walk", "hop", "glide", "fly"] | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 class MotionRecord(BaseModel):
-    """The direction behind a scene's motion: a preset or an AI choreography the artist accepted."""
+    """The direction behind a scene's motion: an AI choreography, a preset, or a path the artist drew."""
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-    by: Literal["ai", "preset"]
+    by: Literal["ai", "preset", "path"]
     prompt: str = Field(default="", max_length=300)
     note: str = Field(default="", max_length=160)
     seconds: float = Field(ge=0.5, le=10, allow_inf_nan=False)

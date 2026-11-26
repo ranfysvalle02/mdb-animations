@@ -77,12 +77,22 @@ def top(page: Page, selector: str, offset: int = 64) -> None:
     page.wait_for_timeout(500)
 
 
+def open_asset(page: Page, asset: str) -> None:
+    """An asset's page: tap its picture in Your assets."""
+    top(page, "#library-heading", 70)
+    card(page, asset).locator(".thumb-button").click()
+    page.wait_for_selector("#where-used[open]")
+    page.wait_for_function("document.querySelector('#wu-linked .wu-card, #wu-linked .wu-empty')", timeout=30_000)
+
+
+def drag(page: Page, points: list[tuple[float, float]]) -> None:
+    """A finger path, in canvas fractions."""
+    doodle(page, [points])
+
+
 def open_breakdown(page: Page, asset: str) -> None:
-    page.click("#tab-asset")
-    page.wait_for_timeout(1200)
-    card(page, asset).get_by_role("button", name="Where used?").click()
-    page.wait_for_selector("dialog[open] >> text=Breakdown")
-    page.locator("dialog[open] button", has_text="Breakdown").first.click()
+    open_asset(page, asset)
+    page.click("#wu-breakdown")
     page.wait_for_selector("#breakdown[open]")
     page.wait_for_timeout(1200)
 
@@ -149,65 +159,43 @@ def main() -> None:
         page.wait_for_timeout(800)
         shot(page, "05-library.png")
 
-        card(page, "Red Rocket").get_by_role("button", name="Where used?").click()
-        page.wait_for_selector("dialog[open] >> text=Used in", timeout=30_000)
+        open_asset(page, "Red Rocket")
         page.wait_for_timeout(1500)
         shot(page, "06-where-used.png")
-        page.keyboard.press("Escape")
+        page.fill("#wu-q", "the rocket flying high above the trees")
+        page.press("#wu-q", "Enter")
+        page.wait_for_function("document.querySelector('#wu-status-line').textContent.includes('most similar')", timeout=30_000)
+        page.wait_for_timeout(1500)
+        shot(page, "07-asset-shot-search.png")
+        page.click("#wu-close")
 
-        page.click("#tab-frame")
-        page.fill("#query", "the rocket flying high in the sky above the hills")
-        page.press("#query", "Enter")
-        page.wait_for_selector(".frame-chips", timeout=30_000)
-        page.wait_for_timeout(1200)
-        top(page, "#library-heading", 70)
-        shot(page, "07-find-frames.png")
-
-        # Search with a drawing: a little tree down low, a rocket up high.
+        # Search with a drawing: a rough rocket finds the rocket assets.
         page.click("#clear")
         page.wait_for_timeout(500)
         hide_starters(page)
         top(page, "#canvas-frame", 140)
         doodle(page, [
-            [(0.12, 0.85), (0.2, 0.6), (0.28, 0.85), (0.12, 0.85)],  # tree
-            [(0.2, 0.85), (0.2, 0.95)],                               # trunk
-            [(0.6, 0.35), (0.65, 0.08), (0.7, 0.35), (0.6, 0.35)],    # rocket, up high
-            [(0.63, 0.38), (0.65, 0.48), (0.67, 0.38)],               # flame
+            [(0.45, 0.75), (0.5, 0.2), (0.55, 0.75), (0.45, 0.75)],  # a rocket body
+            [(0.48, 0.78), (0.5, 0.9), (0.52, 0.78)],                 # flame
         ])
         page.click("#search-sketch")
-        page.wait_for_timeout(4000)
+        page.wait_for_function("document.querySelector('#library-status').textContent.includes('Your drawing was the search')", timeout=30_000)
+        page.wait_for_timeout(1200)
         top(page, "#library-heading", 70)
         shot(page, "08-search-by-drawing.png")
 
-        # Animate: drop an asset onto a backdrop (Voyage casts from the library), let the director pitch,
-        # preview with the keyframes drawn on, see how it works, keep it, then share it.
+        # Move it: Little Fox on the beach, dragged along a path with a finger, then kept and shared.
         page.click("#clear")
         page.wait_for_timeout(500)
-        page.click("#tab-asset")
-        page.wait_for_timeout(1200)
-        card(page, "Red Rocket").get_by_role("button", name="\u25c6 Place").click()
-        page.wait_for_timeout(1500)
-        page.keyboard.press("a")
-        page.wait_for_selector("#animate-sheet[open]")
-        page.locator("#anim-add summary").click()
-        page.locator("#anim-backdrops button", has_text="Beach").click()
-        page.wait_for_selector("#anim-assets .anim-asset.fits", timeout=30_000)
-        page.wait_for_timeout(900)
-        shot(page, "09a-animate-sheet.png")
-        if args.with_ai:
-            page.locator("#anim-add summary").click()
-            page.wait_for_selector("#anim-ideas .idea-card.ai", timeout=90_000)
-            page.locator("#anim-ideas").scroll_into_view_if_needed()
-            page.wait_for_timeout(900)
-            shot(page, "09b-director.png")
-            page.locator("#anim-ideas .idea-card.ai .idea-go").first.click()
-        else:
-            page.locator(".anim-quick summary").click()
-            page.locator("#anim-presets button", has_text="Hop across").click()
-        page.wait_for_function("!document.getElementById('animate-sheet').open", timeout=90_000)
+        page.select_option("#scene-backdrop", "starter:beach")
+        top(page, "#library-heading", 70)
+        card(page, "Little Fox").get_by_role("button", name="Animate it").click()
+        page.wait_for_timeout(1800)
+        top(page, "#canvas-frame", 140)
+        drag(page, [(0.5, 0.56), (0.6, 0.42), (0.7, 0.6), (0.8, 0.45), (0.88, 0.58)])
         page.wait_for_timeout(1700)
         studio_shot(page, "09c-motion-preview.png")
-        page.locator("#spark-tray button", has_text="How it works").click()
+        page.locator("#drawing-status button", has_text="How it moves").click()
         page.wait_for_selector("#explain-sheet[open]")
         page.wait_for_timeout(900)
         shot(page, "09d-how-it-moves.png")
@@ -215,6 +203,7 @@ def main() -> None:
         page.wait_for_timeout(300)
         page.locator("#spark-tray button", has_text="Keep").click()
         page.wait_for_timeout(1200)
+        page.evaluate("document.getElementById('advanced-tools').open = true")  # the frame strip
         page.click("#frame-play")  # stop the auto-play on frame 1
         page.locator('#frame-list [data-frame="12"]').click()
         page.wait_for_timeout(800)

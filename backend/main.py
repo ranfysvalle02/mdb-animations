@@ -26,7 +26,7 @@ from backend.auth import DEMO_OWNER, SESSION_COOKIE, AuthError, AuthUnavailable,
 from backend.library import Library, LibraryError, ink_crop, render_image
 from backend.models import (
     ASSET_TYPES, CODE_PATTERN, MAX_LAYERS, SHOT_STATUSES, AnimateRequest, Asset, CodeRequest, CodeSearch, DirectRequest, Drawing, LayersRequest, MotionRequest, RefineIdeasRequest,
-    RefineRequest, Shot, ShotUpdate, SketchRequest, SparkRequest, TagRequest,
+    Layer, PictureRequest, RefineRequest, Shot, ShotUpdate, SketchRequest, SparkRequest, TagRequest,
     SketchSearch, VariationPlanRequest, VariationRequest,
     normalize_tag,
 )
@@ -109,7 +109,7 @@ AI_BUDGET = Budget("ai", "AI drafts", int(os.environ.get("INKLING_AI_PER_HOUR", 
 EMBED_BUDGET = Budget("embeds", "saves and searches", int(os.environ.get("INKLING_EMBEDS_PER_HOUR", "600")))
 _ID = r"[0-9a-fA-F-]{36}"
 METERED = [
-    (AI_BUDGET, "POST", re.compile(r"/api/(animate|sparks/(strokes|sketch|guide|motion|direct|refine|refine/ideas|code)|tags/suggest|assets/" + _ID + r"/variations(/plan)?)")),
+    (AI_BUDGET, "POST", re.compile(r"/api/(animate|sparks/(strokes|sketch|guide|motion|direct|refine|refine/ideas|code|picture)|tags/suggest|describe|assets/" + _ID + r"/(rig|variations(/plan)?))")),
     (EMBED_BUDGET, "POST", re.compile(r"/api/(drawings|assets|assets/similar|shots|search/sketch|search/code|shots/" + _ID + r"/(sync/" + _ID + r"|link|share))")),
     (EMBED_BUDGET, "PUT", re.compile(r"/api/(assets|shots)/" + _ID)),
     (EMBED_BUDGET, "GET", re.compile(r"/api/(search|assets/" + _ID + r"/where-used)")),
@@ -422,6 +422,46 @@ async def auto_tag(request: Request, doc, title: str):
         return doc, "unavailable"
 
 
+async def auto_describe(request: Request, doc, title: str, context: str = ""):
+    """Assets and scenes describe and tag themselves: whatever the artist left blank, Gemini writes from the picture,
+    so every save is findable by plain words. What the artist wrote is kept. A failure never blocks the save."""
+    if doc.tags and doc.description.strip():
+        return doc, "provided"
+    try:
+        meta = await run_in_threadpool(
+            request.app.state.ai.describe,
+            TagRequest(title=title[:120], description=doc.description, layers=doc.layers), context,
+        )
+    except (GeminiError, AIError) as exc:
+        logger.warning("Auto-describing skipped (%s)", type(exc).__name__)
+        return doc, "unavailable"
+    update = {}
+    if not doc.tags and meta["tags"]:
+        update["tags"] = meta["tags"]
+    if not doc.description.strip() and meta["description"]:
+        update["description"] = meta["description"]
+    return doc.model_copy(update=update), "auto" if update else "unavailable"
+
+
+def shot_context(shot: Shot) -> str:
+    """What the picture alone can't say about a scene: that it moves, how, and who is in it."""
+    frames = len(shot.frames) + 1
+    bits = [f"an animated scene, {frames / shot.fps:.0f} seconds" if frames > 1 else "a still scene"]
+    if shot.motion and (shot.motion.prompt or shot.motion.note):
+        bits.append(f'what happens: "{shot.motion.prompt or shot.motion.note}"')
+    cast = list(dict.fromkeys(layer.name for layer in shot.layers if layer.asset))
+    if cast:
+        bits.append("starring " + ", ".join(cast))
+    return "it is " + "; ".join(bits)
+
+
+@app.post("/api/describe")
+async def describe(request: Request) -> dict:
+    """A description and tags for the drawing on the canvas, written by Gemini (nothing is saved)."""
+    tag_request = await read_json(request, TagRequest)
+    return await run_in_threadpool(request.app.state.ai.describe, tag_request)
+
+
 @app.get("/api/drawings")
 def list_drawings(request: Request, tag: str | None = Query(default=None, max_length=30)) -> dict:
     return {"items": lib(request).recent(optional_tag(tag))}
@@ -517,6 +557,13 @@ async def animate(request: Request) -> StreamingResponse:
 
     return StreamingResponse(lines(), media_type="application/x-ndjson",
                              headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+
+
+@app.post("/api/sparks/picture")
+async def picture(request: Request) -> dict:
+    """A new asset from words: AI draws clean line art; the studio traces it into editable strokes."""
+    body = await read_json(request, PictureRequest)
+    return await run_in_threadpool(request.app.state.ai.picture, body)
 
 
 @app.post("/api/sparks/guide")
@@ -641,9 +688,9 @@ def editable(record: dict, *fields: str) -> dict:
 
 @app.post("/api/assets", status_code=201)
 async def create_asset(request: Request) -> dict:
-    """Save a reusable asset (version 1). Untagged assets are auto-tagged."""
+    """Save a reusable asset (version 1). A blank description or tags are written by AI from the picture."""
     asset = await read_json(request, Asset)
-    asset, status = await auto_tag(request, asset, asset.name)
+    asset, status = await auto_describe(request, asset, asset.name)
     return {**await run_in_threadpool(prod(request).save_asset, asset), "tags_status": status}
 
 
@@ -651,7 +698,7 @@ async def create_asset(request: Request) -> dict:
 async def update_asset(request: Request, asset_id: UUID) -> dict:
     """Save a new version of an asset. Shots that placed an older version are flagged as outdated."""
     asset = await read_json(request, Asset)
-    asset, status = await auto_tag(request, asset, asset.name)
+    asset, status = await auto_describe(request, asset, asset.name)
     saved = await run_in_threadpool(prod(request).save_asset, asset, str(asset_id))
     return {**saved, "tags_status": status}
 
@@ -683,7 +730,20 @@ def find_asset(request: Request, asset_id: UUID) -> dict:
 @app.get("/api/assets/{asset_id}")
 def get_asset(request: Request, asset_id: UUID) -> dict:
     record = find_asset(request, asset_id)
-    return editable(record, "name", "type", "description", "tags", "version", "origin", "stats")
+    current = record.get("rig") and record.get("rig_version") == record["version"]
+    return {**editable(record, "name", "type", "description", "tags", "version", "origin", "stats"), **({"rig": record["rig"]} if current else {})}
+
+
+@app.post("/api/assets/{asset_id}/rig")
+async def rig_asset(request: Request, asset_id: UUID) -> dict:
+    """How the asset moves: which strokes are its legs, arms, tail, wings, and head, and the joint each turns on.
+    Made once per version (one AI call) and kept with the asset."""
+    record = find_asset(request, asset_id)
+    if record.get("rig") and record.get("rig_version") == record["version"]:
+        return {"rig": record["rig"], "version": record["version"]}
+    rig = await run_in_threadpool(request.app.state.ai.rig, [Layer.model_validate(layer) for layer in record["layers"]])
+    await run_in_threadpool(prod(request).store_rig, str(asset_id), record["version"], rig)
+    return {"rig": rig, "version": record["version"]}
 
 
 @app.get("/api/assets/{asset_id}/similar")
@@ -748,16 +808,16 @@ def delete_asset(request: Request, asset_id: UUID) -> Response:
 
 @app.post("/api/shots", status_code=201)
 async def create_shot(request: Request) -> dict:
-    """Save a shot: artwork, placed-asset links, and production metadata. Indexes every element."""
+    """Save a shot: artwork, placed-asset links, and metadata (described and tagged by AI when left blank)."""
     shot = await read_json(request, Shot, MAX_SHOT_BODY)
-    shot, status = await auto_tag(request, shot, shot.code)
+    shot, status = await auto_describe(request, shot, shot.code, shot_context(shot))
     return {**await run_in_threadpool(prod(request).save_shot, shot), "tags_status": status}
 
 
 @app.put("/api/shots/{shot_id}")
 async def replace_shot(request: Request, shot_id: UUID) -> dict:
     shot = await read_json(request, Shot, MAX_SHOT_BODY)
-    shot, status = await auto_tag(request, shot, shot.code)
+    shot, status = await auto_describe(request, shot, shot.code, shot_context(shot))
     saved = await run_in_threadpool(prod(request).save_shot, shot, str(shot_id))
     return {**saved, "tags_status": status}
 
@@ -790,9 +850,12 @@ async def link_layer(request: Request, shot_id: UUID) -> dict:
 
 @app.get("/api/shots")
 def list_shots(request: Request, q: str = Query(default="", max_length=500), project: str | None = code_query(),
-               sequence: str | None = code_query(), status: str | None = Query(default=None)) -> dict:
+               sequence: str | None = code_query(), status: str | None = Query(default=None),
+               asset_id: UUID | None = None) -> dict:
+    """Scenes by words (vector search) or latest first; ``asset_id`` keeps only the scenes that placed that asset."""
     return {"items": prod(request).list_shots(
-        q.strip(), project=project, sequence=sequence, status=status_query(status))}
+        q.strip(), project=project, sequence=sequence, status=status_query(status),
+        asset_id=str(asset_id) if asset_id else None)}
 
 
 def find_shot(request: Request, shot_id: UUID) -> dict:
@@ -822,6 +885,14 @@ async def share_shot(request: Request, shot_id: UUID) -> dict:
 def unshare_shot(request: Request, shot_id: UUID) -> Response:
     prod(request).unshare(str(shot_id))
     return Response(status_code=204)
+
+
+@app.get("/api/shots/{shot_id}/flipbook.pdf")
+def shot_flipbook(request: Request, shot_id: UUID) -> Response:
+    """A printable flipbook of every frame: cut, stack, staple, flip. Rendered from the saved scene; no AI."""
+    code, pdf = prod(request).flipbook(str(shot_id))
+    return Response(pdf, media_type="application/pdf", headers={
+        "Content-Disposition": f'inline; filename="{code}-flipbook.pdf"', "Cache-Control": "private, no-store"})
 
 
 @app.get("/api/shots/{shot_id}/frames/{frame}/image")

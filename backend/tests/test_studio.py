@@ -527,3 +527,17 @@ def test_a_connection_string_in_mongodb_db_fails_fast_with_a_clear_message(monke
     monkeypatch.setenv("MONGODB_DB", "mongodb+srv://user:pass@cluster0.example.net/")
     with pytest.raises(LibraryError, match="Put the connection string in MONGODB_URI"):
         Library()
+
+
+def test_describe_names_describes_and_tags_in_one_call_and_cleans_them(client):
+    from backend.ai import _Described
+    from backend.models import TagRequest
+    sparks = Sparks.__new__(Sparks)
+    sparks._json = Mock(return_value=_Described(name=" Little <b>Fox</b> Doodle!! ", description="  An orange fox\n  sits. ",
+                                                tags=["Fox", "fox", "<x>", "orange fox"]))
+    result = sparks.describe(TagRequest(layers=LAYERED["layers"]), "it is an animated scene")
+    assert result == {"name": "Little Fox", "description": "An orange fox sits.", "tags": ["fox", "orange fox"]}
+    assert "only its first frame" in sparks._json.call_args.args[0][1]
+
+    http, _ = client
+    assert http.post("/api/describe", json={"layers": LAYERED["layers"]}).json()["name"] == "Robot Face"

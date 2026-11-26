@@ -39,39 +39,43 @@ That's the whole idea behind **Inkling**:
 
 ## Walk through it with me
 
-**The blank page.** Open Inkling and the paper isn't empty: a strip of starters floats over it.
-Beach. Mountains. City at night. A character sheet with proportion guides. A bouncing ball,
-already animated. Be honest: is a beach horizon your art? No. *Your character standing on it* is.
-Tap one, and it vanishes the moment your pencil touches the page. You're drawing in seconds.
+**The blank page.** Open Inkling and there are two doors: **New asset** or **New backdrop**, with
+the things you made last right underneath. No settings, no tour. Tap one and you're drawing.
+Rough is fine. Stuck on a blank page? Drop in a photo, or type *"a small blue bird"* and let AI
+sketch it. Either way, Inkling traces it into **plain strokes you can edit**, not a flat picture
+you can only stare at. Is a traced outline your art? No. What you do with it next is.
 
-**The stuck spot.** You've nailed the face, but the hand is fighting you. Box it and ask: *"fix
-the fingers."* AI proposes a few strokes, plain and editable. Press Enter to keep them, or skip.
-Who chose the problem? You. Who approved the answer? You. That's a calculator.
+**The rough spot.** Your lines are wobbly. Tap **✦ Refine** and AI proposes a cleaner pass of
+*your* strokes, as a preview you keep or skip, and you never have to stop drawing while it thinks.
+Who chose to clean it up? You. Who approved the answer? You. That's a calculator.
 
-**The lookalikes.** You drew a Red Rocket. The scene needs a whole squadron. Ask for variations, and
-before anything is drawn you get a *plan*: names and briefs you can rewrite. Then AI edits **your
-own strokes**. It doesn't repaint from scratch. In our tests, additive briefs like "add lasers",
-"battle damage", and "a shield" kept **5 of 5** of the artist's strokes and added a handful. Every AI
-stroke is marked as AI, permanently. Keep the ones you like, finish them by hand, and tap **Build a
-scene**.
+**The filing.** Hit Save without typing a thing. AI names it, describes it, and tags it, so the fox
+you drew at midnight is findable as *"a cute orange fox, sitting"* tomorrow. Filing is arithmetic.
 
-**The scene.** Drop the rocket onto a beach and tap **Animate**. Voyage has already pulled the rest of
-your cast that fits a beach. An AI director looks at the frame and pitches three shots: *"Blast Off From
-Beach: the rocket shakes on the sand, then rockets past the sun."* Tap one. One AI call returns
-**keyframes, not pixels**: ten poses for ten seconds, each with a name (*rumble, anticipation, takeoff,
-settle*). The computer fills in the other seventy frames. It moves **your** drawing; it never redraws it.
-Then grab the rocket on frame 13 and fix the arc yourself. Every one of the 80 frames is yours.
+**The shot.** Tap **Make a shot**. Your fox lands in a fresh ten-second shot and it's already
+moving: AI has found its legs, arms, and tail once (a rig, kept with the asset), so it *walks*,
+legs in step and tail wagging, instead of sliding across like a sticker. Don't like the route? Drag
+your finger where it should go: the trail becomes the path. It turns to face where it's heading,
+leans into the curves, eases in and out. Switch **Walk · Hop · Glide · Fly** with one tap. It's all
+**keyframes, not pixels**: a dozen poses, with the computer filling in the other seventy frames. It
+moves **your** drawing; it never redraws it. Then grab the fox on frame 13 and fix the arc yourself.
+Every one of the 80 frames is yours.
 
-**The search.** Now the fun part. Describe it: *"the rocket high above the pine tree."* Or just
-doodle it. Inkling searches every asset, every scene, **every single frame**, and opens the hit at
-that exact frame, ready to tweak. Someone redrew the rocket in blue, by hand, and never linked it?
-It still finds it (similarity **0.86**, against 0.66-0.73 for unrelated drawings).
+**The next shot.** Then do it again. **Another shot** keeps the backdrop and hands you a new take:
+a variation, a reverse angle, a piece of a film you'll stitch later. Each shot is named and
+described on save, so it doesn't pile up as *Untitled 37*.
 
-**The lesson.** This is my favorite. Before you keep the shot, tap **How it works**. The dots along the
-path are the frames: close together, slow; far apart, fast. The diamonds are the keyframes, the poses that
-matter. *Anticipation* is the little dip before the jump that makes the jump read. That's the secret
-Disney's animators wrote down in the 1930s, explained on **your** rocket, in plain words a ten-year-old
-can follow. Then tap **Share**: a link, a looping GIF, and the same lesson on the page. The AI didn't
+**The search.** Now the fun part. Describe an asset: *"something that flies."* Or just doodle it.
+Inkling searches your whole library by meaning and opens the match. Open the asset and you see
+every shot it's in, searchable on its own: *"Little Fox on the beach"*. Someone redrew the rocket
+in blue, by hand, and never linked it? **More like it** still finds it (similarity **0.86**, against
+0.66-0.73 for unrelated drawings).
+
+**The flipbook.** This is my favorite. Tap **Flipbook** and Inkling lays out every frame of the shot
+on printable pages, ten to a sheet, with cut lines and a staple mark. Print it, cut it, stack it,
+flip it with your thumb. Or tap **How it moves** first: the dots along the path are the frames
+(close together, slow; far apart, fast), and *ease in, ease out* is the secret Disney's animators
+wrote down in the 1930s, explained on **your** fox in words a ten-year-old can follow. The AI didn't
 hide the craft. It handed it to you.
 
 ---
@@ -94,8 +98,8 @@ That's the difference between replacing the artist and *arming* them.
 Here's what the calculator really did: it didn't just make math faster. It made **ambitious** math
 affordable. Problems nobody would have attempted by hand became an afternoon's work.
 
-Same here. If nine on-model lookalikes take minutes instead of days, you don't do less art. You
-attempt the battle scene you would have cut. If finding any frame takes one sentence, you reuse
+Same here. If a shot takes a drag of your finger instead of eighty drawings, you don't do less art.
+You attempt the short film you would have cut. If finding any asset takes one sentence, you reuse
 instead of redraw, and spend the saved hours on the shot only you could draw. The ceiling goes up.
 The hand stays on the line.
 
@@ -108,12 +112,13 @@ the history of every stroke lives *in the same place* as the search over your wo
 it was made can be hidden, lost, or locked inside someone else's model. The receipt and the search are
 one system:
 
-- **Voyage AI** multimodal embeddings understand drawings and words in one space, so a doodle can
-  find a frame and a sentence can find an asset.
+- **Voyage AI** multimodal embeddings understand drawings and words in one space, so a doodle or a
+  sentence can find an asset, and every shot it's in.
 - **MongoDB Atlas** keeps the operational truth (versions, scenes, status, assignee, lineage, hand
   share, every stroke) *right next to* the vectors. "Not approved, sequence SQ010, mostly by hand"
   is filtered **inside** the vector search, not bolted on after.
-- **Gemini** drafts small, reviewable edits on the artist's own strokes, and nothing lands without a yes.
+- **Gemini** names and tags, rigs, refines, and sketches on request: small, reviewable drafts on the
+  artist's own strokes, and nothing lands without a yes.
 - **m-stash** accounts keep every library private to the artist who made it.
 
 Meaning, metadata, and process in one place. That's what lets a studio ask questions it couldn't before.
@@ -124,8 +129,8 @@ Meaning, metadata, and process in one place. That's what lets a studio ask quest
 
 You don't have to agree with a single line of this post. Just try it.
 
-**If you draw:** create an account, tap *Start with the demo library*, open Little Fox, and press
-*Watch it being made*. Then draw something of your own. (Today Inkling runs as a preview that a
+**If you draw:** create an account, tap *Start with the demo library*, open Little Fox, and tap
+*Make a shot*. Then draw something of your own. (Today Inkling runs as a preview that a
 builder starts for you. A hosted demo is the next step.)
 
 **If you build:** two commands, with MongoDB Atlas Local, Voyage, and Gemini in Docker Compose:
@@ -135,8 +140,8 @@ docker compose up --build -d --wait
 docker compose exec -T studio python -m backend.seed_demo
 ```
 
-Open `localhost:8000/studio`, sign up, and draw something bad on purpose. Ask for help with the part
-you hate. Then hit **Watch it being made**, and watch your own hand do the work.
+Open `localhost:8000`, sign up, and draw something bad on purpose. Refine the part you hate. Make a
+shot, print the flipbook, and flip through your own hand doing the work.
 
 Then ask yourself one last question:
 

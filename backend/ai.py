@@ -7,6 +7,7 @@ import math
 import os
 import re
 from collections import Counter
+from typing import get_args
 
 from google import genai
 from google.genai import errors as genai_errors
@@ -16,8 +17,8 @@ from pydantic import BaseModel
 
 from backend.library import CANVAS_HEIGHT, CANVAS_WIDTH, png_bytes, render_image
 from backend.models import (
-    MAX_MOTION_KEYS, MAX_POINTS, MAX_SKETCH_CODE, MAX_STROKES, CodeRequest, DirectRequest, Layer, MotionRequest, RefineIdeasRequest, RefineRequest, Region, SketchRequest,
-    SparkRequest, Stroke, TagRequest, VariationPlanRequest,
+    MAX_MOTION_KEYS, MAX_POINTS, MAX_SKETCH_CODE, MAX_STROKES, CodeRequest, DirectRequest, Layer, MotionRequest, PictureRequest,
+    RefineIdeasRequest, RefineRequest, Region, Rig, RigPart, SketchRequest, SparkRequest, Stroke, TagRequest, VariationPlanRequest,
     VariationRequest, clean_tags,
 )
 
@@ -116,6 +117,31 @@ class _Tags(BaseModel):
     tags: list[str]
 
 
+# Words about the medium, not the subject: "Fox Sketch" is a fox.
+MEDIUM_WORDS = {"sketch", "sketches", "drawing", "doodle", "doodles", "illustration", "lineart", "scribble"}
+
+
+class _Bone(BaseModel):
+    part: str
+    strokes: list[int]
+    joint_x: float
+    joint_y: float
+
+
+class _Rig(BaseModel):
+    kind: str
+    bones: list[_Bone]
+
+
+RIG_TABLE_STROKES = 300  # the model reads at most this many strokes; the rest stay with the body
+
+
+class _Described(BaseModel):
+    name: str
+    description: str
+    tags: list[str]
+
+
 class _Suggestions(BaseModel):
     ideas: list[str]
 
@@ -151,8 +177,7 @@ class _CodeSketch(BaseModel):
 LAB_API = """\
 Write a p5.js 1.11 sketch in GLOBAL mode (define function setup() and function draw()). It runs in a sandbox
 with no network and no DOM beyond its canvas. Use these globals, provided by Inkling:
-- W = 1000, H = 650: the paper size. Call createCanvas(W, H) for 2D, or createCanvas(W, H, WEBGL) for 3D.
-  In WEBGL the origin is the center; use translate(-W / 2, -H / 2) to work in paper coordinates.
+- W = 1000, H = 650: the paper size. Call createCanvas(W, H). Inkling assets are 2D: never use WEBGL or 3D.
 - strokes: the artist's drawing (frame 1), in drawing order. Each stroke is
   { points: [{x, y, pressure}], color: '#rrggbb', width, layer: 'name', order: 0..n-1 }, x in 0..W, y in 0..H.
 - frames: every flipbook frame, each an array of strokes in the same shape (frames[0] is strokes).
@@ -394,6 +419,109 @@ class Sparks:
         if not tags:
             raise AIError("Gemini could not tag this drawing.")
         return tags
+
+    def describe(self, request: TagRequest, context: str = "") -> dict:
+        """One call, two search handles: a plain-words description and tags, written from the picture itself."""
+        image = png_bytes(render_image(request.layers))
+        given = "; ".join(filter(None, [
+            f'title "{request.title}"' if request.title else "",
+            f'notes "{request.description}"' if request.description else "",
+        ]))
+        result = self._json([
+            types.Part.from_bytes(data=image, mime_type="image/png"),
+            "Describe this hand-drawn 2D artwork so the artist can find it later by searching in plain words. "
+            "name: a short, specific name for what it is, 1-3 words in title case (e.g. 'Little Fox', 'Red Rocket', "
+            "'Beach Sunset'); never words about the medium (sketch, drawing, doodle, line art). "
+            "description: one or two short sentences (under 200 characters) saying what is drawn and how it "
+            "looks: subject, pose or action, notable colors, setting, mood. If it is an animated scene, say what "
+            "happens in it (who moves, and how). Concrete and visual. Never mention the medium, the paper, a white "
+            "or plain background, or that it is a drawing; no praise. tags: 3-8 short lowercase tags (1-2 words "
+            "each) naming what is visible or happens: subjects, objects, animals, actions, scene, mood. Skip generic "
+            "medium words (drawing, sketch, line art, doodle, illustration, minimalist, simple) unless the artist used them."
+            + (f" The artist gave it {given}." if given else "")
+            + (f" The image is only its first frame. What the studio knows about it: {context}. Lead the "
+               "description with what happens (who moves, and how), then how it looks." if context else ""),
+        ], _Described)
+        description = " ".join(result.description.split())[:300]
+        tags = clean_tags(result.tags)
+        if not description and not tags:
+            raise AIError("Gemini could not describe this drawing.")
+        words = re.sub(r"[^\w' -]", "", re.sub(r"<[^>]*>", "", result.name)).split()
+        name = " ".join(w for w in words if w.lower() not in MEDIUM_WORDS)[:40] or " ".join(words)[:40]
+        return {"name": name, "description": description, "tags": tags}
+
+    def rig(self, layers: list[Layer]) -> dict:
+        """Which strokes make which part (legs, arms, tail, wings, head) and the joint each turns on, so a gait can
+        swing limbs instead of sliding a sticker. Stroke order is the asset's visible layers, flattened."""
+        strokes = [stroke for layer in layers if layer.visible for stroke in layer.strokes]
+        ink = [p for stroke in strokes if not stroke.erase for p in stroke.points]
+        if not ink:
+            raise AIError("Nothing to rig: the asset has no visible ink.")
+        x0, x1 = min(p.x for p in ink), max(p.x for p in ink)
+        y0, y1 = min(p.y for p in ink), max(p.y for p in ink)
+        w, h = max(x1 - x0, 1e-6), max(y1 - y0, 1e-6)
+        rel = lambda x, y: (round(100 * (x - x0) / w), round(100 * (y - y0) / h))  # noqa: E731
+        rows = []
+        for i, stroke in enumerate(strokes[:RIG_TABLE_STROKES]):
+            if stroke.erase:
+                continue
+            xs, ys = [p.x for p in stroke.points], [p.y for p in stroke.points]
+            (a, b), (c, d) = rel(min(xs), min(ys)), rel(max(xs), max(ys))
+            rows.append(f"{i}: {stroke.color}{' filled' if stroke.fill else ''}, box {a},{b} to {c},{d}")
+        picture = render_image(layers).crop((round(x0 * CANVAS_WIDTH) - 8, round(y0 * CANVAS_HEIGHT) - 8,
+                                             round(x1 * CANVAS_WIDTH) + 8, round(y1 * CANVAS_HEIGHT) + 8))
+        result = self._json([
+            types.Part.from_bytes(data=png_bytes(picture), mime_type="image/png"),
+            "Rig this 2D drawing for simple cut-out animation. Coordinates are 0-100 across the drawing's box (x right, "
+            "y down). Its strokes, by index (box = the stroke's extent):\n" + "\n".join(rows) + "\n\n"
+            "kind: biped, quadruped, bird, fish, or object (anything without limbs). bones: group the strokes into the "
+            "parts that move on their own: head, leg_front, leg_back, arm_front, arm_back, tail, wing_front, wing_back. "
+            "Put everything else (torso, belly, details that ride along, any stroke outlining most of the figure) in "
+            "body. For each bone, joint_x/joint_y is where it attaches and turns: a leg at the hip, an arm at the shoulder, a tail where it meets the body, a wing at its "
+            "root, the head at the neck. A quadruped's near legs are leg_front, the far ones leg_back. Use each stroke "
+            "index at most once. An object has no bones, or one body bone.",
+        ], _Rig)
+        parts = set(get_args(RigPart))
+        used: set[int] = set()
+
+        def outline(stroke) -> bool:  # spans most of the figure both ways: the body's outline, never a limb
+            xs, ys = [p.x for p in stroke.points], [p.y for p in stroke.points]
+            return max(xs) - min(xs) > 0.6 * w and max(ys) - min(ys) > 0.6 * h
+
+        bones = []
+        for bone in result.bones:
+            if bone.part not in parts or bone.part in ("body", "other"):
+                continue
+            picked = [i for i in dict.fromkeys(bone.strokes)
+                      if 0 <= i < len(strokes) and not strokes[i].erase and i not in used and not outline(strokes[i])]
+            if not picked:
+                continue
+            used.update(picked)
+            bones.append({"part": bone.part, "strokes": picked,
+                          "px": min(1, max(0, bone.joint_x / 100)), "py": min(1, max(0, bone.joint_y / 100))})
+        kind = result.kind if result.kind in ("biped", "quadruped", "bird", "fish", "object") else "object"
+        return Rig.model_validate({"kind": kind, "strokes": len(strokes), "bones": bones[:12]}).model_dump()
+
+    def picture(self, request: PictureRequest) -> dict:
+        """A new asset from words: clean 2D line art the studio traces into editable strokes (in the browser)."""
+        response = self._generate(
+            model=self.image_model,
+            contents=[f"Draw {request.prompt} as a single 2D character or prop for a hand-drawn cartoon: clean, bold, "
+                      "even black outlines on a pure white background, flat and simple, a few flat fill colors at most. "
+                      "Side view, the whole thing visible and centered, facing right. No background scene, no shading, "
+                      "no texture, no text, no border."],
+            config=types.GenerateContentConfig(
+                response_modalities=["IMAGE"], image_config=types.ImageConfig(aspect_ratio="1:1"),
+            ),
+        )
+        data = next((part.inline_data.data for candidate in response.candidates or []
+                     for part in (candidate.content.parts if candidate.content else []) or []
+                     if part.inline_data and part.inline_data.data), None)
+        if data is None:
+            raise AIError("Gemini returned no picture. Try other words.")
+        picture = PILImage.open(io.BytesIO(data)).convert("RGB")
+        picture.thumbnail((768, 768), PILImage.LANCZOS)
+        return {"note": f"Drawn by AI: {request.prompt}", "image": f"data:image/png;base64,{base64.b64encode(png_bytes(picture)).decode('ascii')}"}
 
     def strokes(self, request: SparkRequest) -> dict:
         box = crop_box(request.region)
