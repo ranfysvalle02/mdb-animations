@@ -2820,6 +2820,7 @@
   }
   function keepMotion() {
     if (!motionDraft) return;
+    provisional = null; // a kept take makes the auto-saved asset real
     const { spec, stacks } = motionDraft;
     const replaced = frames.length;
     const kept = takeAt + 1, of = takes.length;
@@ -2887,6 +2888,7 @@
     renderTakes();
     $('scene-prompt').placeholder = 'A curious fox discovers a tiny planet...';
     setDockBusy(false);
+    dropProvisional();
   }
 
   // ---------------------------------------------------------------- "How it moves": animation, demystified
@@ -3502,7 +3504,10 @@
       if (!document.body.classList.contains('focus-mode')) $('pipeline').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       if (savedAsset) asset = { id: editing.id, name: $('title').value.trim() };
       if (fresh) {
+        const drawing = snapshot();
         asset = await saveAsAsset();
+        // Provisional until a take is kept: discard (or an error) takes it back out of the library.
+        provisional = { id: asset.id, name: asset.name, drawing };
         if (revision !== savedRevision) throw new Error('Your drawing changed while saving. Try again to include your changes.');
       }
       if (asset) {
@@ -3550,10 +3555,35 @@
     } catch (error) {
       pipelineFail(error.message);
       flashTray(error.message, true);
+      if (!motionDraft) dropProvisional(false);
     } finally {
       directing = false;
       setDockBusy(false);
     }
+  }
+  // Animate saves a fresh drawing as an asset so the scene can link to it. If no take is kept, that asset was never
+  // really made: delete it (only if nothing uses it) and put the drawing back exactly as it was.
+  let provisional = null;
+  async function dropProvisional(say = true) {
+    const item = provisional;
+    provisional = null;
+    if (!item) return;
+    try {
+      await api(`/api/assets/${encodeURIComponent(item.id)}`, { method: 'DELETE' });
+    } catch {
+      return; // in use, or offline: it stays, like any saved asset
+    }
+    if (layers.some(layer => layer.asset?.asset_id === item.id)) {
+      pushUndo();
+      restore(item.drawing);
+      editing = null;
+      savedRevision = -1;
+      setSaveKind('asset');
+      $('title').value = '';
+    }
+    loadGallery(currentQuery);
+    loadSceneBackdrops();
+    if (say) flashTray(`Nothing kept, so \u201c${item.name}\u201d stayed out of your library. Your drawing is back, as you drew it.`);
   }
 
   async function reviseMotion(prompt, read = readPrompt(prompt)) {
@@ -3642,7 +3672,7 @@
         message('library-status', `Ranking your library against ${asset.name}\u2019s stored vector\u2026`);
         const data = await api(`/api/assets/${encodeURIComponent(asset.id)}/similar`, { signal: controller.signal });
         if (controller.signal.aborted) return;
-        renderEverything(data, { receipt: `Similar to ${data.of.name}, plus animations using it.` });
+        renderEverything(data, { receipt: `Similar to ${data.of.name}, plus animations using it.${timingNote(data.timing)}` });
       } else {
         message('library-status', 'Voyage AI is embedding your drawing\u2026');
         const ask = scope => api('/api/search/sketch', { method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -3650,8 +3680,9 @@
         const [assets, moments] = await Promise.all([ask('asset'), ask('frame')]);
         if (controller.signal.aborted) return;
         const self = editing?.kind === 'asset' ? editing.id : null;
+        const timing = assets.timing && moments.timing ? { embeddings: 2, ms: Math.max(assets.timing.ms, moments.timing.ms) } : null;
         renderEverything({ assets: assets.items.filter(hit => hit.id !== self), frames: moments.items },
-          { receipt: '\u25ce Your drawing was the search: art and scenes that look like it.' });
+          { receipt: `\u25ce Your drawing was the search: art and scenes that look like it.${timingNote(timing)}` });
       }
     } catch (error) {
       if (error.name !== 'AbortError') message('library-status', error.message, true);
@@ -4205,7 +4236,7 @@
   const KIND_TEXT = {
     asset: { label: 'Name', placeholder: 'Red Rocket', save: 'Save asset',
       hint: 'Draw an asset or backdrop. Reuse it anywhere.' },
-    shot: { label: 'Scene name', placeholder: 'Rocket_001', save: 'Save scene',
+    shot: { label: 'Scene name', placeholder: 'Rocket takeoff', save: 'Save scene',
       hint: 'Save your animation to find it again.' },
     idea: { label: 'Name', placeholder: 'Chase scene thumbnail', save: 'Save idea',
       hint: 'A loose idea to find later by describing it. <i>e.g. "that moody forest".</i>' }
@@ -4228,7 +4259,7 @@
     document.querySelectorAll('.kind-fields').forEach(f => { f.hidden = f.dataset.for !== saveKind; });
     $('title-label').textContent = text.label;
     $('title').placeholder = text.placeholder;
-    $('title').maxLength = saveKind === 'shot' ? 40 : saveKind === 'asset' ? 80 : 120;
+    $('title').maxLength = saveKind === 'asset' ? 80 : 120;
     $('kind-hint').innerHTML = text.hint; // static copy from KIND_TEXT only
     const updating = editing && editing.kind === saveKind;
     $('save-label').textContent = !updating ? text.save
@@ -4255,6 +4286,13 @@
     $('save-form').requestSubmit();
   });
 
+  // Any words make a scene code: spaces and symbols become _, and it's trimmed to the 40 characters a code allows.
+  function sceneCode(name) {
+    if (CODE.test(name)) return name;
+    const code = name.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/[^A-Za-z0-9.-]+/g, '_').replace(/^[^A-Za-z0-9]+/, '').slice(0, 40).replace(/_+$/, '');
+    const stamp = new Date();
+    return CODE.test(code) ? code : `Scene_${String(stamp.getHours()).padStart(2, '0')}${String(stamp.getMinutes()).padStart(2, '0')}`;
+  }
   function savePayload(name) {
     if (frames.length > 1 && saveKind !== 'shot') throw new Error('Frames are saved with scenes. Choose \u25a3 Scene, or delete the extra frames.');
     const base = { description: $('description').value.trim(), layers: docStack(frames[0]), tags };
@@ -4267,12 +4305,14 @@
         body: { name, type: $('asset-type').value, ...base, history, ...(pendingOrigin && !updating ? { origin: pendingOrigin } : {}) } };
     }
     const project = $('shot-project').value.trim() || 'demo';
-    // Studios name shots SEQ_SHOT (SQ070_0010), so a blank sequence comes from the code.
+    // Name it in plain words; the scene's code comes from them ("Rocket takeoff" saves as Rocket_takeoff).
+    name = sceneCode(name);
+    // Studios name shots SEQ_SHOT (SQ070_0010), so a blank sequence comes from a code shaped like that.
     let sequence = $('shot-sequence').value.trim();
-    if (!sequence && /^[A-Za-z0-9.-]+_/.test(name)) $('shot-sequence').value = sequence = name.split('_')[0];
+    if (!sequence && /^[A-Za-z]+\d+_\d+$/.test(name)) $('shot-sequence').value = sequence = name.split('_')[0];
     if (!sequence) $('shot-sequence').value = sequence = 'SCENE';
-    for (const [label, value] of [['Scene name', name], ['Project', project], ['Sequence', sequence]]) {
-      if (!CODE.test(value)) throw new Error(`${label}: letters, numbers, _ . or - only (no spaces). e.g. SQ010_0040`);
+    for (const [label, value] of [['Project', project], ['Sequence', sequence]]) {
+      if (!CODE.test(value)) throw new Error(`${label}: letters, numbers, _ . or - only (no spaces). e.g. SQ010`);
     }
     return { path: updating ? `/api/shots/${editing.id}` : '/api/shots', method: updating ? 'PUT' : 'POST', history,
       body: { code: name, project, sequence, status: $('shot-status').value, assignee: $('shot-assignee').value.trim(), ...base,
@@ -4767,6 +4807,31 @@
       : `${what || `${items.length} ${TAB_TEXT[tab].noun}`}${filterText}.`);
   }
   // Everything at once: assets, scenes, and frames, each in its own row, with what it took to find them.
+  // ---------------------------------------------------------------- search by meaning: words, or pasted code
+  const looksLikeCode = text => text.length >= 20 && (/=>|\bfunction\b|\b(?:const|let|var)\s+\w+\s*=|\bfor\s*\(/.test(text)
+    || (/[{};]/.test(text) && /[=(]/.test(text)));
+  async function searchMeaning(query, signal) {
+    if (looksLikeCode(query)) {
+      const data = await api('/api/search/code', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: query.slice(0, MAX_SKETCH_CODE) }), signal });
+      return { scenes: data.items, code: data.engine || {} };
+    }
+    return api(`/api/find?q=${encodeURIComponent(query.slice(0, 500))}`, { signal });
+  }
+  // The receipt under results: which engine answered, and how long it took. Search, demystified.
+  function timingNote(timing) {
+    if (!timing) return '';
+    if ('embed_ms' in timing) return timing.embeddings ? ` Voyage ${timing.embed_ms} ms \u00b7 Atlas ${timing.search_ms} ms.`
+      : ` No new embeddings: Atlas ${timing.search_ms} ms.`;
+    return ` ${timing.embeddings} Voyage embedding${timing.embeddings === 1 ? '' : 's'} + Atlas, ${timing.ms} ms.`;
+  }
+  function searchNote(data, query) {
+    if (data.code) {
+      const how = data.code.by === 'atlas-autoembed' ? `Atlas Automated Embedding (${data.code.model})` : 'Voyage AI + Atlas Vector Search';
+      return `\u27e8/\u27e9 You pasted code, so scenes are ranked by their code: ${how}${data.code.ms ? `, ${data.code.ms} ms` : ''}.`;
+    }
+    return `Results for \u201c${query}\u201d, most similar first.${timingNote(data.timing)}`;
+  }
   function renderEverything({ assets = [], scenes = [], frames: hits = [] }, { receipt = '', empty = '' } = {}) {
     const section = (title, count, cards, kind) => {
       const wrap = el('section', `results-section ${kind}`);
@@ -4824,9 +4889,9 @@
       message('library-status', query ? `Searching for \u201c${query}\u201d\u2026` : 'Opening your library\u2026');
       try {
         if (query) {
-          const data = await api(`/api/find?q=${encodeURIComponent(query)}`, { signal: controller.signal });
+          const data = await searchMeaning(query, controller.signal);
           if (controller.signal.aborted) return;
-          renderEverything(data, { receipt: `Results for \u201c${query}\u201d, most similar first.` });
+          renderEverything(data, { receipt: searchNote(data, query) });
         } else {
           const [assets, scenes] = await Promise.all([api('/api/assets', { signal: controller.signal }), api('/api/shots', { signal: controller.signal })]);
           if (controller.signal.aborted) return;
@@ -5254,16 +5319,16 @@
     clearTimeout(finderTimer);
     finderRequest?.abort();
     if (!query) { renderFinderHome(); return; }
-    if (finderCache.has(query)) { renderFinderResults(finderCache.get(query), `Results for \u201c${query}\u201d, closest in meaning first.`); return; }
+    if (finderCache.has(query)) { renderFinderResults(finderCache.get(query), searchNote(finderCache.get(query), query)); return; }
     const controller = new AbortController();
     finderRequest = controller;
     $('finder-status').textContent = 'Searching by meaning\u2026';
     $('finder').classList.add('searching');
     try {
-      const data = await api(`/api/find?q=${encodeURIComponent(query)}`, { signal: controller.signal });
+      const data = await searchMeaning(query, controller.signal);
       if (controller.signal.aborted) return;
       finderCache.set(query, data);
-      renderFinderResults(data, `Results for \u201c${query}\u201d, closest in meaning first.`);
+      renderFinderResults(data, searchNote(data, query));
     } catch (error) {
       if (error.name !== 'AbortError') $('finder-status').textContent = error.message;
     } finally {
@@ -6650,6 +6715,9 @@
     loadGallery();
     loadTags();
     loadSceneBackdrops();
+    let remix = null;
+    try { remix = sessionStorage.getItem('inkling.remix'); sessionStorage.removeItem('inkling.remix'); } catch { /* fine */ }
+    if (remix) setTimeout(() => remixShared(remix), 600);
     const empty = !me.library?.assets && !me.library?.scenes;
     if (empty && me.demo && (fresh || !localStorage.getItem(`inkling.welcomed.${me.user.id}`))) $('welcome').showModal();
     else if (empty && me.demo) starterPackOnce();
@@ -6772,11 +6840,13 @@ function draw() {
   background(255);
   const f = (frameCount - 1) % LOOP;   // this frame
   const t = f / max(1, LOOP - 1);      // 0..1; the last frame lands on the last pose
+  // Remixed onto another drawing? If no layer name matches, the whole drawing takes the first track.
+  const remix = layers.some(layer => MOTION[layer.name]) ? null : Object.values(MOTION)[0];
   for (const layer of layers) {
     if (!layer.visible${effects.length ? ' || EFFECT_LAYERS.includes(layer.name)' : ''}) {
       continue;   // ${effects.length ? 'effects are drawn by drawEffects() below, fresh every frame' : 'hidden layers stay hidden'}
     }
-    const move = MOTION[layer.name];
+    const move = MOTION[layer.name] || remix;
     push();
     if (move) {
       const k = pose(move.keys, t);
@@ -7698,6 +7768,22 @@ function draw() {
     history.replaceState(null, '', location.pathname);
     if (params.get('focus')) setFocus(true);
     else if (params.get('find') && !offline) openFinder();
+    else if (/^[A-Za-z0-9_-]{12,32}$/.test(params.get('remix') || '') && !offline) remixShared(params.get('remix'));
+  }
+  // "Remix in Inkling" on a share page: that scene's code, as a new Lab take running over *your* drawing.
+  async function remixShared(token) {
+    if (!account) { try { sessionStorage.setItem('inkling.remix', token); } catch { /* fine */ } return; } // after sign-in
+    try {
+      const sketch = await api(`/s/${encodeURIComponent(token)}/sketch.json`);
+      const seed = { title: `\u21bb ${sketch.title || 'Remix'}`, by: sketch.by === 'ai' ? 'ai' : 'artist', prompt: '', code: sketch.code,
+        note: '\u21bb Remixed from a shared scene: its code, now moving your drawing. Change any number, Run, then Bake.' };
+      const open = () => openLab(seed);
+      if (hasInk()) { open(); return; }
+      message('drawing-status', 'Remix ready. Draw something (or pick a starter), then open it: the code moves your strokes.', false,
+        [{ label: '\u27e8/\u27e9 Open the remix', tip: 'Open the remix|The shared scene\u2019s code, in the Lab, running over your drawing.', run: open }]);
+    } catch (error) {
+      flashTray(error.message, true);
+    }
   }
 
   let warming = false;

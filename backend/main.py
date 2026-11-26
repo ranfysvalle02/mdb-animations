@@ -563,6 +563,7 @@ async def search_by_sketch(request: Request) -> dict:
     body = await read_json(request, SketchSearch)
     visible = [layer for layer in body.layers if layer.visible]
     production = prod(request)
+    started = time.perf_counter()
     if body.scope == "asset":
         crop = ink_crop(visible)
         items = await run_in_threadpool(production.search_assets, crop[0], asset_type=body.asset_type)
@@ -574,7 +575,8 @@ async def search_by_sketch(request: Request) -> dict:
             run = {"shot": production.search_shots, "frame": production.find_frames,
                    "idea": lib(request).search}[body.scope]
             items = await run_in_threadpool(run, picture)
-    return {"items": items}
+    # One Voyage embedding of the drawing, then one Atlas vector search: the receipt the studio shows.
+    return {"items": items, "timing": {"ms": round((time.perf_counter() - started) * 1000), "embeddings": 1}}
 
 
 @app.post("/api/search/code")
@@ -882,8 +884,17 @@ def public_share(request: Request, token: str, *fields: str) -> dict:
 
 @app.api_route("/s/{token}", methods=["GET", "HEAD"], include_in_schema=False)
 def shared_page(request: Request, token: str) -> HTMLResponse:
-    share = public_share(request, token, "token", "code", "description", "fps", "frames", "motion", "cast")
+    share = public_share(request, token, "token", "code", "description", "fps", "frames", "motion", "cast", "sketch")
     return HTMLResponse(share_page(share, public_origin(request)), headers=PUBLIC_CACHE)
+
+
+@app.api_route("/s/{token}/sketch.json", methods=["GET", "HEAD"], include_in_schema=False)
+def shared_sketch(request: Request, token: str) -> dict:
+    """The shared scene's p5.js code, so "Remix in Inkling" can load it into the Lab. The token is the permission."""
+    sketch = public_share(request, token, "sketch", "code").get("sketch")
+    if not sketch:
+        raise HTTPException(404, "This scene has no code to remix.")
+    return {"title": sketch.get("title", ""), "by": sketch.get("by", ""), "code": sketch.get("code", "")}
 
 
 @app.api_route("/s/{token}/clip.gif", methods=["GET", "HEAD"], include_in_schema=False)

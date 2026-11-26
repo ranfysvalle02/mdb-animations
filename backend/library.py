@@ -127,13 +127,16 @@ class Library(Scoped):
         key = os.environ.get("VOYAGE_API_KEY")
         if not uri or not key:
             raise LibraryError("Set MONGODB_URI and VOYAGE_API_KEY before starting the API.")
+        database = os.environ.get("MONGODB_DB", "animation_studio")
+        if "://" in database:  # an easy paste to make, and a confusing one to debug
+            raise LibraryError("MONGODB_DB is a database name. Put the connection string in MONGODB_URI.")
         self.client = MongoClient(
             uri, appname="animation-studio", serverSelectionTimeoutMS=10000,
             connectTimeoutMS=10000, socketTimeoutMS=60000,
         )
         self.atlas = Atlas(
             mongo_client=self.client, voyage_api_key=key,
-            db=os.environ.get("MONGODB_DB", "animation_studio"),
+            db=database,
             model="voyage-multimodal-3.5", rerank_model=None,
         )
         self.drawings = self.atlas.collection(

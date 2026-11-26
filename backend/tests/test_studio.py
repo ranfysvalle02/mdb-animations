@@ -519,3 +519,11 @@ def test_ai_sketches_are_unfenced_bounded_and_complete():
     for bad in ("function draw() {}", "let x = 1;", "function setup(){}\nfunction draw(){}\n" + "//" * 7000):
         with pytest.raises(AIError):
             clean_sketch(bad)
+
+
+def test_a_connection_string_in_mongodb_db_fails_fast_with_a_clear_message(monkeypatch):
+    monkeypatch.setenv("MONGODB_URI", "mongodb://localhost:1/?serverSelectionTimeoutMS=1")
+    monkeypatch.setenv("VOYAGE_API_KEY", "test")
+    monkeypatch.setenv("MONGODB_DB", "mongodb+srv://user:pass@cluster0.example.net/")
+    with pytest.raises(LibraryError, match="Put the connection string in MONGODB_URI"):
+        Library()

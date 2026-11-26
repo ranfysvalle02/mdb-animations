@@ -49,8 +49,13 @@ code invented (particles, effects) always stay labeled as code. Nothing is claim
 **Search by code.** Scene code is indexed with [MongoDB Automated Embedding](https://www.mongodb.com/docs/vector-search/crud-embeddings/automated-embedding/):
 an `autoEmbed` index on `sketch.code` with `voyage-code-4`, so Atlas embeds every saved sketch, and every code query,
 itself. **◎ Similar code** in the Lab finds scenes whose code is nearest by meaning. (On a cluster without Automated
-Embedding, it falls back to the scenes' multimodal vectors, whose story includes the code.) **↻ Remix** loads
+Embedding, it falls back to the scenes' multimodal vectors, whose story includes the code. That includes the bundled
+Atlas Local container: its search process isn't given a Voyage key, so to try Automated Embedding locally, point
+`MONGODB_URI` at a hosted Atlas cluster. The story of finding that out: [blog-autoembed.md](blog-autoembed.md).)
+**↻ Remix** loads
 any of them as a new take, running over your drawing: your library of motions becomes code you can reuse.
+Paste code into the library's search box and it searches the same way. Shared scenes show their code, with a
+**Remix in Inkling** button.
 
 **Take any scene apart.** In an animation, layer edits reach **all frames** by default: show or hide a layer, move or
 resize an asset, rename, add, delete, or reorder, once, and the whole animation follows (one Undo). Tap **All frames**
@@ -170,6 +175,8 @@ space for drawings and words), **Gemini** (drafts you accept or skip), and **m-s
 - **Deploy it:** [Render + hosted Atlas, step by step](docs/deploy-render.md) (one Blueprint: [`render.yaml`](render.yaml)).
 - **Why it exists:** [The Calculator Didn't Kill Math](hlog.md) (a 5-minute read).
 - **How search works:** [Saving Is Searching](blog2.md): Voyage multimodal embeddings, MongoDB Atlas Automated Embedding for code, and animations as code (a 6-minute read).
+- **The Lab:** [Your Strokes, as Numbers](blog-lab.md): p5.js, AI-written sketches, Sign it, and remixing code (a 5-minute read).
+- **Lessons for builders:** [The Index Was PENDING Forever](blog-autoembed.md): MongoDB Automated Embedding on hosted Atlas vs Atlas Local, and a fallback that works everywhere (an 8-minute read).
 - **What's next:** [NEXT-STEPS.md](NEXT-STEPS.md). **Notes on m-stash:** [m-stash-newbie.md](m-stash-newbie.md).
 
 > Brand note: "Inkling" has been used by other products (e.g. a discontinued Wacom pen). Do a trademark

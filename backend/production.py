@@ -765,6 +765,8 @@ class Production(Scoped):
         self.shares.update_one(self.q({"shot_id": shot_id}), {"$set": {
             "token": token, "code": shot.code, "description": shot.description[:200], "fps": shot.fps, "frames": len(stacks),
             "motion": shot.motion.model_dump() if shot.motion else None, "cast": [a["name"] for a in record.get("assets", [])],
+            # Every animation is code: the share shows it, and anyone can remix it into their own drawing.
+            "sketch": {"title": shot.sketch.title, "by": shot.sketch.by, "code": shot.sketch.code} if shot.sketch else None,
             "gif": clip, "poster": poster, "updated_at": stamp}, "$setOnInsert": {"created_at": stamp}}, upsert=True)
         return {"token": token, "frames": len(stacks), "bytes": len(clip)}
 

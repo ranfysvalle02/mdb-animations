@@ -398,7 +398,8 @@ def test_frame_search_and_sketch_endpoints(client):
     assert http.get("/api/frames", params={"asset_id": "nope"}).status_code == 422
     layers = shot_payload()["layers"][:1]
     http.production.search_assets.return_value = [{"id": "a"}]
-    assert http.post("/api/search/sketch", json={"scope": "asset", "layers": layers}).json() == {"items": [{"id": "a"}]}
+    found = http.post("/api/search/sketch", json={"scope": "asset", "layers": layers}).json()
+    assert found["items"] == [{"id": "a"}] and found["timing"]["embeddings"] == 1  # the receipt the studio shows
     http.post("/api/search/sketch", json={"scope": "frame", "layers": layers})
     assert http.production.find_frames.call_args.args[0].size == (1000, 650)  # the whole canvas is the query
     assert http.post("/api/search/sketch", json={"scope": "movie", "layers": layers}).status_code == 422
@@ -607,6 +608,7 @@ def test_scenes_embed_their_story_and_share_as_a_gif_snapshot():
     snapshot = update["$set"]
     assert snapshot["gif"].startswith(b"GIF89a") and snapshot["poster"].startswith(b"\x89PNG") and snapshot["cast"] == ["Red Rocket"]
     assert snapshot["motion"]["prompt"] == MOTION["prompt"] and len(first["token"]) >= 16
+    assert snapshot["sketch"] is None  # no code on this scene: the page simply skips the code section
     production.shares.find_one.return_value = {"token": first["token"]}
     assert production.share_shot(SHOT_ID)["token"] == first["token"]  # re-sharing refreshes, the link stays
 
@@ -637,6 +639,22 @@ def test_shared_scenes_are_public_by_token_only_and_escaped(client):
     assert http.delete(f"/api/shots/{SHOT_ID}/share").status_code == 204
     scope = {"type": "http", "method": "POST", "path": f"/api/shots/{SHOT_ID}/share", "query_string": b"", "headers": []}
     assert budget_for(Req(scope)) is EMBED_BUDGET
+
+
+def test_shared_scenes_show_their_code_escaped_and_hand_it_to_remix(client):
+    http, _ = client
+    token = "AbCdEfGhIjKlMnOp"
+    code = "const MOTION = { Rocket: { keys: [] } }; // </code></pre><script>steal()</script>"
+    http.production.shared.return_value = {"token": token, "code": "SQ010_0010", "description": "", "fps": 8, "frames": 8,
+                                           "motion": MOTION, "cast": [], "sketch": {"title": "Takeoff", "by": "ai", "code": code}}
+    page = http.get(f"/s/{token}").text
+    assert "<script>steal()" not in page and "&lt;/code&gt;&lt;/pre&gt;&lt;script&gt;steal()" in page
+    assert f"/?remix={token}" in page and "Gemini chose these poses" in page
+    assert http.get(f"/s/{token}/sketch.json").json() == {"title": "Takeoff", "by": "ai", "code": code}
+    http.production.shared.return_value = {"code": "SQ010_0010"}  # shared before scenes kept their code
+    assert http.get(f"/s/{token}/sketch.json").status_code == 404
+    http.production.shared.reset_mock()
+    assert http.get("/s/short/sketch.json").status_code == 404 and not http.production.shared.called
 
 
 def test_scene_motion_records_code_effects_but_rejects_unknown_ones():

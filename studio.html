@@ -304,7 +304,7 @@
 
     <section class="library" data-online aria-labelledby="library-heading">
       <div class="library-head">
-        <div><h2 id="library-heading">Find your art</h2><p class="library-sub">Every save is embedded automatically. Search by words, a sketch, or code.</p></div>
+        <div><h2 id="library-heading">Find your art</h2><p class="library-sub">Every save is embedded automatically. Search by words, a sketch, or pasted code.</p></div>
         <button type="button" id="browse" class="link-button">Show all</button>
       </div>
       <div class="library-tabs" role="tablist" aria-label="Library">
@@ -315,7 +315,7 @@
         <button type="button" role="tab" id="tab-shot" data-tab="shot" aria-selected="false" hidden>&#9635; Scenes</button>
         <button type="button" role="tab" id="tab-idea" data-tab="idea" aria-selected="false" hidden>&#9998; Ideas</button>
       </div>
-      <form id="search-form" class="search-bar" role="search"><label class="sr-only" for="query">Search by describing it</label><input id="query" type="search" maxlength="500" required placeholder="Describe anything&hellip;"><button type="button" class="voice-button" data-voice-for="query" aria-label="Speak a search" hidden>&#127908;</button><button type="button" id="search-sketch" class="search-sketch" aria-label="Search with my drawing" data-tip="Search with my drawing|What's on the canvas becomes the query. Doodle a rocket up high, find the frames where it's up high."><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20l4-1L19 8l-3-3L5 16z"/><path d="M14 7l3 3"/></svg></button><button class="search-go" type="submit" aria-label="Search">&#8594;</button></form>
+      <form id="search-form" class="search-bar" role="search"><label class="sr-only" for="query">Search by describing it</label><input id="query" type="search" maxlength="12000" required placeholder="Describe anything&hellip;"><button type="button" class="voice-button" data-voice-for="query" aria-label="Speak a search" hidden>&#127908;</button><button type="button" id="search-sketch" class="search-sketch" aria-label="Search with my drawing" data-tip="Search with my drawing|What's on the canvas becomes the query. Doodle a rocket up high, find the frames where it's up high."><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20l4-1L19 8l-3-3L5 16z"/><path d="M14 7l3 3"/></svg></button><button class="search-go" type="submit" aria-label="Search">&#8594;</button></form>
       <div id="search-hints" class="search-hints" role="group" aria-label="Try a search"></div>
       <div id="asset-filters" class="filters asset-filters" role="group" aria-label="Filter assets by how they were made" hidden></div>
       <div id="frame-filters" class="filters frame-filters" hidden><label for="frame-asset">With</label><select id="frame-asset" aria-label="Only frames with this asset"><option value="">any asset</option></select></div>

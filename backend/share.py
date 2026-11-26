@@ -84,6 +84,14 @@ def page(share: dict, origin: str) -> str:
                     for b in story["beats"][:24])
     principles = "".join(f"<div><dt>{e(p['name'])}</dt><dd>{e(p['means'])}</dd></div>" for p in story["principles"])
     cast_line = f'<p class="cast">Cast: {", ".join(f"&#9670; {e(name)}" for name in cast)}</p>' if cast else ""
+    sketch = share.get("sketch") or {}
+    code_section = (f'<section class="code"><h2>&#10216;/&#10217; The code that moves it</h2>'
+                    f'<p class="muted">Every animation in Inkling is a small p5.js sketch: the keyframes are numbers you can read '
+                    f'and change. {"Gemini chose these poses" if sketch.get("by") == "ai" else "These are the poses"}; '
+                    f'math draws every frame between them, from the artist&rsquo;s own strokes.</p>'
+                    f'<pre><code>{e(sketch["code"])}</code></pre>'
+                    f'<div class="actions"><a class="primary" href="{origin}/?remix={token}">&#8635; Remix in Inkling</a></div></section>'
+                    if sketch.get("code") else "")
     clip = f"{origin}/s/{token}/clip.gif"
     return f"""<!doctype html>
 <html lang="en">
@@ -125,6 +133,8 @@ dd {{ margin: 0; color: var(--muted); }}
 .primary {{ background: var(--violet); color: #fff; }}
 .ghost {{ background: #fff; color: var(--ink); border: 2px solid var(--ink); }}
 footer {{ margin-top: 28px; color: var(--muted); font-size: 14px; text-align: center; }}
+pre {{ margin: 12px 0 0; max-height: 340px; overflow: auto; background: var(--ink); color: #e6f4e0; border-radius: 12px; padding: 14px;
+  font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre; tab-size: 2; }}
 </style>
 </head>
 <body>
@@ -141,10 +151,11 @@ footer {{ margin-top: 28px; color: var(--muted); font-size: 14px; text-align: ce
 <p>{e(story['lead'])}</p>
 {f'<ol class="beats" aria-label="Keyframes">{beats}</ol>' if beats else ''}
 </section>
+{code_section}
 {f'<section><h2>The animation principles in it</h2><dl>{principles}</dl></section>' if principles else ''}
 <section>
-<h2>AI drafts. The artist decides.</h2>
-<p class="muted">Every character here was drawn by hand. AI pitched the shot and picked the keyframes; the artist could change any frame. Like a calculator for math: the work got bigger, not smaller.</p>
+<h2>Keep the pencil. Hand AI the in-betweens.</h2>
+<p class="muted">Every line here was drawn by hand. AI picked the poses, math drew the frames between them, and the artist could change any of it. Nothing was redrawn.</p>
 </section>
 <footer>Made in Inkling &middot; MongoDB Atlas &middot; Voyage AI &middot; Gemini</footer>
 </main>
