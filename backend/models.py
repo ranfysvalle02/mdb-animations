@@ -585,8 +585,6 @@ class RefineRequest(BaseModel):
         if self.target >= len(self.layers):
             raise ValueError("Pick a layer that exists.")
         layer = self.layers[self.target]
-        if layer.asset:
-            raise ValueError("Placed assets stay linked; refine the asset itself.")
         if not any(not stroke.erase for stroke in layer.strokes):
             raise ValueError("That layer has no ink to refine.")
         return self

@@ -1864,12 +1864,15 @@
   }));
   $('ai-bar').addEventListener('submit', event => { event.preventDefault(); askAI(); });
   // One tap, no prompt: rough lines in, cleaner lines back as a draft. Drawing never stops while it works.
-  const QUICK_REFINE = 'Clean up these rough lines into smoother, more confident strokes. Keep my pose, proportions, style, and colors.';
+  const QUICK_REFINE = 'Clean up rough lines into smoother, more confident strokes. Keep every detail (eyes, face, markings, fills), my pose, proportions, style, and colors.';
   $('refine-now').addEventListener('click', () => {
+    $('refine-now').blur(); // so Enter keeps the result instead of pressing this again
     if (offline) { flashTray(OFFLINE_NOTE, true); return; }
     if (!hasInk()) { flashTray('Draw something rough first. One tap refines it.', true); return; }
-    if (motionDraft) { flashTray('\ud83c\udfac Keep or discard the motion first, then refine.'); return; }
     if (sparks.some(spark => spark.kind === 'refine' && spark.status === 'pending')) { flashTray('\u2726 Already refining. Keep drawing.'); return; }
+    if (motionDraft) skipMotion(); // refine the drawing first; the take comes back once you keep the refinement
+    const target = refineTarget();
+    if (target) flashTray(`\u2726 Refining ${refinedLabel(target)}\u2026 keep drawing.`);
     startSpark('refine', null, QUICK_REFINE);
   });
 
@@ -1932,7 +1935,7 @@
     const title = $('title').value.trim().slice(0, 120);
     const target = kind === 'refine' ? refineTarget() : null;
     if (kind === 'refine' && !target) {
-      flashTray('Nothing of yours to refine here: placed assets stay linked (refine the asset itself).', true);
+      flashTray('Nothing to refine yet: draw something, or select a layer with ink.', true);
       return;
     }
     const body = JSON.stringify(kind === 'sketch' ? { prompt, title, layers: docLayers() }
@@ -1992,14 +1995,16 @@
     return true;
   }
 
-  // The layer refine works on: the one you're on if it's your own ink, else your topmost drawing.
+  // The layer refine works on: the one you've selected (your ink, a placed asset, or the backdrop), else the
+  // topmost thing with ink: your drawing first, then a placed asset, then the backdrop.
   function refineTarget() {
-    const own = layer => layer.visible && !layer.asset && !layer.backdrop && layer.strokes.some(stroke => !stroke.erase);
+    const inked = layer => layer.visible && layer.strokes.some(stroke => !stroke.erase);
     const active = activeLayer();
-    if (own(active)) return active;
-    const mine = [...layers].reverse().filter(own);
-    return mine.find(layer => !isScenery(layer)) || mine[0] || null;
+    if (active && inked(active)) return active;
+    const top = [...layers].reverse().filter(inked);
+    return top.find(layer => !layer.asset && !isScenery(layer)) || top.find(layer => layer.asset) || top[0] || null;
   }
+  const refinedLabel = layer => layer.backdrop ? `the backdrop \u201c${layer.name}\u201d` : `\u201c${layer.name}\u201d`;
   // Refined strokes: your originals (the very same objects) where AI kept them, its additions, and anything
   // you drew while it was working.
   function refinedStrokes(spark, layer) {
@@ -2020,12 +2025,19 @@
     }
     pushUndo();
     layer.strokes = next;
+    // A backdrop is one set of strokes under every frame: refine it once, every frame gets it.
+    if (layer.backdrop) for (const stack of frames) for (const other of stack) if (other !== layer && other.backdrop === layer.backdrop && other.name === layer.name) other.strokes = next;
+    if (layer.asset) for (const stroke of next) if (!spark.source.includes(stroke)) reshaped.add(stroke);
     recount();
     rebuildAll();
     renderLayersPanel();
     const r = spark.result;
     logEvent('ai', 'Refine', `"${spark.prompt}" on "${layer.name}": kept ${r.kept} of ${r.source_strokes} strokes, added ${r.added} (${r.note})`);
-    message('drawing-status', `\u2726 Refined "${layer.name}": kept ${r.kept} of your ${r.source_strokes} strokes exactly, added ${r.added}.`, false, [
+    if (layer.asset && saveKind === 'shot' && frames.length === 1) { // it moves again, refined
+      autoTake(layer, 0, `\u2726 Refined ${refinedLabel(layer)} in this shot (${r.note || `kept ${r.kept} of ${r.source_strokes} strokes`}); the asset itself is unchanged. `);
+      if (motionDraft) return true;
+    }
+    message('drawing-status', `\u2726 Refined ${refinedLabel(layer)}${layer.asset ? ' in this shot (the asset itself is unchanged)' : ''}: kept ${r.kept} of your ${r.source_strokes} strokes exactly, added ${r.added}.`, false, [
       { label: '\u21b6 Undo', tip: 'Undo \u00b7 Cmd/Ctrl+Z|Your layer exactly as it was.', run: () => { undo(); message('drawing-status', 'Undone. Your layer is back as it was.'); } },
       { label: '\u2726 Refine more', run: () => startRefineFlow() }, { label: '\u3030 Make it move', run: () => setTool('path') }]);
     return true;
@@ -2669,9 +2681,10 @@
   const rigCache = new Map(); // `${asset_id}@${version}` -> rig, for this session
   const rigKey = layer => layer?.asset ? `${layer.asset.asset_id}@${layer.asset.version}` : '';
   // A placed asset's rig, if it still fits its strokes (a placed layer keeps the asset's stroke order).
+  const reshaped = new WeakSet(); // strokes a refine added to a placed asset: its rig's stroke numbers no longer fit
   function rigFor(layer) {
     const rig = rigCache.get(rigKey(layer));
-    return rig && rig.strokes === layer.strokes.length && rig.bones.length ? rig : null;
+    return rig && rig.strokes === layer.strokes.length && rig.bones.length && !layer.strokes.some(stroke => reshaped.has(stroke)) ? rig : null;
   }
   const rigsComing = new Map(); // key -> the request in flight, so a path drawn meanwhile doesn't ask twice
   function ensureRig(layer) {
@@ -3043,7 +3056,7 @@
   }
   // Every new shot moves on its own: a first take across the stage, in its gait, limbs and all. Keep it, pick
   // another gait, or drag your own path. `turn` alternates the direction from one shot to the next.
-  function autoTake(layer, turn = 0) {
+  function autoTake(layer, turn = 0, lead = '') {
     const b = inkBounds(layer.strokes);
     if (!b || motionDraft) return;
     const cx = b.x + b.w / 2, cy = b.y + b.h / 2;
@@ -3058,14 +3071,31 @@
       return { x: cx + dir * dist * u, y: cy - swoop * Math.sin(u * Math.PI * (gait === 'fly' ? 2 : 1)), ms: u * 2000 };
     });
     const spec = pathSpec(layers.filter(item => !item.fx), [{ layerId: layer.id, points, gait }], []);
-    spec.change = `\u2726 A first take: ${layer.name} ${GAITS[gait].verb} ${dir > 0 ? 'right' : 'left'}${rigFor(layer) ? ', limbs and all' : ''}. `
+    spec.change = `${lead}\u2726 A first take: ${layer.name} ${GAITS[gait].verb} ${dir > 0 ? 'right' : 'left'}${rigFor(layer) ? ', limbs and all' : ''}. `
       + 'Keep it (Enter), switch Walk \u00b7 Hop \u00b7 Glide \u00b7 Fly, or drag your own path.';
     previewMotion(spec);
   }
   // A real flipbook: every frame of a saved shot on printable pages (a PDF the server draws). Cut, stack, staple, flip.
   const FLIPBOOK_TIP = 'Flipbook|Every frame on printable pages, ten to a page. Cut, stack them in order, staple the strip, and flip it with your thumb.';
+  const flipbookUrl = id => `/api/shots/${encodeURIComponent(id)}/flipbook.pdf`;
+  let flipbookTab = null;
   function openFlipbook(id) {
-    window.open(`/api/shots/${encodeURIComponent(id)}/flipbook.pdf`, '_blank', 'noopener');
+    window.open(flipbookUrl(id), '_blank', 'noopener');
+  }
+  // From the shot bar: a saved shot opens at once; an unsaved one is saved first, straight into the tab opened now.
+  function flipbookNow() {
+    if (frames.length < 2) { flashTray('\ud83c\udf9e Make it move first: drag a path, then keep the take.'); return; }
+    if (editing?.kind === 'shot' && revision === savedRevision) { openFlipbook(editing.id); return; }
+    if (offline) { flashTray(OFFLINE_NOTE, true); return; }
+    flipbookTab = window.open('', '_blank');
+    if (flipbookTab) {
+      flipbookTab.opener = null;
+      flipbookTab.document.title = 'Your flipbook';
+      flipbookTab.document.body.textContent = 'Saving your shot, then drawing its flipbook\u2026';
+    }
+    if (saveKind !== 'shot') setSaveKind('shot');
+    flashTray('\ud83c\udf9e Saving the shot first, then its flipbook opens\u2026');
+    $('save-form').requestSubmit();
   }
   // What a layer is likely to do: from its rig first (a bird flies, legs walk), else from its name and asset type.
   function gaitFor(layer) {
@@ -3573,6 +3603,7 @@
       ? `\ud83c\udf9e ${(frames.length / fps).toFixed(0)} s. Space plays. \u3030 Drag another layer to move it too, then Save shot.`
       : `\u3030 Drag ${star ? star.name : 'something you drew'} along a path: it travels your trail for ${MIN_SHOT} s.`;
     $('scene-backdrop').disabled = !!motionDraft;
+    $('shot-flipbook').hidden = frames.length < 2 || !!motionDraft;
   }
   // A backdrop picked for the shot on screen slides under every frame (one set of strokes, shared).
   async function applyBackdrop() {
@@ -3598,6 +3629,7 @@
     }
   }
   $('scene-backdrop').addEventListener('change', applyBackdrop);
+  $('shot-flipbook').addEventListener('click', flipbookNow);
   // A shot names itself after its star: LittleFox_03 (its number among the asset's shots), else the time.
   function shotName() {
     const star = shotStarLayer();
@@ -4464,7 +4496,17 @@
     return true;
   }
 
-  $('save-form').addEventListener('submit', async event => {
+  $('save-form').addEventListener('submit', event => {
+    // "Flipbook" on an unsaved shot opened its tab on the tap (so no popup blocker): fill it once saved, else close it.
+    const tab = flipbookTab;
+    flipbookTab = null;
+    saveCanvas(event).then(id => {
+      if (!tab) return;
+      if (id) tab.location.href = flipbookUrl(id);
+      else tab.close();
+    });
+  });
+  async function saveCanvas(event) {
     event.preventDefault();
     const wantShare = shareAfterSave; // one-shot: any early return below drops it
     shareAfterSave = false;
@@ -4574,12 +4616,14 @@
       }
       renderSaveKind();
       await loadGallery(currentQuery);
+      return kind === 'shot' ? saved.id : null;
     } catch (error) {
       message('drawing-status', `${error.message} Your work is still on the canvas.`, true);
     } finally {
       $('save').disabled = false;
     }
-  });
+    return null;
+  }
 
   // ---------------------------------------------------------------- opening saved work
   async function openRecord(path, apply) {

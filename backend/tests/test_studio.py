@@ -482,7 +482,7 @@ def test_animate_streams_each_step_then_the_result_or_an_in_band_error(client):
     assert http.post("/api/animate", json={**ANIMATE, "prompt": "go"}).status_code == 422
 
 
-def test_refine_keeps_the_artists_strokes_by_index_and_never_touches_placed_assets():
+def test_refine_keeps_the_artists_strokes_by_index_and_works_on_a_placed_asset_too():
     from backend.ai import _VarStroke, _Variation
     from backend.models import RefineRequest
     ink = {"name": "Ink", "strokes": [
@@ -497,9 +497,11 @@ def test_refine_keeps_the_artists_strokes_by_index_and_never_touches_placed_asse
     assert result["keep_indices"] == [0, 2]  # stroke 1 was redrawn; the eraser always stays
     assert result["strokes"][:2] == [s.model_dump() for s in (request.layers[0].strokes[0], request.layers[0].strokes[2])]
     assert result["strokes"][2]["ai"] is True and (result["kept"], result["added"]) == (1, 1)
+    # The asset selected in a shot is refined there (its copy in the shot; the asset itself is untouched).
     placed = {**ink, "asset": {"asset_id": "0b6b6a4e-3f0a-4c55-9e43-7f0f3f1a2b3c", "version": 1}}
-    with pytest.raises(ValidationError, match="linked"):
-        RefineRequest.model_validate({"prompt": "add a smile", "target": 0, "layers": [placed]})
+    assert sparks.refine(RefineRequest.model_validate({"prompt": "add a smile", "target": 0, "layers": [placed]}))["keep_indices"] == [0, 2]
+    with pytest.raises(ValidationError, match="no ink"):
+        RefineRequest.model_validate({"prompt": "add a smile", "target": 0, "layers": [{**placed, "strokes": ink["strokes"][2:]}, ink]})
 
 
 def test_code_endpoint_sends_the_drawing_and_current_sketch_to_the_ai(client):
