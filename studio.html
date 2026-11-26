@@ -84,6 +84,12 @@
       <button type="button" id="new-asset" class="launch-tile"><span class="launch-icon" aria-hidden="true">&#9999;&#65039;</span><b>+ New asset</b><small>A character or prop, in 2D. Rough is fine.</small></button>
       <button type="button" id="new-backdrop" class="launch-tile"><span class="launch-icon" aria-hidden="true">&#127748;</span><b>+ New backdrop</b><small>Where your shots happen. Start from a scene, or draw your own.</small></button>
     </section>
+    <ol class="help-flow how-steps" aria-label="How it works">
+        <li><b>&#9999;&#65039; Make an asset</b><span>Draw it rough, bring in a picture, or &#10022; Generate one. &#10022; Refine cleans up what you pick; &#129460; Rig finds its legs and tail. Save: AI names and tags it.</span></li>
+        <li><b>&#12336; Make a shot</b><span>Your asset starts moving on its own, ten seconds, legs and all. Drag your finger to give it a new path; switch Walk &middot; Hop &middot; Glide &middot; Fly.</span></li>
+        <li><b>&#127902; Flip the flipbook</b><span>Your shot as a little book: drag across the pages to riffle them. Print it, or share a looping link.</span></li>
+        <li><b>&#9678; Find it again</b><span>Search your assets by words or a doodle. Each asset lists every shot it&rsquo;s in.</span></li>
+    </ol>
 
     <section class="library" data-online aria-labelledby="library-heading">
       <div class="library-head">
@@ -111,6 +117,7 @@
     <section class="studio" aria-labelledby="canvas-heading">
       <h2 id="canvas-heading" class="sr-only">Canvas</h2>
       <nav class="crumbs" aria-label="Where you are"><button type="button" id="go-home" class="crumb-home">&larr; Assets</button><span id="crumb-trail" class="crumb-trail"></span>
+        <ol id="steps" class="steps" aria-label="Asset, then shot, then flipbook"></ol>
         <span id="make-from" class="make-from" hidden>
           <button type="button" id="from-image" class="pill" data-tip="From an image|Any PNG or JPG (a scan, a photo of your sketchbook, an AI picture) becomes editable strokes, right here in your browser.">&#10514; From an image</button>
           <input type="file" id="image-file" accept="image/png,image/jpeg,image/webp" hidden>
@@ -122,14 +129,23 @@
         <button type="submit" id="picture-go" class="pill primary">&#10022; Draw it</button>
         <button type="button" id="picture-cancel" class="pill ghost" aria-label="Cancel">&times;</button>
       </form>
+      <p id="step-hint" class="step-hint" role="status" aria-live="polite"></p>
       <div class="canvas-card">
+        <form id="refine-pick" class="refine-pick" data-online hidden autocomplete="off" aria-labelledby="refine-pick-title">
+          <p id="refine-pick-title" class="refine-pick-title">&#10022; Refine what?</p>
+          <div id="refine-options" class="refine-options" role="radiogroup" aria-labelledby="refine-pick-title"></div>
+          <label class="sr-only" for="refine-how">How should it change? (optional)</label>
+          <input id="refine-how" maxlength="120" enterkeyhint="go" placeholder="How? Optional: &ldquo;bigger ears&rdquo;, &ldquo;smoother lines&rdquo;&hellip;">
+          <div class="refine-pick-actions"><button type="submit" id="refine-go" class="pill primary">&#10022; Refine it</button><button type="button" id="refine-cancel" class="pill ghost">Cancel</button><small>A preview: nothing changes until you keep it.</small></div>
+        </form>
         <div class="toolbar" role="toolbar" aria-label="Drawing tools">
           <div class="tools" role="group" aria-label="Tool">
             <button type="button" class="tool" data-tool="pen" aria-pressed="true" aria-label="Pen" data-tip="Pen &middot; B|Pressure-sensitive with a stylus."><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20l4-1L19 8l-3-3L5 16z"/><path d="M14 7l3 3"/></svg></button>
             <button type="button" class="tool" data-tool="eraser" aria-pressed="false" aria-label="Eraser" data-tip="Eraser &middot; E|Only erases the selected layer."><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 16l9-9 6 6-6 6H7z"/><path d="M8 11l6 6M13 19h8"/></svg></button>
             <button type="button" class="tool" data-tool="move" aria-pressed="false" aria-label="Select and move" data-tip="Select &amp; move &middot; V|Tap anything you drew or placed to grab it. Drag to move; pull the corner to resize."><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18M12 3l-3 3M12 3l3 3M12 21l-3-3M12 21l3-3M3 12l3-3M3 12l3 3M21 12l-3-3M21 12l-3 3"/></svg></button>
-            <button type="button" class="tool path-tool" data-tool="path" aria-pressed="false" aria-label="Path: drag something along a trail" data-tip="Path &middot; T|Drag from something you drew: it travels your trail for 10 seconds. One path per layer. Plain math, no AI."><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="18" r="2"/><path d="M7 17c3-1 3-6 6-7s4 3 7-3" stroke-dasharray="3 2.4"/><path d="M17 6l3 1-1 3"/></svg></button>
-            <button type="button" id="refine-now" class="tool refine-tool" data-online aria-label="Refine with AI" data-tip="Refine &middot; one tap|AI cleans up the selected layer (your drawing, an asset in this shot, or the backdrop) and keeps its pose, style, and colors. Keep drawing while it works; nothing changes until you keep it.">&#10022;</button>
+            <button type="button" class="tool path-tool" data-tool="path" aria-pressed="false" aria-label="Path: drag something along a trail" data-tip="Path &middot; T|Drag from something you drew: it travels your trail for 10 seconds. One path per layer. Plain math, no AI."><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="18" r="2"/><path d="M7 17c3-1 3-6 6-7s4 3 7-3" stroke-dasharray="3 2.4"/><path d="M17 6l3 1-1 3"/></svg><span class="tool-word">Path</span></button>
+            <button type="button" id="refine-now" class="tool refine-tool" data-online aria-label="Refine with AI" data-tip="Refine|Pick what to clean up (your drawing, an asset in this shot, or the backdrop) and, if you like, say how. AI keeps its pose, style, and colors. A preview you keep or skip.">&#10022;<span class="tool-word">Refine</span></button>
+            <button type="button" id="rig-now" class="tool rig-tool" data-online aria-label="Rig: find its legs, arms, and tail" data-tip="Rig|AI finds the legs, arms, tail, wings, and head, and the joint each one swings on. You see them move; redo it if it's off.">&#129460;<span class="tool-word">Rig</span></button>
             <button type="button" class="tool" data-tool="line" aria-pressed="false" aria-label="Line" data-tip="Line &middot; L|Shift snaps to 45&deg;."><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19L19 5"/></svg></button>
             <button type="button" class="tool" data-tool="rect" aria-pressed="false" aria-label="Rectangle" data-tip="Rectangle &middot; R|Shift for a square."><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="6" width="16" height="12" rx="1"/></svg></button>
             <button type="button" class="tool" data-tool="ellipse" aria-pressed="false" aria-label="Ellipse" data-tip="Ellipse &middot; O|Shift for a circle."><svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="12" rx="8" ry="6"/></svg></button>
@@ -224,7 +240,7 @@
         </div>
         <div id="shot-bar" class="shot-bar" hidden>
           <p id="shot-hint" class="shot-hint"></p>
-          <button type="button" id="shot-flipbook" class="pill shot-flipbook" data-online hidden data-tip="Flipbook|Every frame of this shot on printable pages, ten to a page. Opens as a PDF: print, cut, stack, staple, flip. Saves the shot first if it isn't yet.">&#127902; Flipbook</button>
+          <button type="button" id="shot-flipbook" class="pill shot-flipbook" hidden data-tip="Flipbook|Your shot as a little book: drag across the pages to riffle them, or press play. Print it from there.">&#127902; Flipbook</button>
           <label class="shot-backdrop"><span>Backdrop</span><select id="scene-backdrop" aria-label="Backdrop" aria-describedby="backdrop-status"><option value="">No backdrop</option></select></label>
           <div id="takes" class="takes" role="group" aria-label="Takes" hidden></div>
           <div id="scene-fx" class="scene-fx" role="group" aria-label="Instant changes, no AI" hidden></div>
@@ -363,6 +379,26 @@
       </details>
     </dialog>
 
+    <dialog id="flipbook" class="sheet flipbook-sheet" aria-labelledby="fb-title">
+      <div class="sheet-head"><div><p class="eyebrow">&#127902; Flipbook</p><h2 id="fb-title">Your shot</h2><p class="muted">Drag across the pages to riffle them, like your thumb on a real flipbook. Or press play.</p></div><button type="button" id="fb-close" class="close" aria-label="Close">&times;</button></div>
+      <div class="fb-stage">
+        <div id="fb-book" class="fb-book" role="img" aria-label="The flipbook: drag to flip the pages">
+          <canvas id="fb-under" class="fb-under"></canvas>
+          <canvas id="fb-page" class="fb-page"></canvas>
+          <span class="fb-thumb" aria-hidden="true">&#128070; drag</span>
+        </div>
+      </div>
+      <div class="fb-controls">
+        <button type="button" id="fb-play" class="pill primary">&#9654; Play</button>
+        <div class="fb-speed" role="radiogroup" aria-label="Flip speed">
+          <button type="button" role="radio" data-fps="5" aria-checked="false">Slow</button><button type="button" role="radio" data-fps="12" aria-checked="true">Normal</button><button type="button" role="radio" data-fps="24" aria-checked="false">Fast</button>
+        </div>
+        <label class="sr-only" for="fb-scrub">Page</label>
+        <input type="range" id="fb-scrub" min="0" max="1" value="0">
+        <span id="fb-count" class="fb-count">1 / 1</span>
+        <button type="button" id="fb-print" class="pill ghost" data-tip="Print it|Every page as a printable PDF, ten to a sheet: cut, stack, staple, flip. Saves the shot first if needed.">&#128424; Print</button>
+      </div>
+    </dialog>
     <dialog id="share-sheet" class="sheet share-sheet" aria-labelledby="share-title">
       <div class="sheet-head"><div><p class="eyebrow">&#128279; Share</p><h2 id="share-title">Show it off</h2><p class="muted">Anyone with the link can watch it and see how it moves. They can't edit it, or see the rest of your library.</p></div><button type="button" id="share-close" class="close" aria-label="Close">&times;</button></div>
       <img id="share-gif" class="share-gif" alt="Your scene, animated" hidden>
@@ -533,9 +569,10 @@
     <dialog id="help" class="sheet" aria-labelledby="help-title">
       <div class="sheet-head"><div><p class="eyebrow">How Inkling keeps you in control</p><h2 id="help-title">You draw. AI assists. You decide.</h2><p class="muted">Every AI step is a draft: compare it, keep it, or toss it. Your lines are never the price of admission.</p></div><button type="button" id="help-close" class="close" aria-label="Close">&times;</button></div>
       <ol class="help-flow">
-        <li><b>&#9999;&#65039; Draw an asset</b><span>Rough is fine: one tap of &#10022; Refine cleans it up and keeps your style. On save, AI describes and tags it so you can find it by words.</span><i>&ldquo;Red Rocket&rdquo;</i></li>
-        <li><b>&#12336; Move it</b><span>Pick &#12336; Path and drag it along a trail with your finger, one path per layer, or say what happens. Every shot is at least 10 seconds, and saved as p5.js code.</span><i>&ldquo;make it snow&rdquo;</i></li>
-        <li><b>&#9678; Find it again</b><span>Search your assets by words or a sketch. Open one to browse and search every shot it stars in.</span><i>&ldquo;a rocket in the sky&rdquo;</i></li>
+        <li><b>&#9999;&#65039; Make an asset</b><span>Draw it rough, bring in a picture, or &#10022; Generate one. &#10022; Refine cleans up what you pick; &#129460; Rig finds its legs and tail. Save: AI names and tags it.</span></li>
+        <li><b>&#12336; Make a shot</b><span>Your asset starts moving on its own, ten seconds, legs and all. Drag your finger to give it a new path; switch Walk &middot; Hop &middot; Glide &middot; Fly.</span></li>
+        <li><b>&#127902; Flip the flipbook</b><span>Your shot as a little book: drag across the pages to riffle them. Print it, or share a looping link.</span></li>
+        <li><b>&#9678; Find it again</b><span>Search your assets by words or a doodle. Each asset lists every shot it&rsquo;s in.</span></li>
       </ol>
       <h3 class="help-sub flow-keys">Stay in flow</h3>
       <dl class="shortcuts">
@@ -560,19 +597,19 @@
         <div><dt>&#127902; Shot</dt><dd>One shot of your film, at least 10 seconds. It shows up on the page of every asset in it.</dd></div>
         <div><dt>&#12336; Path</dt><dd>Drag a layer along a trail with your finger: the trail becomes its keyframes. Steady or at your pace; it can turn with the trail.</dd></div>
         <div><dt>&#9636; Layer</dt><dd>Tracing paper. Draw on one without touching the rest.</dd></div>
-        <div><dt>&#10022; AI sketch</dt><dd>Blue-pencil roughs. Trace them, tweak them, or toss them.</dd></div>
         <div><dt>&#9670; Asset page</dt><dd>Tap any asset: its AI description and tags, and every shot it stars in, searchable.</dd></div>
-        <div><dt>&#128064; Looks like it</dt><dd>Reverse image search across scenes.</dd></div>
+        <div><dt>&#128064; More like it</dt><dd>On an asset&rsquo;s page: shots and drawings that look like it, even ones never linked to it.</dd></div>
         <div><dt>&#129516; Similar assets</dt><dd>Near-duplicates in your library.</dd></div>
-        <div><dt>&#127902; Flipbook</dt><dd>In-betweening without redrawing: your exact strokes, posed in motion. Saved as the p5.js code that draws it.</dd></div>
+        <div><dt>&#127902; Flipbook</dt><dd>Your shot as a little book: drag across the pages to riffle them, or press play. Print it as cut-and-staple pages.</dd></div>
+        <div><dt>&#129460; Rig</dt><dd>AI finds the legs, arms, tail, wings, and head, and where each one swings. You watch them move, and redo it if it&rsquo;s off.</dd></div>
         <div><dt>&#9636; All frames</dt><dd>In an animation, hide, move, resize, add, or delete a layer once: every frame follows.</dd></div>
-        <div><dt>&#10022; Talk to</dt><dd>Aim your words at one layer or a few. Everyone else keeps their motion.</dd></div>
+        <div><dt>&#10022; Refine</dt><dd>Pick what to clean up and, if you like, say how. AI chooses the edits (round this, straighten that, smooth those); code applies them to your own strokes, in every frame.</dd></div>
         <div><dt>&#10216;/&#10217; Lab</dt><dd>Your strokes as numbers: p5.js code and AI-written sketches you can read. Bake it back to frames.</dd></div>
         <div><dt>&#9997; Sign it</dt><dd>Lines the code only moved are still yours: sign them at bake time and they count as your hand.</dd></div>
         <div><dt>&#9678; Similar code</dt><dd>Voyage embeds every animation&rsquo;s code. Find scenes that move alike, and remix them.</dd></div>
         <div><dt>&#9992;&#65039; Offline</dt><dd>Install it, then draw in airplane mode. Your drawing is kept on this device; AI and search wait for the signal.</dd></div>
         <div><dt>&#10052;&#65039; Effects</dt><dd>Snow, rain, sparkles, confetti, bubbles: tiny strokes drawn by code. Free, instant, no AI.</dd></div>
-        <div><dt>&#9312; Takes</dt><dd>Every AI attempt, side by side. Flip back, branch, hold to compare. Nothing is final until you keep it, and Undo brings the takes back.</dd></div>
+        <div><dt>&#9312; Takes</dt><dd>Every path or gait you try, side by side. Flip back, hold to compare. Nothing is final until you keep it.</dd></div>
         <div><dt>&#10022; Variations</dt><dd>One asset in, lookalikes out. AI edits your strokes; you keep and finish.</dd></div>
         <div><dt>&#9998; Process</dt><dd>Every stroke keeps its order and time. Replay any drawing, or save the replay as a video.</dd></div>
         <div><dt>&#128221; Audit trail</dt><dd>Every AI step you took or skipped, saved with the asset. Nothing is a black box.</dd></div>

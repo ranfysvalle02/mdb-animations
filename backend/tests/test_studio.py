@@ -482,26 +482,30 @@ def test_animate_streams_each_step_then_the_result_or_an_in_band_error(client):
     assert http.post("/api/animate", json={**ANIMATE, "prompt": "go"}).status_code == 422
 
 
-def test_refine_keeps_the_artists_strokes_by_index_and_works_on_a_placed_asset_too():
-    from backend.ai import _VarStroke, _Variation
+def test_refine_is_a_plan_of_edits_on_the_artists_strokes_never_a_redraw():
+    from backend.ai import AIError, _Edit, _RefinePlan, _VarStroke
     from backend.models import RefineRequest
-    ink = {"name": "Ink", "strokes": [
-        {"color": "#123b38", "width": 6, "points": [{"x": 0.1, "y": 0.1}, {"x": 0.2, "y": 0.2}]},
-        {"color": "#123b38", "width": 6, "points": [{"x": 0.3, "y": 0.3}]},
+    ink = {"name": "Ink", "asset": {"asset_id": "0b6b6a4e-3f0a-4c55-9e43-7f0f3f1a2b3c", "version": 1}, "strokes": [
+        {"color": "#123b38", "width": 6, "points": [{"x": 0.1, "y": 0.1}, {"x": 0.2, "y": 0.2}, {"x": 0.15, "y": 0.3}]},
+        {"color": "#123b38", "width": 6, "points": [{"x": 0.3, "y": 0.3}, {"x": 0.4, "y": 0.3}]},
         {"color": "#ffffff", "width": 9, "erase": True, "points": [{"x": 0.2, "y": 0.2}]}]}
-    request = RefineRequest.model_validate({"prompt": "add a smile", "target": 0, "layers": [ink]})
+    request = RefineRequest.model_validate({"prompt": "rounder head, bigger ears", "target": 0, "layers": [ink]})  # a placed asset is fine
+    edit = lambda op, strokes, scale=1, rotate=0, dx=0, dy=0: _Edit(op=op, strokes=strokes, scale=scale, rotate=rotate, dx=dx, dy=dy)  # noqa: E731
     sparks = Sparks.__new__(Sparks)
-    sparks._json = Mock(return_value=_Variation(note="smiles", keep=[0], strokes=[
-        _VarStroke(color="#123b38", width=4, fill="", points=[_Point(x=500, y=300), _Point(x=520, y=310)])]))
+    sparks._json = Mock(return_value=_RefinePlan(note="rounder", edits=[
+        edit("circle", [0, 0, 2, 9]), edit("melt", [1]), edit("transform", [1], scale=9, rotate=-200, dx=float("nan")),
+        edit("transform", [0], scale=1.0), edit("smooth", [])],
+        add=[_VarStroke(color="#ff0000", width=3, fill="", points=[_Point(x=500, y=300), _Point(x=520, y=310)])]))
     result = sparks.refine(request)
-    assert result["keep_indices"] == [0, 2]  # stroke 1 was redrawn; the eraser always stays
-    assert result["strokes"][:2] == [s.model_dump() for s in (request.layers[0].strokes[0], request.layers[0].strokes[2])]
-    assert result["strokes"][2]["ai"] is True and (result["kept"], result["added"]) == (1, 1)
-    # The asset selected in a shot is refined there (its copy in the shot; the asset itself is untouched).
-    placed = {**ink, "asset": {"asset_id": "0b6b6a4e-3f0a-4c55-9e43-7f0f3f1a2b3c", "version": 1}}
-    assert sparks.refine(RefineRequest.model_validate({"prompt": "add a smile", "target": 0, "layers": [placed]}))["keep_indices"] == [0, 2]
+    assert result["edits"] == [  # the eraser, unknown ops, empty and no-op edits are dropped; numbers are clamped
+        {"op": "circle", "strokes": [0], "scale": 1.0, "rotate": 0.0, "dx": 0.0, "dy": 0.0},
+        {"op": "transform", "strokes": [1], "scale": 2.0, "rotate": -60.0, "dx": 0.0, "dy": 0.0}]
+    assert len(result["add"]) == 1 and result["add"][0]["ai"] is True and result["source_strokes"] == 2
+    sparks._json.return_value = _RefinePlan(note="gone", edits=[edit("delete", [0, 1])], add=[])
+    with pytest.raises(AIError, match="Nothing to change"):  # deleting most of the drawing is never a cleanup
+        sparks.refine(request)
     with pytest.raises(ValidationError, match="no ink"):
-        RefineRequest.model_validate({"prompt": "add a smile", "target": 0, "layers": [{**placed, "strokes": ink["strokes"][2:]}, ink]})
+        RefineRequest.model_validate({"prompt": "add a smile", "target": 0, "layers": [{**ink, "strokes": ink["strokes"][2:]}, ink]})
 
 
 def test_code_endpoint_sends_the_drawing_and_current_sketch_to_the_ai(client):

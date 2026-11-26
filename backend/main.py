@@ -26,7 +26,7 @@ from backend.auth import DEMO_OWNER, SESSION_COOKIE, AuthError, AuthUnavailable,
 from backend.library import Library, LibraryError, ink_crop, render_image
 from backend.models import (
     ASSET_TYPES, CODE_PATTERN, MAX_LAYERS, SHOT_STATUSES, AnimateRequest, Asset, CodeRequest, CodeSearch, DirectRequest, Drawing, LayersRequest, MotionRequest, RefineIdeasRequest,
-    Layer, PictureRequest, RefineRequest, Shot, ShotUpdate, SketchRequest, SparkRequest, TagRequest,
+    KeepRig, Layer, PictureRequest, RefineRequest, Shot, ShotUpdate, SketchRequest, SparkRequest, TagRequest,
     SketchSearch, VariationPlanRequest, VariationRequest,
     normalize_tag,
 )
@@ -109,7 +109,7 @@ AI_BUDGET = Budget("ai", "AI drafts", int(os.environ.get("INKLING_AI_PER_HOUR", 
 EMBED_BUDGET = Budget("embeds", "saves and searches", int(os.environ.get("INKLING_EMBEDS_PER_HOUR", "600")))
 _ID = r"[0-9a-fA-F-]{36}"
 METERED = [
-    (AI_BUDGET, "POST", re.compile(r"/api/(animate|sparks/(strokes|sketch|guide|motion|direct|refine|refine/ideas|code|picture)|tags/suggest|describe|assets/" + _ID + r"/(rig|variations(/plan)?))")),
+    (AI_BUDGET, "POST", re.compile(r"/api/(animate|sparks/(strokes|sketch|guide|motion|direct|refine|refine/ideas|code|picture|rig)|tags/suggest|describe|assets/" + _ID + r"/(rig|variations(/plan)?))")),
     (EMBED_BUDGET, "POST", re.compile(r"/api/(drawings|assets|assets/similar|shots|search/sketch|search/code|shots/" + _ID + r"/(sync/" + _ID + r"|link|share))")),
     (EMBED_BUDGET, "PUT", re.compile(r"/api/(assets|shots)/" + _ID)),
     (EMBED_BUDGET, "GET", re.compile(r"/api/(search|assets/" + _ID + r"/where-used)")),
@@ -735,15 +735,35 @@ def get_asset(request: Request, asset_id: UUID) -> dict:
 
 
 @app.post("/api/assets/{asset_id}/rig")
-async def rig_asset(request: Request, asset_id: UUID) -> dict:
+async def rig_asset(request: Request, asset_id: UUID, redo: bool = False) -> dict:
     """How the asset moves: which strokes are its legs, arms, tail, wings, and head, and the joint each turns on.
-    Made once per version (one AI call) and kept with the asset."""
+    Made once per version (one AI call) and kept with the asset; ?redo=true asks again."""
     record = find_asset(request, asset_id)
-    if record.get("rig") and record.get("rig_version") == record["version"]:
+    if not redo and record.get("rig") and record.get("rig_version") == record["version"]:
         return {"rig": record["rig"], "version": record["version"]}
     rig = await run_in_threadpool(request.app.state.ai.rig, [Layer.model_validate(layer) for layer in record["layers"]])
     await run_in_threadpool(prod(request).store_rig, str(asset_id), record["version"], rig)
     return {"rig": rig, "version": record["version"]}
+
+
+@app.put("/api/assets/{asset_id}/rig")
+async def keep_rig(request: Request, asset_id: UUID) -> dict:
+    """Keep a rig made in the studio before the asset was saved, if it fits the saved strokes exactly."""
+    body = await read_json(request, KeepRig)
+    record = find_asset(request, asset_id)
+    count = sum(len(layer.get("strokes", [])) for layer in record["layers"] if layer.get("visible", True))
+    if body.rig.strokes != count:
+        raise HTTPException(status_code=409, detail="That rig was made for a different drawing. Rig it again.")
+    rig = body.rig.model_dump()
+    await run_in_threadpool(prod(request).store_rig, str(asset_id), record["version"], rig)
+    return {"rig": rig, "version": record["version"]}
+
+
+@app.post("/api/sparks/rig")
+async def spark_rig(request: Request) -> dict:
+    """Rig a drawing that isn't saved yet (the studio keeps it with the asset on save)."""
+    body = await read_json(request, LayersRequest)
+    return {"rig": await run_in_threadpool(request.app.state.ai.rig, body.layers)}
 
 
 @app.get("/api/assets/{asset_id}/similar")

@@ -54,6 +54,9 @@
   let sceneMotion = null; // the accepted direction behind this scene's frames, saved with the scene
   let sceneSketch = null; // or the Lab code its frames were baked from
   let showMath = false;
+  let rigView = null; // 🦴 the rig on screen: { layerId | null, rig, started }
+  let lastSavedAsset = null; // the asset just saved (with its shot count), for ② Shot
+  let pendingRig = null; // { sig, rig }: made on an unsaved drawing, kept with the asset on save
   let shareAfterSave = false; // "Share" on an unsaved scene saves it first
   let moving = null; // { layer, start, original, bounds } while the Move tool drags a layer
   // The audit trail for this canvas: what the artist and the AI did since it was opened. Sent with the
@@ -759,6 +762,7 @@
       flashTray('\u270f\ufe0f Pencil detected: your palm and fingers won\'t draw. Pressure works.');
     }
     if (penSeen && event.pointerType === 'touch') return; // palm rejection once a pencil is in play
+    if (rigView) { closeRig(); return; } // a tap on the canvas puts the rig view away
     if (tool === 'path') {
       if (document.activeElement instanceof HTMLElement && document.activeElement !== document.body) document.activeElement.blur();
       startPath(event, normPoint(event));
@@ -1867,13 +1871,76 @@
   const QUICK_REFINE = 'Clean up rough lines into smoother, more confident strokes. Keep every detail (eyes, face, markings, fills), my pose, proportions, style, and colors.';
   $('refine-now').addEventListener('click', () => {
     $('refine-now').blur(); // so Enter keeps the result instead of pressing this again
+    $('refine-pick').hidden ? openRefinePick() : closeRefinePick();
+  });
+  // Refine: you pick what (your drawing, an asset in the shot, the backdrop) and, if you like, say how.
+  let refinePicked = null;
+  const refineKind = layer => layer.backdrop || (!layer.asset && isScenery(layer)) ? 'backdrop' : layer.asset ? 'asset' : 'drawing';
+  function refineThumb(layer) {
+    const thumb = document.createElement('canvas');
+    thumb.width = 144;
+    thumb.height = 96;
+    const t = thumb.getContext('2d');
+    t.fillStyle = '#ffffff';
+    t.fillRect(0, 0, 144, 96);
+    const b = inkBounds(layer.strokes.filter(stroke => !stroke.erase)) || { x: 0, y: 0, w: W, h: H };
+    const sheet = layerCanvas(layer.id), k = sheet.width / W, pad = 8;
+    const fit = Math.min((144 - pad * 2) / b.w, (96 - pad * 2) / b.h);
+    const w = b.w * fit, h = b.h * fit;
+    t.drawImage(sheet, b.x * k, b.y * k, b.w * k, b.h * k, (144 - w) / 2, (96 - h) / 2, w, h);
+    return thumb;
+  }
+  function openRefinePick() {
     if (offline) { flashTray(OFFLINE_NOTE, true); return; }
-    if (!hasInk()) { flashTray('Draw something rough first. One tap refines it.', true); return; }
     if (sparks.some(spark => spark.kind === 'refine' && spark.status === 'pending')) { flashTray('\u2726 Already refining. Keep drawing.'); return; }
+    const choices = [...layers].reverse().filter(layer => layer.visible && layer.strokes.some(stroke => !stroke.erase));
+    if (!choices.length) { flashTray('Draw something rough first, then \u2726 Refine cleans it up.', true); return; }
+    const first = refineTarget() || choices[0];
+    refinePicked = first.id;
+    const label = { drawing: ['\u270f\ufe0f', 'your drawing'], asset: ['\u25c6', saveKind === 'shot' ? 'asset in this shot \u00b7 its copy here; the asset stays as it is' : 'placed asset'], backdrop: ['\u25a3', 'backdrop \u00b7 every frame gets it'] };
+    $('refine-options').replaceChildren(...choices.map(layer => {
+      const [icon, what] = label[refineKind(layer)];
+      const option = el('button', 'refine-option');
+      option.type = 'button';
+      option.setAttribute('role', 'radio');
+      option.setAttribute('aria-checked', String(layer.id === refinePicked));
+      const words = el('span');
+      words.append(el('b', '', `${icon} ${layer.name}`), el('small', '', what));
+      option.append(refineThumb(layer), words);
+      option.addEventListener('click', () => {
+        refinePicked = layer.id;
+        for (const other of $('refine-options').children) other.setAttribute('aria-checked', String(other === option));
+        $('refine-how').focus();
+      });
+      option.addEventListener('dblclick', () => $('refine-pick').requestSubmit());
+      return option;
+    }));
+    $('refine-how').value = '';
+    $('refine-pick').hidden = false;
+    $('refine-now').setAttribute('aria-expanded', 'true');
+    $('refine-how').focus({ preventScroll: true });
+  }
+  function closeRefinePick() {
+    $('refine-pick').hidden = true;
+    $('refine-now').setAttribute('aria-expanded', 'false');
+  }
+  $('refine-cancel').addEventListener('click', closeRefinePick);
+  $('refine-pick').addEventListener('keydown', event => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeRefinePick(); } });
+  $('refine-pick').addEventListener('submit', event => {
+    event.preventDefault();
+    const how = $('refine-how').value.trim().replace(/\s+/g, ' ').slice(0, 120);
+    closeRefinePick();
     if (motionDraft) skipMotion(); // refine the drawing first; the take comes back once you keep the refinement
-    const target = refineTarget();
-    if (target) flashTray(`\u2726 Refining ${refinedLabel(target)}\u2026 keep drawing.`);
-    startSpark('refine', null, QUICK_REFINE);
+    // In a moving shot, refine frame 1: every other frame is posed from it, so they all follow.
+    const pickedAt = layers.findIndex(item => item.id === refinePicked);
+    if (frames.length > 1 && frameIndex !== 0 && pickedAt >= 0) showFrame(0);
+    const layer = [layers[pickedAt]].find(item => item && item.visible && item.strokes.some(stroke => !stroke.erase));
+    if (!layer) { flashTray('That layer is gone or empty. Open \u2726 Refine again.', true); return; }
+    activeId = layer.id;
+    renderLayersPanel();
+    flashTray(`\u2726 Refining ${refinedLabel(layer)}${how ? `: \u201c${how}\u201d` : ''}\u2026 keep drawing.`);
+    startSpark('refine', null, how.length >= 3 ? `${how}. Keep everything else exactly as drawn: details, pose, proportions, style, colors.` : QUICK_REFINE,
+      how.length >= 3 ? how : 'clean up the lines');
   });
 
   // ---------------------------------------------------------------- Focus mode: the whole screen is paper
@@ -1927,7 +1994,7 @@
   const activeSpark = () => sparks.find(spark => spark.status === 'ready');
   const pendingCount = () => sparks.filter(spark => spark.status === 'pending').length;
 
-  async function startSpark(kind, region, prompt) {
+  async function startSpark(kind, region, prompt, label = prompt) {
     if (pendingCount() >= MAX_PENDING_SPARKS) {
       flashTray('Three AI requests are already running. Keep drawing; they\'ll land soon.', true);
       return;
@@ -1945,7 +2012,7 @@
       flashTray('This drawing is too big to send to AI (2 MiB limit).', true);
       return;
     }
-    const spark = { kind, region, prompt, status: 'pending', layerId: target?.id, source: target?.strokes.slice() };
+    const spark = { kind, region, prompt, label, status: 'pending', layerId: target?.id, source: target?.strokes.slice() };
     sparks.push(spark);
     clearTimeout(trayTimer);
     trayTimer = null;
@@ -2005,41 +2072,193 @@
     return top.find(layer => !layer.asset && !isScenery(layer)) || top.find(layer => layer.asset) || top[0] || null;
   }
   const refinedLabel = layer => layer.backdrop ? `the backdrop \u201c${layer.name}\u201d` : `\u201c${layer.name}\u201d`;
-  // Refined strokes: your originals (the very same objects) where AI kept them, its additions, and anything
-  // you drew while it was working.
+  // ---------------------------------------------------------------- refine = AI picks the edits, code applies them
+  // AI never redraws a stroke you drew. It returns a plan ("S3 is a circle", "smooth S1, S5", "S7, S8 bigger"), and
+  // this exact geometry runs it, on frame 1 and on every frame of a shot. Mirrors REFINE_OPS in backend/ai.py.
+  const toPx = points => points.map(p => [p.x * W, p.y * H, p.pressure ?? 0.5]);
+  const fromPx = list => list.map(([x, y, pr]) => ({ x: r4(clampTo(x / W, 0, 1)), y: r4(clampTo(y / H, 0, 1)), pressure: Math.round(clampTo(pr, 0.05, 1) * 1000) / 1000 }));
+  const pathLength = pts => pts.reduce((sum, p, i) => sum + (i ? Math.hypot(p[0] - pts[i - 1][0], p[1] - pts[i - 1][1]) : 0), 0);
+  const looksClosed = pts => pts.length > 3 && Math.hypot(pts[0][0] - pts[pts.length - 1][0], pts[0][1] - pts[pts.length - 1][1]) < Math.max(6, pathLength(pts) * 0.12);
+  const meanPressure = pts => pts.reduce((sum, p) => sum + p[2], 0) / Math.max(1, pts.length);
+  function resample(pts, step) {
+    if (pts.length < 2) return pts.slice();
+    const out = [pts[0]];
+    let carry = 0;
+    for (let i = 1; i < pts.length; i++) {
+      const [a, b] = [pts[i - 1], pts[i]];
+      const d = Math.hypot(b[0] - a[0], b[1] - a[1]);
+      let t = step - carry;
+      while (t <= d) {
+        const f = t / d;
+        out.push([a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f]);
+        t += step;
+      }
+      carry = d - (t - step);
+    }
+    if (out[out.length - 1] !== pts[pts.length - 1]) out.push(pts[pts.length - 1]);
+    return out;
+  }
+  const centroid = pts => pts.reduce((c, p) => [c[0] + p[0] / pts.length, c[1] + p[1] / pts.length], [0, 0]);
+  const turning = pts => Math.sign(pts.reduce((a, p, i) => { const q = pts[(i + 1) % pts.length]; return a + p[0] * q[1] - q[0] * p[1]; }, 0)) || 1;
+  const REFINE_SHAPES = {
+    smooth(pts) {
+      if (pts.length < 3) return pts;
+      const closed = looksClosed(pts), even = resample(pts, 4), n = even.length;
+      const k = clampTo(Math.round(pathLength(pts) / 90), 1, 5); // a wider window steadies a longer line
+      let out = even.map((p, i) => {
+        const reach = closed ? k : Math.min(k, i, n - 1 - i); // open ends stay exactly where you put them
+        let x = 0, y = 0, c = 0;
+        for (let j = -reach; j <= reach; j++) { const q = even[((i + j) % n + n) % n]; x += q[0]; y += q[1]; c++; }
+        return [x / c, y / c, p[2]];
+      });
+      for (let round = 0; round < 2; round++) { // Chaikin: corners become curves
+        const next = closed ? [] : [out[0]];
+        for (let i = 0; i < out.length - (closed ? 0 : 1); i++) {
+          const a = out[i], b = out[(i + 1) % out.length];
+          next.push([a[0] * 0.75 + b[0] * 0.25, a[1] * 0.75 + b[1] * 0.25, a[2]], [a[0] * 0.25 + b[0] * 0.75, a[1] * 0.25 + b[1] * 0.75, b[2]]);
+        }
+        if (closed) next.push(next[0]); else next.push(out[out.length - 1]);
+        out = next;
+      }
+      return simplifyChain(out, 0.6);
+    },
+    line(pts) {
+      const c = centroid(pts);
+      let sxx = 0, sxy = 0, syy = 0;
+      for (const [x, y] of pts) { sxx += (x - c[0]) ** 2; sxy += (x - c[0]) * (y - c[1]); syy += (y - c[1]) ** 2; }
+      const a = 0.5 * Math.atan2(2 * sxy, sxx - syy), dir = [Math.cos(a), Math.sin(a)], pr = meanPressure(pts);
+      const onLine = p => { const t = (p[0] - c[0]) * dir[0] + (p[1] - c[1]) * dir[1]; return [c[0] + dir[0] * t, c[1] + dir[1] * t]; };
+      const [p0, p1] = [onLine(pts[0]), onLine(pts[pts.length - 1])];
+      return Array.from({ length: 8 }, (_, i) => [p0[0] + (p1[0] - p0[0]) * i / 7, p0[1] + (p1[1] - p0[1]) * i / 7, pr]);
+    },
+    curve(pts) {
+      const even = resample(pts, 3), p0 = pts[0], p2 = pts[pts.length - 1], pr = meanPressure(pts);
+      const dx = p2[0] - p0[0], dy = p2[1] - p0[1], len = Math.hypot(dx, dy) || 1;
+      let apex = even[0], far = -1;
+      for (const p of even) { const d = Math.abs(dy * p[0] - dx * p[1] + p2[0] * p0[1] - p2[1] * p0[0]) / len; if (d > far) { far = d; apex = p; } }
+      const ctrl = [2 * apex[0] - (p0[0] + p2[0]) / 2, 2 * apex[1] - (p0[1] + p2[1]) / 2];
+      return Array.from({ length: 25 }, (_, i) => { const t = i / 24, u = 1 - t; return [u * u * p0[0] + 2 * u * t * ctrl[0] + t * t * p2[0], u * u * p0[1] + 2 * u * t * ctrl[1] + t * t * p2[1], pr]; });
+    },
+    circle(pts) {
+      const even = resample(pts, 3), c = centroid(even), pr = meanPressure(pts);
+      const r = even.reduce((sum, p) => sum + Math.hypot(p[0] - c[0], p[1] - c[1]), 0) / even.length;
+      const start = Math.atan2(pts[0][1] - c[1], pts[0][0] - c[0]), way = turning(even);
+      return Array.from({ length: 65 }, (_, i) => { const a = start + way * i / 64 * Math.PI * 2; return [c[0] + Math.cos(a) * r, c[1] + Math.sin(a) * r, pr]; });
+    },
+    ellipse(pts) {
+      const even = resample(pts, 3), c0 = centroid(even), pr = meanPressure(pts);
+      let sxx = 0, sxy = 0, syy = 0;
+      for (const [x, y] of even) { sxx += (x - c0[0]) ** 2; sxy += (x - c0[0]) * (y - c0[1]); syy += (y - c0[1]) ** 2; }
+      const a = 0.5 * Math.atan2(2 * sxy, sxx - syy), u = [Math.cos(a), Math.sin(a)], v = [-u[1], u[0]];
+      const along = even.map(p => (p[0] - c0[0]) * u[0] + (p[1] - c0[1]) * u[1]), across = even.map(p => (p[0] - c0[0]) * v[0] + (p[1] - c0[1]) * v[1]);
+      const [lo, hi, lo2, hi2] = [Math.min(...along), Math.max(...along), Math.min(...across), Math.max(...across)];
+      const rx = (hi - lo) / 2, ry = (hi2 - lo2) / 2, mu = (hi + lo) / 2, mv = (hi2 + lo2) / 2;
+      const c = [c0[0] + u[0] * mu + v[0] * mv, c0[1] + u[1] * mu + v[1] * mv];
+      const p = [(pts[0][0] - c[0]) * u[0] + (pts[0][1] - c[1]) * u[1], (pts[0][0] - c[0]) * v[0] + (pts[0][1] - c[1]) * v[1]];
+      const start = Math.atan2(p[1] / (ry || 1), p[0] / (rx || 1)), way = turning(even);
+      return Array.from({ length: 65 }, (_, i) => {
+        const t = start + way * i / 64 * Math.PI * 2, x = Math.cos(t) * rx, y = Math.sin(t) * ry;
+        return [c[0] + u[0] * x + v[0] * y, c[1] + u[1] * x + v[1] * y, pr];
+      });
+    },
+    close(pts) {
+      if (pts.length < 3) return pts;
+      const first = pts[0], last = pts[pts.length - 1];
+      return Math.hypot(first[0] - last[0], first[1] - last[1]) < 1 ? pts : [...pts, [first[0], first[1], last[2]]];
+    }
+  };
+  // Run a plan on strokes (any frame's). Returns the new strokes, in the same order (so a rig still fits), and
+  // where each old stroke went (-1: removed).
+  function applyEdits(strokes, edits) {
+    const out = strokes.slice(), gone = new Set();
+    for (const edit of edits || []) {
+      const at = edit.strokes.filter(i => out[i] && !out[i].erase && !gone.has(i));
+      if (!at.length) continue;
+      if (edit.op === 'delete') { at.forEach(i => gone.add(i)); continue; }
+      if (edit.op === 'transform') {
+        const all = at.flatMap(i => toPx(out[i].points));
+        const xs = all.map(p => p[0]), ys = all.map(p => p[1]);
+        const cx = (Math.min(...xs) + Math.max(...xs)) / 2, cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+        const k = edit.scale || 1, a = (edit.rotate || 0) * Math.PI / 180, cos = Math.cos(a), sin = Math.sin(a);
+        for (const i of at) {
+          const moved = toPx(out[i].points).map(([x, y, pr]) => { const dx = (x - cx) * k, dy = (y - cy) * k; return [cx + dx * cos - dy * sin + (edit.dx || 0), cy + dx * sin + dy * cos + (edit.dy || 0), pr]; });
+          out[i] = { ...out[i], points: fromPx(moved), width: clampTo(Math.round(out[i].width * Math.sqrt(k) * 10) / 10, 1, 40), ai: true };
+        }
+        continue;
+      }
+      const shape = REFINE_SHAPES[edit.op];
+      if (!shape) continue;
+      for (const i of at) out[i] = { ...out[i], points: fromPx(shape(toPx(out[i].points))), ai: true };
+    }
+    let n = 0;
+    const map = out.map((_, i) => (gone.has(i) ? -1 : n++));
+    return { strokes: out.filter((_, i) => !gone.has(i)), map };
+  }
+  // A refinement's result, for the preview and for keeping it: the plan run on the strokes it was made from, plus
+  // anything new it adds, plus whatever you drew while it worked.
   function refinedStrokes(spark, layer) {
-    const { keep_indices: keep, strokes } = spark.result;
-    const added = strokes.slice(keep.length);
+    spark.applied ||= applyEdits(spark.source, spark.result.edits);
+    const next = [...spark.applied.strokes, ...(spark.result.add || [])];
+    const changed = next.filter(stroke => !spark.source.includes(stroke));
     const since = layer.strokes.filter(stroke => !spark.source.includes(stroke));
-    return { kept: keep.map(i => spark.source[i]).filter(Boolean), added, since };
+    return { next, changed, since, map: spark.applied.map };
+  }
+  // What a plan does, in plain words: "rounded 1 · smoothed 3 · bigger 2 · removed 1 · added 2".
+  function editSummary(result) {
+    const words = { smooth: 'smoothed', line: 'straightened', curve: 'curved', circle: 'rounded', ellipse: 'made oval', close: 'closed', delete: 'removed' };
+    const count = {};
+    for (const edit of result.edits || []) {
+      const word = edit.op === 'transform' ? (edit.scale > 1.01 ? 'made bigger' : edit.scale < 0.99 ? 'made smaller' : edit.rotate ? 'turned' : 'moved') : words[edit.op];
+      if (word) count[word] = (count[word] || 0) + edit.strokes.length;
+    }
+    if (result.add?.length) count.added = result.add.length;
+    return Object.entries(count).map(([word, n]) => `${word} ${n}`).join(' \u00b7 ') || 'no changes';
   }
   function acceptRefine(spark) {
     const layer = layers.find(l => l.id === spark.layerId);
     if (!layer) { flashTray('That layer is gone. Try the refinement again.', true); return false; }
-    const { kept, added, since } = refinedStrokes(spark, layer);
-    const next = [...kept, ...added.map(stroke => ({ ...stroke, seq: nextSeq() })), ...since];
+    const { next: plan, since, map } = refinedStrokes(spark, layer);
+    const next = [...plan.map(stroke => (spark.result.add?.includes(stroke) ? { ...stroke, seq: nextSeq() } : stroke)), ...since];
     const others = allStrokes().filter(stroke => !layer.strokes.includes(stroke));
     if (others.length + next.length > MAX_STROKES || countPoints(others) + countPoints(next) > MAX_POINTS) {
       flashTray('That would exceed the canvas limits. Undo a few strokes first.', true);
       return false;
     }
     pushUndo();
+    const index = layers.indexOf(layer), old = spark.source;
     layer.strokes = next;
-    // A backdrop is one set of strokes under every frame: refine it once, every frame gets it.
-    if (layer.backdrop) for (const stack of frames) for (const other of stack) if (other !== layer && other.backdrop === layer.backdrop && other.name === layer.name) other.strokes = next;
-    if (layer.asset) for (const stroke of next) if (!spark.source.includes(stroke)) reshaped.add(stroke);
+    if (map.includes(-1)) layer.rigOff = true; // strokes were removed: the rig's stroke numbers no longer line up
+    // Every frame gets the same edits: a posed frame is re-posed from the refined frame 1 (same numbers, same
+    // bends); a frame that shares the strokes shares the result; a hand-drawn frame runs the plan on its own lines.
+    let reached = 0;
+    for (const stack of frames) {
+      const twin = stack[index];
+      if (stack === layers || !twin || twin.name !== layer.name) continue;
+      if (twin.xf && sameStrokes(twin.xfBase, old)) {
+        const bend = (twin.bend || []).map(b => ({ ...b, s: b.s.map(i => map[i] ?? -1).filter(i => i >= 0) })).filter(b => b.s.length);
+        const strokes = poseXf(bendStrokes(next, bend), twin.xf);
+        Object.assign(twin, { strokes, bend: bend.length ? bend : undefined, xfBase: next, xfStrokes: strokes.slice(), rigOff: layer.rigOff });
+      } else if (sameStrokes(twin.strokes, old)) {
+        twin.strokes = next;
+      } else if (twin.strokes.length === old.length) {
+        twin.strokes = applyEdits(twin.strokes, spark.result.edits).strokes;
+      } else continue;
+      reached++;
+    }
     recount();
+    rebuildOnion();
     rebuildAll();
     renderLayersPanel();
-    const r = spark.result;
-    logEvent('ai', 'Refine', `"${spark.prompt}" on "${layer.name}": kept ${r.kept} of ${r.source_strokes} strokes, added ${r.added} (${r.note})`);
+    const r = spark.result, what = editSummary(r);
+    const where = reached ? ` in all ${reached + 1} frames` : '';
+    logEvent('ai', 'Refine', `"${spark.label}" on "${layer.name}": ${what}${where} (${r.note})`);
     if (layer.asset && saveKind === 'shot' && frames.length === 1) { // it moves again, refined
-      autoTake(layer, 0, `\u2726 Refined ${refinedLabel(layer)} in this shot (${r.note || `kept ${r.kept} of ${r.source_strokes} strokes`}); the asset itself is unchanged. `);
+      autoTake(layer, 0, `\u2726 Refined ${refinedLabel(layer)} (${what}); the asset itself is unchanged. `);
       if (motionDraft) return true;
     }
-    message('drawing-status', `\u2726 Refined ${refinedLabel(layer)}${layer.asset ? ' in this shot (the asset itself is unchanged)' : ''}: kept ${r.kept} of your ${r.source_strokes} strokes exactly, added ${r.added}.`, false, [
+    message('drawing-status', `\u2726 Refined ${refinedLabel(layer)}${where}: ${what}.${layer.asset ? ' The asset itself is unchanged.' : ''}`, false, [
       { label: '\u21b6 Undo', tip: 'Undo \u00b7 Cmd/Ctrl+Z|Your layer exactly as it was.', run: () => { undo(); message('drawing-status', 'Undone. Your layer is back as it was.'); } },
-      { label: '\u2726 Refine more', run: () => startRefineFlow() }, { label: '\u3030 Make it move', run: () => setTool('path') }]);
+      { label: '\u2726 Refine more', run: () => startRefineFlow() }]);
     return true;
   }
 
@@ -2082,7 +2301,7 @@
     const spark = activeSpark();
     if (!spark) return;
     sparks.splice(sparks.indexOf(spark), 1);
-    startSpark(spark.kind, spark.region, spark.prompt);
+    startSpark(spark.kind, spark.region, spark.prompt, spark.label);
   }
 
   function animate() {
@@ -2090,7 +2309,7 @@
     animating = true;
     const tick = () => {
       renderOverlay();
-      if (pendingCount() || revealing()) requestAnimationFrame(tick);
+      if (pendingCount() || revealing() || rigView) requestAnimationFrame(tick);
       else animating = false;
     };
     requestAnimationFrame(tick);
@@ -2134,6 +2353,7 @@
       octx.restore();
       return;
     }
+    if (rigView) { paintRigView(); return; }
     if (pathDraft) {
       const k = mathScale(canvas.getBoundingClientRect().width);
       for (const path of motionDraft?.spec.paths || []) if (path.layerId !== pathDraft.layer.id) drawTrail(octx, path.points, k, { faint: true });
@@ -2186,11 +2406,11 @@
     if (ready?.kind === 'refine') {
       // The refined layer in place: what you'd keep, what AI adds (drawing itself in, with a glow).
       const target = layers.find(layer => layer.id === ready.layerId);
-      const { kept, added, since } = target ? refinedStrokes(ready, target) : { kept: [], added: [], since: [] };
-      const fresh = revealed(added, revealProgress(ready));
+      const { next, changed, since } = target ? refinedStrokes(ready, target) : { next: [], changed: [], since: [] };
+      const fresh = revealed(changed, revealProgress(ready));
       octx.fillStyle = '#ffffff';
       octx.fillRect(0, 0, W, H);
-      paintStack(octx, layers.map(layer => layer === target ? { ...layer, strokes: [...kept, ...fresh, ...since] } : layer));
+      paintStack(octx, layers.map(layer => layer === target ? { ...layer, strokes: [...next.filter(stroke => !changed.includes(stroke)), ...fresh, ...since] } : layer));
       octx.save();
       octx.globalAlpha = 0.45;
       octx.shadowColor = '#a78bfa';
@@ -2681,10 +2901,10 @@
   const rigCache = new Map(); // `${asset_id}@${version}` -> rig, for this session
   const rigKey = layer => layer?.asset ? `${layer.asset.asset_id}@${layer.asset.version}` : '';
   // A placed asset's rig, if it still fits its strokes (a placed layer keeps the asset's stroke order).
-  const reshaped = new WeakSet(); // strokes a refine added to a placed asset: its rig's stroke numbers no longer fit
+  // Refine keeps stroke order (new strokes go last), so a rig fits until strokes are removed.
   function rigFor(layer) {
     const rig = rigCache.get(rigKey(layer));
-    return rig && rig.strokes === layer.strokes.length && rig.bones.length && !layer.strokes.some(stroke => reshaped.has(stroke)) ? rig : null;
+    return rig && layer.strokes.length >= rig.strokes && !layer.rigOff && rig.bones.length ? rig : null;
   }
   const rigsComing = new Map(); // key -> the request in flight, so a path drawn meanwhile doesn't ask twice
   function ensureRig(layer) {
@@ -2698,6 +2918,114 @@
     }
     return rigsComing.get(key);
   }
+  // ---------------------------------------------------------------- 🦴 Rig: see the parts, watch them swing, redo it
+  // In a shot it rigs the asset you placed (kept with that asset version); on a drawing that isn't saved yet it
+  // rigs what's on the canvas and keeps the rig with the asset when you save it.
+  const PART_COLORS = { head: '#ca8a04', leg_front: '#dc2626', leg_back: '#ea580c', arm_front: '#2563eb', arm_back: '#0891b2', tail: '#9333ea', wing_front: '#16a34a', wing_back: '#65a30d' };
+  const PART_WORDS = { head: 'head', leg_front: 'leg', leg_back: 'leg', arm_front: 'arm', arm_back: 'arm', tail: 'tail', wing_front: 'wing', wing_back: 'wing' };
+  const drawingStrokes = () => layers.filter(layer => layer.visible).flatMap(layer => layer.strokes);
+  const rigSig = () => { const all = drawingStrokes(); return `${all.length}:${countPoints(all)}`; };
+  const rigSummary = rig => {
+    const n = {};
+    for (const bone of rig.bones) { const w = PART_WORDS[bone.part] || bone.part; n[w] = (n[w] || 0) + 1; }
+    return Object.entries(n).map(([w, k]) => (k > 1 ? `${k} ${w}s` : w)).join(' \u00b7 ');
+  };
+  function rigViewStrokes() {
+    if (!rigView) return [];
+    if (rigView.layerId == null) return drawingStrokes();
+    return layers.find(layer => layer.id === rigView.layerId)?.strokes || [];
+  }
+  function paintRigView() {
+    const strokes = rigViewStrokes(), b = inkBounds(strokes.filter(stroke => !stroke.erase));
+    if (!b) return;
+    const k = mathScale(canvas.getBoundingClientRect().width);
+    const t = (performance.now() - rigView.started) / 1000;
+    const g = GAITS[{ bird: 'fly', fish: 'glide' }[rigView.rig.kind] || 'walk'];
+    const s = { phase: t * Math.PI * 1.4, m: 1 }; // as if it were walking, so every part shows how it swings
+    const joints = rigView.rig.bones.map(bone => ({ ...bone, x: b.x + bone.px * b.w, y: b.y + bone.py * b.h, r: rigTurns(bone.part, g, s, t * MOTION_FPS, MOTION_FPS) }));
+    const bent = bendStrokes(strokes, joints.map(j => ({ s: j.strokes, r: j.r, px: j.x / W, py: j.y / H })));
+    const partOf = new Map(joints.flatMap(j => j.strokes.map(i => [i, j.part])));
+    octx.fillStyle = 'rgba(255, 255, 255, 0.78)';
+    octx.fillRect(0, 0, W, H);
+    octx.save();
+    octx.globalAlpha = 0.35;
+    bent.forEach((stroke, i) => { if (!partOf.has(i) && !stroke.erase) drawStroke(octx, stroke); });
+    octx.restore();
+    octx.save();
+    octx.shadowBlur = 10;
+    bent.forEach((stroke, i) => {
+      const part = partOf.get(i);
+      if (!part || stroke.erase) return;
+      octx.shadowColor = PART_COLORS[part];
+      drawStroke(octx, { ...stroke, color: PART_COLORS[part], fill: null, width: Math.max(stroke.width, 3) });
+    });
+    octx.restore();
+    octx.font = `700 ${Math.round(12 * k)}px system-ui, sans-serif`;
+    for (const j of joints) {
+      const color = PART_COLORS[j.part] || '#334155', label = PART_WORDS[j.part] || j.part;
+      octx.fillStyle = 'white';
+      octx.beginPath(); octx.arc(j.x, j.y, 7 * k, 0, Math.PI * 2); octx.fill();
+      octx.fillStyle = color;
+      octx.beginPath(); octx.arc(j.x, j.y, 4.5 * k, 0, Math.PI * 2); octx.fill();
+      const w = octx.measureText(label).width + 12 * k;
+      octx.fillStyle = color;
+      octx.beginPath(); octx.roundRect(j.x + 9 * k, j.y - 9 * k, w, 18 * k, 9 * k); octx.fill();
+      octx.fillStyle = 'white';
+      octx.fillText(label, j.x + 15 * k, j.y + 4 * k);
+    }
+  }
+  function closeRig() {
+    if (!rigView) return;
+    rigView = null;
+    $('rig-now').setAttribute('aria-pressed', 'false');
+    renderOverlay();
+  }
+  async function rigNow(redo = false) {
+    $('rig-now').blur();
+    if (rigView && !redo) { closeRig(); return; }
+    if (offline) { flashTray(OFFLINE_NOTE, true); return; }
+    const shot = saveKind === 'shot';
+    const active = activeLayer();
+    const layer = shot ? (active?.asset ? active : layers.find(item => item.asset && item.visible)) : null;
+    if (shot && !layer) { flashTray('\ud83e\uddb4 Rig works on an asset: place one in this shot, or open the asset itself.', true); return; }
+    if (!shot && !drawingStrokes().some(stroke => !stroke.erase)) { flashTray('Draw something first, then \ud83e\uddb4 Rig finds its legs, arms, and tail.', true); return; }
+    const name = layer?.name || $('title').value.trim() || 'your drawing';
+    const savedAsset = !shot && editing?.kind === 'asset' && revision === savedRevision;
+    message('drawing-status', `\ud83e\uddb4 ${redo ? 'Rigging again' : 'Finding'} ${name}\u2019s legs, arms, tail, and head\u2026`);
+    let rig = null;
+    try {
+      if (layer || savedAsset) {
+        const id = layer ? layer.asset.asset_id : editing.id, version = layer ? layer.asset.version : editing.version, key = `${id}@${version}`;
+        if (layer && !redo) await ensureRig(layer); // shares a request already on its way (a new shot asks too)
+        else if (redo || !rigCache.has(key)) {
+          const data = await api(`/api/assets/${encodeURIComponent(id)}/rig${redo ? '?redo=true' : ''}`, { method: 'POST' });
+          if (data.version === version) rigCache.set(key, data.rig);
+        }
+        rig = rigCache.get(key);
+        if (layer && rig) layer.rigOff = false;
+      } else {
+        const sig = rigSig();
+        if (redo || pendingRig?.sig !== sig) pendingRig = { sig, rig: (await postJSON('/api/sparks/rig', JSON.stringify({ layers: docLayers() }))).rig };
+        rig = pendingRig.rig;
+      }
+    } catch (error) {
+      message('drawing-status', `\ud83e\uddb4 Couldn\u2019t rig it: ${error.message}`, true);
+      return;
+    }
+    const again = { label: '\u21bb Redo rig', tip: 'Redo rig|Ask AI again: useful if a leg got called an arm, or a joint is off.', run: () => rigNow(true) };
+    if (!rig?.bones?.length) {
+      closeRig();
+      message('drawing-status', `\ud83e\uddb4 No moving parts found: ${name} moves as one piece (it squashes, leans, and hops). Draw legs or a tail as their own strokes, then rig again.`, false, [again]);
+      return;
+    }
+    rigView = { layerId: layer ? layer.id : null, rig, started: performance.now() };
+    $('rig-now').setAttribute('aria-pressed', 'true');
+    animate();
+    const walk = shot && frames.length === 1 ? [{ label: '\u3030 Walk it', tip: 'Walk it|A fresh take: it travels the stage, limbs and all.', run: () => { closeRig(); if (motionDraft) skipMotion(); autoTake(layer); } }] : [];
+    message('drawing-status', `\ud83e\uddb4 ${name}: ${rigSummary(rig)} (${rig.kind}). Watch each part swing on its joint.${shot || savedAsset ? ' Kept with the asset.' : ' Kept with the asset when you save it.'}`, false, [
+      { label: '\u2713 Looks right', run: closeRig }, again, ...walk]);
+  }
+  $('rig-now').addEventListener('click', () => rigNow());
   const frameCount = seconds => Math.max(2, Math.min(MAX_FRAMES, Math.round(seconds * MOTION_FPS)));
   function motionFrames(spec) {
     const count = frameCount(spec.seconds);
@@ -3075,27 +3403,135 @@
       + 'Keep it (Enter), switch Walk \u00b7 Hop \u00b7 Glide \u00b7 Fly, or drag your own path.';
     previewMotion(spec);
   }
-  // A real flipbook: every frame of a saved shot on printable pages (a PDF the server draws). Cut, stack, staple, flip.
-  const FLIPBOOK_TIP = 'Flipbook|Every frame on printable pages, ten to a page. Cut, stack them in order, staple the strip, and flip it with your thumb.';
+  // The flipbook: your frames as a little book bound on the left. Drag across it to riffle the pages (each one turns
+  // on its spine), or press play. Works on any shot that moves, saved or not. Printing is one button inside.
+  const FLIPBOOK_TIP = 'Flipbook|Your shot as a little book: drag across the pages to riffle them, or press play. Print it from there.';
   const flipbookUrl = id => `/api/shots/${encodeURIComponent(id)}/flipbook.pdf`;
   let flipbookTab = null;
-  function openFlipbook(id) {
-    window.open(flipbookUrl(id), '_blank', 'noopener');
+  const book = { stacks: [], at: 0, fps: 12, timer: 0, id: null, turning: false };
+  function drawPage(target, i) {
+    const box = target.getBoundingClientRect(), dpr = Math.min(2, window.devicePixelRatio || 1);
+    const w = Math.max(200, Math.round(box.width * dpr)), h = Math.round(w * H / W);
+    if (target.width !== w) { target.width = w; target.height = h; }
+    const g = target.getContext('2d');
+    g.setTransform(w / W, 0, 0, h / H, 0, 0);
+    g.fillStyle = '#fffdf8';
+    g.fillRect(0, 0, W, H);
+    const stack = book.stacks[i];
+    if (stack) paintStack(g, stack);
+    g.fillStyle = '#9a8f78';
+    g.font = '600 22px ui-rounded, system-ui, sans-serif';
+    g.textAlign = 'right';
+    g.fillText(String(i + 1), W - 24, H - 22); // penciled page number, like a real flipbook
   }
-  // From the shot bar: a saved shot opens at once; an unsaved one is saved first, straight into the tab opened now.
+  function showPage(i, { turn = false } = {}) {
+    i = clampTo(i, 0, book.stacks.length - 1);
+    const page = $('fb-page');
+    $('fb-scrub').value = String(i);
+    $('fb-count').textContent = `${i + 1} / ${book.stacks.length}`;
+    if (!turn || book.turning || i <= book.at) { // jumping back, or mid-turn: no animation, just the page
+      page.classList.remove('turn');
+      book.turning = false;
+      book.at = i;
+      drawPage(page, i);
+      drawPage($('fb-under'), Math.min(i + 1, book.stacks.length - 1));
+      return;
+    }
+    drawPage($('fb-under'), i); // the next page is already underneath; the top one turns away
+    book.turning = true;
+    book.at = i;
+    page.style.setProperty('--turn', `${Math.round(Math.min(220, 900 / book.fps))}ms`);
+    page.classList.remove('turn');
+    void page.offsetWidth;
+    page.classList.add('turn');
+  }
+  $('fb-page').addEventListener('animationend', () => {
+    book.turning = false;
+    $('fb-page').classList.remove('turn');
+    drawPage($('fb-page'), book.at);
+  });
+  function stopBook() {
+    clearTimeout(book.timer);
+    book.timer = 0;
+    $('fb-play').textContent = '\u25b6 Play';
+  }
+  function playBook() {
+    if (book.timer) { stopBook(); return; }
+    $('fb-play').textContent = '\u23f8 Pause';
+    if (book.at >= book.stacks.length - 1) showPage(0);
+    const tick = () => {
+      if (book.at >= book.stacks.length - 1) { book.timer = setTimeout(() => { showPage(0); book.timer = setTimeout(tick, 1000 / book.fps); }, 700); return; }
+      showPage(book.at + 1, { turn: true });
+      book.timer = setTimeout(tick, 1000 / book.fps);
+    };
+    book.timer = setTimeout(tick, 1000 / book.fps);
+  }
+  function openBook(stacks, { title = 'Your shot', id = null } = {}) {
+    if (stacks.length < 2) { flashTray('\ud83c\udf9e Make it move first: drag a path, then keep the take.'); return; }
+    stopBook();
+    Object.assign(book, { stacks, id, at: 0, turning: false });
+    $('fb-title').textContent = title;
+    $('fb-scrub').max = String(stacks.length - 1);
+    if (!$('flipbook').open) $('flipbook').showModal();
+    requestAnimationFrame(() => { showPage(0); playBook(); });
+  }
+  // The shot on the canvas (saved or not).
   function flipbookNow() {
-    if (frames.length < 2) { flashTray('\ud83c\udf9e Make it move first: drag a path, then keep the take.'); return; }
-    if (editing?.kind === 'shot' && revision === savedRevision) { openFlipbook(editing.id); return; }
+    if (motionDraft) keepMotion();
+    openBook(frames.map(stack => stack.slice()), { title: $('title').value.trim() || (editing?.kind === 'shot' ? editing.code : 'Your shot'),
+      id: editing?.kind === 'shot' && revision === savedRevision ? editing.id : null });
+  }
+  // A saved shot from your library (an asset's page), without opening it on the canvas.
+  async function openFlipbook(id, title = '') {
+    try {
+      const record = await api(`/api/shots/${encodeURIComponent(id)}`);
+      openBook(expandRecord(record), { title: title || record.code || record.name || 'Your shot', id });
+    } catch (error) {
+      flashTray(error.message, true);
+    }
+  }
+  // Paper: every page on printable sheets (a PDF the server draws). An unsaved shot is saved first, straight into
+  // the tab opened on the tap (so no popup blocker).
+  function printFlipbook() {
+    if (book.id) { window.open(flipbookUrl(book.id), '_blank', 'noopener'); return; }
     if (offline) { flashTray(OFFLINE_NOTE, true); return; }
+    $('flipbook').close();
     flipbookTab = window.open('', '_blank');
     if (flipbookTab) {
       flipbookTab.opener = null;
       flipbookTab.document.title = 'Your flipbook';
-      flipbookTab.document.body.textContent = 'Saving your shot, then drawing its flipbook\u2026';
+      flipbookTab.document.body.textContent = 'Saving your shot, then drawing its printable pages\u2026';
     }
     if (saveKind !== 'shot') setSaveKind('shot');
-    flashTray('\ud83c\udf9e Saving the shot first, then its flipbook opens\u2026');
+    flashTray('\ud83d\udda8 Saving the shot first, then its printable pages open\u2026');
     $('save-form').requestSubmit();
+  }
+  $('fb-play').addEventListener('click', playBook);
+  $('fb-print').addEventListener('click', printFlipbook);
+  $('fb-close').addEventListener('click', () => $('flipbook').close());
+  $('flipbook').addEventListener('close', stopBook);
+  $('fb-scrub').addEventListener('input', () => { stopBook(); showPage(Number($('fb-scrub').value)); });
+  document.querySelectorAll('.fb-speed [data-fps]').forEach(button => button.addEventListener('click', () => {
+    book.fps = Number(button.dataset.fps);
+    document.querySelectorAll('.fb-speed [data-fps]').forEach(other => other.setAttribute('aria-checked', String(other === button)));
+  }));
+  $('flipbook').addEventListener('keydown', event => {
+    if (event.key === ' ') { event.preventDefault(); playBook(); }
+    else if (event.key === 'ArrowRight') { event.preventDefault(); stopBook(); showPage(book.at + 1, { turn: true }); }
+    else if (event.key === 'ArrowLeft') { event.preventDefault(); stopBook(); showPage(book.at - 1); }
+  });
+  { // Riffle: drag across the book, a page per few pixels, forward or back, the way a thumb flips paper.
+    let from = null;
+    $('fb-book').addEventListener('pointerdown', event => { stopBook(); from = { x: event.clientX, at: book.at }; $('fb-book').setPointerCapture(event.pointerId); });
+    $('fb-book').addEventListener('pointermove', event => {
+      if (!from) return;
+      const step = Math.max(4, $('fb-book').clientWidth / Math.max(24, book.stacks.length));
+      const i = clampTo(from.at + Math.round((from.x - event.clientX) / step), 0, book.stacks.length - 1);
+      if (i !== book.at) showPage(i, { turn: i > book.at });
+    });
+    const end = () => { from = null; };
+    $('fb-book').addEventListener('pointerup', end);
+    $('fb-book').addEventListener('pointercancel', end);
   }
   // What a layer is likely to do: from its rig first (a bird flies, legs walk), else from its name and asset type.
   function gaitFor(layer) {
@@ -3505,11 +3941,17 @@
   let autoMeta = null; // what AI wrote at the last save: { kind, signature, description, tags }
   const titleCase = text => text.replace(/(^|\s)\S/g, c => c.toUpperCase());
   // Every way in starts at the top: the canvas (or your assets) in full view.
+  let stepsKey = '';
+  const esc = text => String(text).replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
   function setView(next) {
     const was = document.body.classList.contains('view-studio') ? 'studio' : 'home';
     document.body.classList.toggle('view-home', next === 'home');
     document.body.classList.toggle('view-studio', next === 'studio');
     window.scrollTo({ top: 0, behavior: 'auto' });
+    closeRefinePick();
+    closeRig();
+    stepsKey = '';
+    renderSteps();
     if (next === was) return;
     if (next === 'home') {
       setFocus(false);
@@ -3596,14 +4038,60 @@
     renderShotHint();
   }
   function renderShotHint() {
+    renderSteps();
     if (saveKind !== 'shot') return;
-    const star = shotStarLayer();
-    $('shot-hint').hidden = !!motionDraft;
-    $('shot-hint').textContent = frames.length > 1
-      ? `\ud83c\udf9e ${(frames.length / fps).toFixed(0)} s. Space plays. \u3030 Drag another layer to move it too, then Save shot.`
-      : `\u3030 Drag ${star ? star.name : 'something you drew'} along a path: it travels your trail for ${MIN_SHOT} s.`;
+    $('shot-hint').hidden = true; // the steps above the canvas say what's next
     $('scene-backdrop').disabled = !!motionDraft;
     $('shot-flipbook').hidden = frames.length < 2 || !!motionDraft;
+  }
+  // The studio's three steps (asset, shot, flipbook): where you are, what's done, and the next tap. One line of
+  // plain words under them says what to do right now.
+  function renderSteps() {
+    if (!document.body.classList.contains('view-studio')) return;
+    const shot = saveKind === 'shot';
+    const backdrop = !shot && $('asset-type').value === 'environment';
+    const saved = revision === savedRevision;
+    const savedAsset = !shot && editing?.kind === 'asset' && saved;
+    const moving = shot && frames.length > 1;
+    const star = shot ? shotStarLayer() : null;
+    const name = shot ? star?.name || 'it' : $('title').value.trim() || (backdrop ? 'your backdrop' : 'your asset');
+    const blank = canvasIsBlank();
+    const hint = !shot
+      ? blank ? `Draw ${backdrop ? 'a place' : 'a character or prop'}, rough is fine. Or start <b>From an image</b>, or <b>\u2726 Generate</b> one.`
+        : savedAsset ? `<b>${esc(name)}</b> is saved. Tap <b>\u2461 Shot</b> to ${backdrop ? 'make a shot here' : 'watch it move'}.`
+          : `Rough? Tap <b>\u2726 Refine</b> and pick what to clean up. Happy? <b>Save</b>: AI names and tags it.`
+      : motionDraft ? `A take of <b>${esc(name)}</b>. <b>Enter</b> keeps it; switch Walk \u00b7 Hop \u00b7 Glide \u00b7 Fly, or drag your own path.`
+        : !moving ? `Pick <b>\u3030 Path</b> and drag <b>${esc(name)}</b> where it should go. It travels your trail for ${MIN_SHOT} s.`
+          : editing?.kind === 'shot' && saved ? `Saved, and on ${esc(name)}\u2019s page. Tap <b>\u2462 Flipbook</b> to print every frame.`
+            : `It moves: Space plays. <b>Save</b> the shot, or tap <b>\u2462 Flipbook</b> to print it (it saves first).`;
+    const steps = [
+      { label: backdrop ? 'Backdrop' : 'Asset', state: shot || savedAsset ? 'done' : 'now',
+        run: shot && star ? () => openWhereUsed({ id: star.asset.asset_id, name: star.name }) : null,
+        tip: shot && star ? `${star.name}|Its page: every shot it stars in.` : '' },
+      { label: 'Shot', state: moving ? 'done' : shot ? 'now' : savedAsset ? 'next-up' : '',
+        run: savedAsset ? () => {
+          const item = lastSavedAsset?.id === editing.id ? lastSavedAsset : { id: editing.id, name, type: backdrop ? 'environment' : $('asset-type').value };
+          castInScene(item);
+          if (backdrop) setView('home');
+        } : null,
+        tip: savedAsset ? (backdrop ? `Shots here|Pick who stars in a shot in ${name}.` : `Make a shot|${name} in a fresh ${MIN_SHOT}-second shot, already moving.`) : '' },
+      { label: 'Flipbook', state: moving ? 'next-up' : '', run: moving && !motionDraft ? flipbookNow : null, tip: moving ? FLIPBOOK_TIP : '' }
+    ];
+    const key = JSON.stringify([hint, steps.map(step => [step.label, step.state, !!step.run])]);
+    if (key === stepsKey) return;
+    stepsKey = key;
+    $('step-hint').innerHTML = hint;
+    $('steps').replaceChildren(...steps.map(step => {
+      const li = document.createElement('li');
+      const part = document.createElement(step.run ? 'button' : 'span');
+      part.className = step.state;
+      part.textContent = step.label;
+      if (step.run) { part.type = 'button'; part.addEventListener('click', step.run); }
+      if (step.tip) part.dataset.tip = step.tip;
+      if (step.state === 'now') part.setAttribute('aria-current', 'step');
+      li.append(part);
+      return li;
+    }));
   }
   // A backdrop picked for the shot on screen slides under every frame (one set of strokes, shared).
   async function applyBackdrop() {
@@ -3955,21 +4443,7 @@
       if (document.activeElement === $('ai-prompt')) $('ai-prompt').select();
     }
   }
-  function startRefineFlow() {
-    if (offline) { flashTray(OFFLINE_NOTE, true); return; }
-    if (!hasInk()) {
-      flashTray('Draw something first, then refine it with AI.', true);
-      canvas.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      return;
-    }
-    if (motionDraft) skipMotion();
-    setFocus(false);
-    $('ai-tools').open = true;
-    setAiMode('refine');
-    $('ai-bar').scrollIntoView({ behavior: 'smooth', block: 'center' });
-    $('ai-prompt').focus({ preventScroll: true });
-    suggestRefinements();
-  }
+  const startRefineFlow = () => openRefinePick();
   async function refineAsset(item) {
     await openAsset(item.id);
     if (editing?.kind === 'asset' && editing.id === item.id) $('refine-now').click();
@@ -4067,7 +4541,7 @@
         note,
         trayButton(`${ready.kind === 'guide' ? 'Pin guide' : ready.kind === 'sketch' ? 'Use sketch' : ready.kind === 'refine' ? 'Keep it' : 'Use it'} <kbd>\u23ce</kbd>`,
           ready.kind === 'sketch' ? 'Use sketch \u00b7 Enter|Adds it as a faint layer under your ink.' : ready.kind === 'guide' ? 'Pin guide \u00b7 Enter'
-            : ready.kind === 'refine' ? `Keep it \u00b7 Enter|Kept ${ready.result.kept} of your ${ready.result.source_strokes} strokes exactly, added ${ready.result.added}. Undo brings the old one back.`
+            : ready.kind === 'refine' ? `Keep it \u00b7 Enter|${editSummary(ready.result)}. Code applied AI\u2019s plan to your own strokes (and to every frame). Undo brings the old one back.`
             : `Use it \u00b7 Enter|Adds these lines to "${activeLayer().name}".`, acceptSpark),
         ...(ready.kind === 'refine' || ready.kind === 'strokes' ? [compareButton()] : []),
         trayButton('\u21bb', 'Another try|Same request, a new attempt.', retrySpark),
@@ -4085,7 +4559,7 @@
       note.className = 'tray-note pending';
       const sketching = sparks.find(spark => spark.status === 'pending' && spark.kind === 'sketch');
       const refining = sparks.find(spark => spark.status === 'pending' && spark.kind === 'refine');
-      note.textContent = refining && pending === 1 ? (refining.prompt === QUICK_REFINE ? '\u2726 Refining your lines\u2026 keep drawing' : `\u2726 Refining: "${refining.prompt}"\u2026`)
+      note.textContent = refining && pending === 1 ? (refining.prompt === QUICK_REFINE ? '\u2726 Refining your lines\u2026 keep drawing' : `\u2726 Refining: \u201c${refining.label}\u201d\u2026 keep drawing`)
         : sketching && pending === 1 ? `\u2726 Sketching "${sketching.prompt}" in blue pencil\u2026 keep drawing`
         : `\u2726 AI is on it${pending > 1 ? ` (${pending})` : ''}\u2026 keep drawing`;
       tray.append(note);
@@ -4295,7 +4769,8 @@
       event.preventDefault();
       acceptSpark();
     } else if (event.key === 'Escape') {
-      if (playing) stopPlay();
+      if (rigView) closeRig();
+      else if (playing) stopPlay();
       else if (document.body.classList.contains('focus-mode') && !activeSpark() && tool !== 'place' && tool !== 'spark') setFocus(false);
       else if ($('layers-panel').classList.contains('open')) setLayersOpen(false);
       else if (tool === 'place') { setTool(drawTool); flashTray('Placement cancelled.'); }
@@ -4579,6 +5054,11 @@
         : saved.tags_status === 'unavailable' ? ' AI couldn\u2019t describe it this time; add words in Description & tags.' : '';
       if (kind === 'asset') {
         editing = { kind, id: saved.id, version: saved.version };
+        if (pendingRig && pendingRig.sig === rigSig()) { // rigged before saving: keep it with this version (no AI)
+          const rig = pendingRig.rig;
+          api(`/api/assets/${encodeURIComponent(saved.id)}/rig`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ rig }) })
+            .then(() => rigCache.set(`${saved.id}@${saved.version}`, rig)).catch(() => { /* rigged again on its first shot */ });
+        }
         loadSceneBackdrops();
         if (pendingVary) {
           const goal = pendingVary;
@@ -4586,6 +5066,7 @@
           openVariations({ ...saved, type: saved.type || $('asset-type').value, tags: saved.tags || tags }, goal);
         }
         const savedItem = { ...saved, type: saved.type || $('asset-type').value, ...(request.method === 'POST' ? { uses: 0 } : {}) };
+        lastSavedAsset = savedItem;
         const backdrop = savedItem.type === 'environment';
         message('drawing-status', `\u2713 Saved ${backdrop ? '\u25a3' : '\u25c6'} ${saved.name} v${saved.version}.${note} Next:`, false, backdrop ? [
           { label: '\u25c6 Pick an asset for a shot here', tip: `Shots in ${saved.name}|It\u2019s now the backdrop for your next shot. Pick who stars in it.`, run: () => { castInScene(savedItem); setView('home'); } },
@@ -4606,7 +5087,7 @@
         message('drawing-status', `\u2713 Saved ${saved.code || 'your shot'}.${note}${names.length ? ` It\u2019s on ${names.join(' and ')}\u2019s page, searchable by what happens.` : ''}`, false,
           [...(first ? [{ label: '\u3030 Another shot', tip: `Another shot|${first.name} again, on a fresh ${MIN_SHOT}-second canvas, same backdrop. Drag a new path.`, run: () => castInScene({ id: first.id, name: first.name, uses: shotStar?.id === first.id ? shotStar.uses : undefined }) },
             { label: `\u25c6 ${first.name}`, tip: `${first.name}|Its page: every shot it stars in, searchable.`, run: () => openWhereUsed({ id: first.id, name: first.name }) }] : []),
-            ...(frames.length > 1 ? [{ label: '\ud83c\udf9e Flipbook', tip: FLIPBOOK_TIP, run: () => openFlipbook(saved.id) },
+            ...(frames.length > 1 ? [{ label: '\ud83c\udf9e Flipbook', tip: FLIPBOOK_TIP, run: () => flipbookNow() },
               { label: '\ud83d\udd17 Share it', tip: 'Share|A public link: your shot as a looping GIF, with how it moves explained.', run: () => openShare() }] : []),
             { label: '\u2190 Your assets', run: () => setView('home') }]);
       } else {
@@ -4697,8 +5178,8 @@
     $('shot-sequence').value = record.sequence;
     $('shot-status').value = record.status;
     $('shot-assignee').value = record.assignee || '';
-    const animated = frames.length > 1 ? ` and ${frames.length} frames (press Space to play)` : '';
-    return `Editing scene ${record.code} with ${layerCount()}${animated}. Saving updates it in place.`;
+    const animated = frames.length > 1 ? `, ${(frames.length / fps).toFixed(0)} s. Space plays; \ud83c\udf9e Flipbook riffles it` : '';
+    return `Opened ${record.code}${animated}. Saving updates it in place.`;
   });
 
   // ---------------------------------------------------------------- library tabs
@@ -4992,7 +5473,7 @@
         () => syncShots([{ shot_id: item.id }])));
     }
     actions.append(actionButton('Open', outdated ? '' : 'primary-mini', null, open));
-    if (item.frames > 1) actions.append(actionButton('\ud83c\udf9e Flipbook', '', FLIPBOOK_TIP, () => openFlipbook(item.id)));
+    if (item.frames > 1) actions.append(actionButton('\ud83c\udf9e Flipbook', '', FLIPBOOK_TIP, () => openFlipbook(item.id, item.code || item.name)));
     card.append(figure, text, actions);
     return card;
   }

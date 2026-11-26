@@ -168,6 +168,28 @@ class _Variation(BaseModel):
     strokes: list[_VarStroke]
 
 
+class _Edit(BaseModel):
+    op: str
+    strokes: list[int]
+    scale: float
+    rotate: float
+    dx: float
+    dy: float
+
+
+class _RefinePlan(BaseModel):
+    note: str
+    edits: list[_Edit]
+    add: list[_VarStroke]
+
+
+# Refine is a plan of edits the studio's code applies exactly (studio.js applyEdits): the model decides *what*
+# each stroke should become, never draws coordinates for a stroke the artist already drew.
+REFINE_OPS = ("smooth", "line", "curve", "circle", "ellipse", "close", "delete", "transform")
+MAX_REFINE_EDITS = 40
+MAX_REFINE_ADDS = 12
+
+
 class _CodeSketch(BaseModel):
     code: str
     note: str
@@ -682,33 +704,72 @@ class Sparks:
         return ideas
 
     def refine(self, request: RefineRequest) -> dict:
-        """One layer, refined by EDITING the artist's strokes (kept verbatim) and adding only what's needed."""
+        """One layer refined as a plan of edits (smooth this, make that a circle, scale those), which the studio
+        applies with exact geometry to every frame. New strokes only when the request asks for something new."""
         strokes = request.layers[request.target].strokes
+        live = [i for i, stroke in enumerate(strokes) if not stroke.erase]
+        picture = render_image(request.layers)
+        pen = ImageDraw.Draw(picture)
+        rows = []
+        for i in live:
+            pts = [(p.x * CANVAS_WIDTH, p.y * CANVAS_HEIGHT) for p in strokes[i].points]
+            xs, ys = [x for x, _ in pts], [y for _, y in pts]
+            length = sum(math.dist(pts[k - 1], pts[k]) for k in range(1, len(pts)))
+            gap = math.dist(pts[0], pts[-1])
+            closed = len(pts) > 3 and gap < max(6.0, 0.12 * length)
+            rows.append(f"S{i}: {strokes[i].color.lower()}{' filled' if strokes[i].fill else ''}, {len(pts)} points, "
+                        f"{'closed' if closed else 'open'}, box {round(min(xs))},{round(min(ys))} to {round(max(xs))},{round(max(ys))}, "
+                        f"length {round(length)}px, ends {round(gap)}px apart")
+            x, y = pts[len(pts) // 2]
+            pen.rectangle((x - 2, y - 7, x + 7 * len(str(i)) + 2, y + 7), fill="#6d28d9")
+            pen.text((x, y - 6), str(i), fill="#ffffff")
         result = self._json([
-            "Image: the artist's whole canvas (1000x650).",
-            types.Part.from_bytes(data=png_bytes(render_image(request.layers)), mime_type="image/png"),
-            f"The strokes of the layer to refine, in drawing order (pixel coordinates; (0,0) is top-left):\n"
-            f"{encode_strokes(strokes)}\n\n"
-            f"You help an artist refine their drawing{f' {request.title!r}' if request.title else ''} by EDITING "
-            f"their line art, never redrawing it from scratch. Refinement: {request.prompt}\n"
-            "Return `keep`: the numbers of every stroke to keep exactly as is (keep as many as possible). Return "
-            "`strokes`: only the new or changed strokes this needs (a changed stroke is left out of keep and "
-            "redrawn here). Match the artist's colors, widths, and style; keep the same size and position. Each "
-            "stroke: color #rrggbb, width in pixels, fill (#rrggbb for a closed filled shape, or empty), and points "
-            f"as a polyline in pen order, pixel coordinates within 0-1000 x 0-650, at most {MAX_VARIATION_POINTS} "
-            "points. Also return a note (at most 12 words) saying what you changed.",
-        ], _Variation)
-        out, kept, added = apply_variation(strokes, result)
-        keep = {i for i in result.keep if 0 <= i < len(strokes)}
-        source = sum(1 for stroke in strokes if not stroke.erase)
-        if not added and kept == source:
-            raise AIError("Gemini left it unchanged. Try a more specific refinement.")
-        if not any(not stroke.get("erase") for stroke in out):
-            raise AIError("Gemini's refinement came back empty. Try again or reword it.")
+            "Image: the artist's canvas (1000x650). Each stroke of the layer to refine has its number on it (violet tag).",
+            types.Part.from_bytes(data=png_bytes(picture), mime_type="image/png"),
+            "The strokes of that layer:\n" + "\n".join(rows) + "\n\nTheir points (pixels):\n" + encode_strokes(strokes) + "\n\n"
+            f"Refine this drawing{f' {request.title!r}' if request.title else ''}: {request.prompt}\n"
+            "You do NOT redraw strokes. You return `edits`: operations that code applies exactly to the artist's own "
+            "strokes. Each edit: op, strokes (the S numbers it applies to), scale, rotate, dx, dy. Ops:\n"
+            "- smooth: steady a wobbly or jittery line, keeping its shape.\n"
+            "- line: it is meant to be one straight line.\n"
+            "- curve: it is meant to be one smooth arc (a smile, a brow, a tail curve).\n"
+            "- circle: it is meant to be a circle (a head, an eye, a wheel).\n"
+            "- ellipse: it is meant to be an oval (a body, an egg).\n"
+            "- close: a shape left open by a small gap that should be closed.\n"
+            "- delete: a stray speck, scribble, or duplicate stroke laid over another.\n"
+            "- transform: move, scale, or turn a group of strokes together about their center: scale (1 = same, "
+            "0.5 to 2), rotate (degrees, -60 to 60, clockwise), dx and dy (pixels). Use it for 'bigger ears', 'tilt "
+            "the head', 'move the eyes closer'. For every other op set scale 1, rotate 0, dx 0, dy 0.\n"
+            "Only edit what the request needs; leave everything else out (unlisted strokes stay exactly as drawn). "
+            "Never use circle or ellipse on a stroke that is not round in the picture. `add`: new strokes ONLY if the "
+            "request asks for something new (\"add clouds\"); otherwise empty. Each added stroke: color #rrggbb, "
+            "width in pixels, fill (#rrggbb or empty), points in pixels (0-1000 x 0-650), at most "
+            f"{MAX_VARIATION_POINTS} points, in the artist's style. note: at most 12 words saying what changed.",
+        ], _RefinePlan)
+        allowed = set(live)
+        edits = []
+        for edit in result.edits[:MAX_REFINE_EDITS]:
+            op = (edit.op or "").strip().lower()
+            picked = [i for i in dict.fromkeys(edit.strokes) if i in allowed]
+            if op not in REFINE_OPS or not picked:
+                continue
+            num = lambda v, lo, hi, d: min(hi, max(lo, v)) if isinstance(v, (int, float)) and math.isfinite(v) else d  # noqa: E731
+            item = {"op": op, "strokes": picked, "scale": 1.0, "rotate": 0.0, "dx": 0.0, "dy": 0.0}
+            if op == "transform":
+                item.update(scale=round(num(edit.scale, 0.5, 2.0, 1.0), 3), rotate=round(num(edit.rotate, -60, 60, 0.0), 2),
+                            dx=round(num(edit.dx, -300, 300, 0.0), 1), dy=round(num(edit.dy, -300, 300, 0.0), 1))
+                if abs(item["scale"] - 1) < 0.01 and abs(item["rotate"]) < 0.5 and abs(item["dx"]) < 1 and abs(item["dy"]) < 1:
+                    continue
+            edits.append(item)
+        doomed = {i for edit in edits if edit["op"] == "delete" for i in edit["strokes"]}
+        if doomed and len(doomed) >= max(1, len(live) * 0.6):  # a cleanup never deletes the drawing
+            edits = [edit for edit in edits if edit["op"] != "delete"]
+        out, _, added = apply_variation(strokes, _Variation(note="", keep=list(range(len(strokes))), strokes=result.add[:MAX_REFINE_ADDS]))
+        add = out[len(strokes):]
+        if not edits and not add:
+            raise AIError("Nothing to change there. Say how: \u201csmoother lines\u201d, \u201ca rounder head\u201d, \u201cbigger ears\u201d.")
         return {"kind": "refine", "note": result.note.strip()[:120], "prompt": request.prompt, "target": request.target,
-                "strokes": out, "kept": kept, "added": added, "source_strokes": source,
-                # out = these source strokes, verbatim and in order, then the AI's: the studio keeps its originals.
-                "keep_indices": [i for i, stroke in enumerate(strokes) if stroke.erase or i in keep]}
+                "edits": edits, "add": add, "source_strokes": len(live)}
 
     def plan_variations(self, asset: dict, request: VariationPlanRequest) -> list[dict]:
         """A short, editable plan: one brief per variation. The artist edits it before anything is drawn."""

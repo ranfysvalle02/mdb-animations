@@ -1455,6 +1455,9 @@ body.lab-open { overflow: hidden; }
 .tool.path-tool[aria-pressed="true"] { background: var(--violet); color: white; }
 .tool.refine-tool { color: var(--violet); font-size: 17px; }
 .tool.refine-tool:hover { background: var(--violet-soft); }
+.tool.rig-tool { color: #9a3412; font-size: 15px; }
+.tool.rig-tool:hover { background: #fff1e6; }
+.tool.rig-tool[aria-pressed="true"] { background: #ffedd5; }
 #drawing.path-mode { cursor: crosshair; }
 
 .asset-page .sheet-head img { width: 132px; }
@@ -1474,7 +1477,7 @@ body.lab-open { overflow: hidden; }
 .asset-card-tags { color: var(--green); }
 
 /* ---------------------------------------------------------------- home (start something, your assets) and the studio */
-body.view-home .studio, body.view-studio .hero, body.view-studio .launcher, body.view-studio .library { display: none !important; }
+body.view-home .studio, body.view-studio .hero, body.view-studio .launcher, body.view-studio .how-steps, body.view-studio .library { display: none !important; }
 body.view-studio main { padding-top: 14px; }
 .launcher { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; width: 100%; max-width: 1080px; margin: 4px auto 0; animation: rise .6s .1s var(--ease) both; }
 .launch-tile { display: grid; justify-items: start; gap: 4px; min-height: 124px; padding: 18px 20px; border: 1.5px dashed #b9cdbf; border-radius: var(--radius); background: var(--card); text-align: left; cursor: pointer; transition: border-color .2s, box-shadow .2s, transform .2s var(--spring); }
@@ -1509,3 +1512,65 @@ body:not(.making-backdrop) .starter-strip { display: none !important; }
 .ai-pill { border-color: #ddd6fe; background: var(--violet-soft); color: #5b21b6; }
 .picture-form { display: flex; gap: 8px; align-items: center; padding: 8px; border: 1px solid #ddd6fe; border-radius: 14px; background: var(--violet-soft); }
 .picture-form input { flex: 1; min-width: 0; min-height: 38px; padding: 0 12px; border: 1px solid #ddd6fe; border-radius: 10px; font-size: 15px; }
+
+/* How it works, on home: the four steps, quiet under the two doors */
+.how-steps { width: 100%; max-width: 1080px; margin: 14px auto 4px; }
+.how-steps li { align-content: start; background: transparent; border: 1px solid var(--line); }
+.how-steps b { font-size: 14px; }
+
+/* The studio's steps: asset, then shot, then flipbook. Where you are, and the next tap. */
+.steps { display: flex; align-items: center; gap: 4px; margin: 0 0 0 auto; padding: 0; list-style: none; counter-reset: st; }
+.steps li { counter-increment: st; display: flex; align-items: center; }
+.steps li + li::before { content: ''; width: 14px; height: 1.5px; margin: 0 4px; background: var(--line); }
+.steps button, .steps span { display: inline-flex; align-items: center; gap: 6px; min-height: 30px; padding: 0 11px 0 5px; border: 1px solid transparent; border-radius: 999px; background: none; color: var(--muted); font: inherit; font-size: 13px; font-weight: 650; }
+.steps button::before, .steps span::before { content: counter(st); display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: #e3e9e1; color: var(--muted); font-size: 11px; font-weight: 700; }
+.steps .done::before { content: '\2713'; background: var(--green-soft, #dcefe4); color: var(--green); }
+.steps .now { border-color: var(--green); color: var(--ink); background: var(--card); }
+.steps .now::before { background: var(--green); color: white; }
+.steps button { cursor: pointer; }
+.steps button:hover { border-color: var(--green); color: var(--ink); }
+.steps button.next-up { color: var(--green); border-color: var(--green); border-style: dashed; }
+.step-hint { margin: 6px 2px 10px; color: var(--muted); font-size: 14px; }
+.step-hint:empty { display: none; }
+.step-hint b { color: var(--ink); }
+
+/* Core tools carry a word, not just an icon */
+.tool .tool-word { margin-left: 5px; font-size: 13px; font-weight: 650; }
+.tool:has(.tool-word) { display: inline-flex; flex-direction: row; align-items: center; width: auto; padding: 0 11px 0 9px; white-space: nowrap; }
+
+/* Refine: pick what, optionally say how */
+.canvas-card { position: relative; }
+.refine-pick { position: absolute; z-index: 40; top: 58px; left: 12px; display: grid; gap: 10px; width: min(460px, calc(100% - 24px)); padding: 14px; border: 1px solid var(--line); border-radius: 16px; background: var(--card); box-shadow: 0 18px 50px rgba(20, 40, 30, .18); animation: rise .25s var(--ease) both; }
+.refine-pick-title { margin: 0; font-weight: 700; color: var(--violet); }
+.refine-options { display: grid; gap: 6px; max-height: 260px; overflow-y: auto; }
+.refine-option { display: grid; grid-template-columns: 72px 1fr; align-items: center; gap: 10px; padding: 6px; border: 1.5px solid var(--line); border-radius: 12px; background: white; text-align: left; font: inherit; cursor: pointer; }
+.refine-option canvas { width: 72px; height: 48px; border-radius: 8px; background: #fff; box-shadow: inset 0 0 0 1px var(--line); }
+.refine-option b { display: block; font-size: 14px; }
+.refine-option small { color: var(--muted); font-size: 12.5px; }
+.refine-option[aria-checked="true"] { border-color: var(--violet); background: var(--violet-soft); }
+.refine-pick input { min-height: 40px; padding: 0 12px; border: 1px solid var(--line); border-radius: 999px; font: inherit; font-size: 14px; }
+.refine-pick-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.refine-pick-actions small { color: var(--muted); font-size: 12px; }
+@media (max-width: 720px) { .steps { margin-left: 0; width: 100%; } .tool .tool-word { display: none; } .tool:has(.tool-word) { width: revert; padding: revert; } }
+
+/* The flipbook: a little book of your frames, bound on the left. Drag to riffle; each page turns on its spine. */
+.flipbook-sheet .fb-stage { display: grid; place-items: center; padding: 18px 8px 26px; }
+.fb-book { position: relative; width: min(760px, 100%); aspect-ratio: 1000 / 650; perspective: 1800px; cursor: grab; touch-action: none; user-select: none; }
+.fb-book:active { cursor: grabbing; }
+.fb-book::before { content: ''; position: absolute; inset: 0; border-radius: 6px 12px 12px 6px; background: #f6f1e3;
+  box-shadow: 2px 3px 0 #efe8d6, 4px 6px 0 #e6dec8, 6px 9px 0 #efe8d6, 8px 12px 0 #ddd3ba, 18px 26px 40px rgba(30, 40, 20, .22); }
+.fb-book::after { content: ''; position: absolute; top: 0; bottom: 0; left: -6px; width: 16px; border-radius: 6px 0 0 6px; background: linear-gradient(90deg, #2f3b35, #4a5a52 60%, #2f3b35);
+  box-shadow: inset 0 22% 0 -6px transparent; }
+.fb-book canvas { position: absolute; inset: 0; width: 100%; height: 100%; border-radius: 4px 12px 12px 4px; background: #fffdf8; }
+.fb-under { filter: brightness(.97); }
+.fb-page { transform-origin: left center; backface-visibility: hidden; will-change: transform; box-shadow: 2px 0 6px rgba(0, 0, 0, .06); }
+.fb-page.turn { animation: fbTurn var(--turn, 110ms) cubic-bezier(.4, 0, .9, .6) forwards; }
+@keyframes fbTurn { from { transform: rotateY(0deg); } to { transform: rotateY(-115deg); filter: brightness(.8); } }
+.fb-thumb { position: absolute; right: -8px; bottom: -10px; padding: 3px 9px; border-radius: 999px; background: var(--violet); color: white; font-size: 12px; font-weight: 700; pointer-events: none; animation: fbNudge 1.6s ease-in-out 3; }
+@keyframes fbNudge { 50% { transform: translateX(-14px); } }
+.fb-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.fb-speed { display: inline-flex; padding: 3px; border: 1px solid var(--line); border-radius: 999px; }
+.fb-speed button { min-height: 30px; padding: 0 12px; border: 0; border-radius: 999px; background: none; font: inherit; font-size: 13px; font-weight: 650; color: var(--muted); cursor: pointer; }
+.fb-speed button[aria-checked="true"] { background: var(--green); color: white; }
+#fb-scrub { flex: 1 1 160px; accent-color: var(--green); }
+.fb-count { min-width: 64px; color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }

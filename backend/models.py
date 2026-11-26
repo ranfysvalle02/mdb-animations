@@ -311,6 +311,12 @@ class Rig(BaseModel):
     bones: list[RigBone] = Field(default_factory=list, max_length=12)
 
 
+class KeepRig(BaseModel):
+    """A rig the studio already made for this exact drawing (before it was saved): kept with the asset, no AI."""
+    model_config = ConfigDict(extra="forbid")
+    rig: Rig
+
+
 class PictureRequest(BaseModel):
     """Words for a new asset: AI draws a clean line-art picture, which the studio traces into strokes."""
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)

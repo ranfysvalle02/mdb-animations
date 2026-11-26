@@ -846,7 +846,15 @@ def test_rig_is_made_once_per_version_and_new_endpoints_are_metered(client):
     assert http.ai.rig.call_count == 1  # cached for this version
     http.production.get_asset.return_value = {**http.production.get_asset.return_value, "version": 3}
     assert "rig" not in http.get(f"/api/assets/{ASSET_ID}").json()  # a new version needs a new rig
-    for path in (f"/api/assets/{ASSET_ID}/rig", "/api/sparks/picture"):
+    http.post(f"/api/assets/{ASSET_ID}/rig?redo=true")
+    assert http.ai.rig.call_count == 2  # asked again on purpose
+    rig2 = {"kind": "biped", "strokes": 1, "bones": [{"part": "leg_front", "strokes": [0], "px": 0.5, "py": 0.9}]}
+    assert http.put(f"/api/assets/{ASSET_ID}/rig", json={"rig": rig2}).json()["rig"] == rig2  # made before the save, kept
+    assert http.put(f"/api/assets/{ASSET_ID}/rig", json={"rig": {**rig2, "strokes": 4}}).status_code == 409
+    assert http.ai.rig.call_count == 2
+    http.ai.rig.return_value = rig2
+    assert http.post("/api/sparks/rig", json={"layers": layers}).json() == {"rig": rig2}
+    for path in (f"/api/assets/{ASSET_ID}/rig", "/api/sparks/picture", "/api/sparks/rig"):
         assert budget_for(Req({"type": "http", "method": "POST", "path": path, "query_string": b"", "headers": []})) is AI_BUDGET
     http.ai.picture.return_value = {"note": "n", "image": "data:image/png;base64,AA=="}
     assert http.post("/api/sparks/picture", json={"prompt": "a fox"}).json()["image"].startswith("data:image/png")
